@@ -931,6 +931,10 @@ namespace KzMCPChatPlugin
                 if (s.StartsWith("@vector3d:"))  { return ParseVector3D(s.Substring("@vector3d:".Length)); }
                 if (s.StartsWith("@quaternion:")) { return ParseQuaternion(s.Substring("@quaternion:".Length)); }
 
+                // ---------- 颜色（System.Windows.Media.Color，#AARRGGBB / #RRGGBB）----------
+                // 构造 WPF Color 对象（ColorBrush.Color 等只接受 Color 值，不接受字符串）。用于 Set("ColorBrush.Color", "@color:#FF9BA014")。
+                if (s.StartsWith("@color:")) { return ParseColor(s.Substring("@color:".Length)); }
+
                 // ---------- 枚举：标记交给 FindEnumMethod 按目标方法签名精准转换 ----------
                 if (s.StartsWith("@enum:"))
                 {
@@ -1116,6 +1120,46 @@ namespace KzMCPChatPlugin
         }
 
         /// <summary>
+        /// 解析 @color:AARRGGBB / @color:RRGGBB → System.Windows.Media.Color。
+        /// WPF Color 是 struct（无公开构造器），用静态工厂 Color.FromArgb(a,r,g,b) 构造。
+        /// 支持 8 位 AARRGGBB 或 6 位 RRGGBB（A 默认 255）。16进制前缀 # 可有可无。
+        /// 用于 Set("ColorBrush.Color", "@color:#FF9BA014") 等只接受 Color 值的属性。
+        /// </summary>
+        private static object ParseColor(string body)
+        {
+            var hex = (body ?? "").Trim();
+            if (hex.StartsWith("#")) hex = hex.Substring(1);
+            if (hex.Length != 6 && hex.Length != 8) return null;
+            try
+            {
+                byte a = 255, r, g, b;
+                if (hex.Length == 8)
+                {
+                    a = byte.Parse(hex.Substring(0, 2), System.Globalization.NumberStyles.HexNumber);
+                    r = byte.Parse(hex.Substring(2, 2), System.Globalization.NumberStyles.HexNumber);
+                    g = byte.Parse(hex.Substring(4, 2), System.Globalization.NumberStyles.HexNumber);
+                    b = byte.Parse(hex.Substring(6, 2), System.Globalization.NumberStyles.HexNumber);
+                }
+                else
+                {
+                    r = byte.Parse(hex.Substring(0, 2), System.Globalization.NumberStyles.HexNumber);
+                    g = byte.Parse(hex.Substring(2, 2), System.Globalization.NumberStyles.HexNumber);
+                    b = byte.Parse(hex.Substring(4, 2), System.Globalization.NumberStyles.HexNumber);
+                }
+                // 调 System.Windows.Media.Color.FromArgb(byte a, byte r, byte g, byte b) 静态方法构造
+                var colorType = ResolveTypeByName("System.Windows.Media.Color");
+                if (colorType != null)
+                {
+                    var m = colorType.GetMethod("FromArgb", new[] { typeof(byte), typeof(byte), typeof(byte), typeof(byte) });
+                    if (m != null && m.IsStatic)
+                        return m.Invoke(null, new object[] { a, r, g, b });
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        /// <summary>
         /// 解析 @dict: 前缀后的内容 → Dictionary&lt;string,int&gt;。
         /// 支持逗号分隔的 k=v 格式：@dict:Level0=0,Level1=1,Level2=2
         ///（MCP args 里真正的 JSON 对象 {…} 会先被反序列化成 IDictionary，由上部已有分支处理）
@@ -1284,6 +1328,27 @@ namespace KzMCPChatPlugin
                 return result;
             if (t.IsEnum)
                 return result.ToString();
+            // 资源字典（ResourceDictionary）本身是可枚举集合（IEnumerable<KeyValuePair<...>>），
+            // 但它是需要作为对象引用的单个实体（用户要拿到它来调用 CreateResourceEntry 等）。
+            // 若不特判，空字典会被当成空集合展开 → 丢失对象 ref（表现为返回空 text）。
+            if (t.Name.Contains("ResourceDictionary"))
+            {
+                var rdRefId = RegisterObject(result);
+                string rdName;
+                try
+                {
+                    var rdNameProp = t.GetProperty("Name", BindingFlags.Public | BindingFlags.Instance);
+                    rdName = rdNameProp?.GetValue(result)?.ToString() ?? result.ToString();
+                }
+                catch { rdName = result.ToString(); }
+                return new Dictionary<string, object>
+                {
+                    ["ref_id"] = rdRefId,
+                    ["type"] = t.Name,
+                    ["fullType"] = t.FullName,
+                    ["name"] = rdName
+                };
+            }
             if (result is IEnumerable enumerable && !(result is string))
             {
                 var list = new List<object>();

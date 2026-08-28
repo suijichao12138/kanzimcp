@@ -514,22 +514,17 @@ namespace KzMCPChatPlugin
             var lines = new List<string>();
             if (props.TryGetValue("type", out var type))
                 lines.Add($"类型: {type}");
-            if (props.TryGetValue("properties", out var raw))
+            if (props.TryGetValue("properties", out var raw) && raw is List<object> list)
             {
                 lines.Add("属性:");
-                // ★ 兼容 List<Dictionary<string,object>>（泛型不变性，as List<object> 会失败）
-                var list = raw as System.Collections.IEnumerable;
-                if (list != null)
+                foreach (var item in list)
                 {
-                    foreach (var item in list)
+                    if (item is Dictionary<string, object> p)
                     {
-                        if (item is Dictionary<string, object> p)
-                        {
-                            string name = JsonUtils.GetStr(p, "name");
-                            string ptype = JsonUtils.GetStr(p, "type");
-                            string value = JsonUtils.GetStr(p, "value");
-                            lines.Add($"  ▪ {name} ({ptype}) = {value}");
-                        }
+                        string name = JsonUtils.GetStr(p, "name");
+                        string ptype = JsonUtils.GetStr(p, "type");
+                        string value = JsonUtils.GetStr(p, "value");
+                        lines.Add($"  ▪ {name} ({ptype}) = {value}");
                     }
                 }
             }
@@ -542,13 +537,13 @@ namespace KzMCPChatPlugin
             var lines = new List<string>();
             if (methods.TryGetValue("type", out var type))
                 lines.Add($"类型: {type}");
-            if (methods.TryGetValue("methods", out var raw) && raw is System.Collections.IEnumerable mlist)
+            if (methods.TryGetValue("methods", out var raw) && raw is List<object> list)
             {
                 lines.Add("方法:");
-                foreach (var item in mlist)
+                foreach (var item in list)
                     lines.Add($"  ▪ {item}");
             }
-            if (methods.TryGetValue("interfaceMethods", out var rawIface) && rawIface is System.Collections.IEnumerable ifaceList)
+            if (methods.TryGetValue("interfaceMethods", out var rawIface) && rawIface is List<object> ifaceList)
             {
                 lines.Add("接口方法:");
                 foreach (var item in ifaceList)
