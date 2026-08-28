@@ -383,6 +383,37 @@ namespace KzMCPChatPlugin
                     name = "kz_save_project",
                     description = "保存当前工程",
                     inputSchema = new { type = "object", properties = new { } }
+                },
+                new {
+                    name = "kz_localization",
+                    description = "编辑本地化表。action：set(增/改) | delete(删) | get(查单条) | list(查全部) | backup(手动备份到工程目录) | rebuild(重建删行/改字段) | restore(从最新备份恢复)。⚠️ delete/rebuild 会删旧表重建（实现删除行/改字段），删表前【强制自动备份】到工程目录 {工程名}.localization.backup.json；若表不存在或为空则拒绝删除/重建且不覆盖备份。所有操作基于 resourceName(Key)。",
+                    inputSchema = new {
+                        type = "object",
+                        properties = new {
+                            target = new { type = "string", description = "LocalizationTable 对象引用或路径（如 /Localization/Localization 或 @project / @objN）；restore 不需要（从备份恢复）" },
+                            action = new { type = "string", description = "操作：set(增/改) | delete(删，走重建删行+自动备份) | get(查单条) | list(查全部) | backup(手动备份) | rebuild(重建删行/改字段) | restore(从最新备份恢复，需该工程有备份)" },
+                            rows = new {
+                                type = "array",
+                                items = new {
+                                    type = "object",
+                                    properties = new {
+                                        resourceName = new { type = "string", description = "资源名/键（唯一标识，Key）" },
+                                        defaultText = new { type = "string", description = "默认文本" },
+                                        translations = new { type = "object", description = "语言→翻译映射，如 { \"en\": \"...\", \"zh-CHS\": \"...\" }" }
+                                    },
+                                    required = new[] { "resourceName" }
+                                },
+                                description = "set/rebuild 需要：完整行数组（增/改都传完整行，插件内部合并）"
+                            },
+                            keys = new {
+                                type = "array",
+                                items = new { type = "string" },
+                                description = "delete/rebuild 需要：resourceName(Key) 数组，只传 key（要删的行）"
+                            },
+                            key = new { type = "string", description = "get 需要：单个 resourceName(Key)，只传 key" }
+                        },
+                        required = new[] { "target", "action" }
+                    }
                 }
             };
         }
@@ -462,6 +493,16 @@ namespace KzMCPChatPlugin
                 case "kz_save_project":
                     _bridge.SaveProject();
                     return Task.FromResult("✅ 工程已保存");
+
+                case "kz_localization":
+                    string locTarget = JsonUtils.GetStr(args, "target");
+                    string locAction = JsonUtils.GetStr(args, "action");
+                    var locRows = JsonUtils.GetList(args, "rows");
+                    var locKeys = JsonUtils.GetList(args, "keys");
+                    string locKey = JsonUtils.GetStr(args, "key");
+                    FireLogSync($"  ↳ kz_localization: 目标={locTarget} action={locAction} rows={locRows.Count} keys={locKeys.Count}");
+                    var locResult = _bridge.LocalizationEdit(locTarget, locAction, locRows, locKeys, locKey);
+                    return Task.FromResult(FormatInvokeResult(locResult));
 
                 default:
                     throw new ArgumentException($"未知工具: {toolName}");

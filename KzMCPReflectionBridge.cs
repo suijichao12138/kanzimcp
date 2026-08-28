@@ -1,8 +1,10 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Text;
 using System.Threading;
 using Rightware.Kanzi.Studio.PluginInterface;
 
@@ -24,6 +26,31 @@ namespace KzMCPChatPlugin
         private readonly Dictionary<string, object> _objectStore = new Dictionary<string, object>();
         private readonly Dictionary<object, string> _objectToRefId = new Dictionary<object, string>();
         private long _nextRefId = 1;
+
+        // 内部反射时置元：为 true 时所有 WrapResult 直接返回裸对象（不给 MCP 网络用，供插件内部直接拿真实对象）
+        private bool _suppressWrap;
+
+        /// <summary>根据 _suppressWrap 决定 wrap 还是返回裸对象；给 InvokeCore 内部所有 return WrapResult 用。</summary>
+        private object MaybeWrap(object rawResult)
+        {
+            return _suppressWrap ? rawResult : WrapResult(rawResult);
+        }
+
+        /// <summary>内部用反射入口：返回【真实对象】（不 WrapResult），供插件内部直接拿对象用（如 LocalizationTable / LocaleLibrary）。
+        /// 线程策略同 Invoke（默认切 UI 线程），只是不 wrap，避免 ref_id 绕路。</summary>
+        public object InvokeRaw(string target, string method, object[] args)
+        {
+            bool old = _suppressWrap;
+            _suppressWrap = true;
+            try
+            {
+                return Invoke(target, method, args);
+            }
+            finally
+            {
+                _suppressWrap = old;
+            }
+        }
 
         // ====== 构造函数 ======
         public KzMCPReflectionBridge(KanziStudio studio)
@@ -447,7 +474,7 @@ namespace KzMCPChatPlugin
                 try
                 {
                     var rawResult = enumMethod.Invoke(targetObj, enumArgs);
-                    return WrapResult(rawResult);
+                    return MaybeWrap(rawResult);
                 }
                 catch (TargetInvocationException tie)
                 {
@@ -603,7 +630,7 @@ namespace KzMCPChatPlugin
                                 var actualArgs = new object[genericParamCount];
                                 Array.Copy(resolvedArgs, 1, actualArgs, 0, genericParamCount);
                                 var rawResult = constructed.Invoke(targetObj, actualArgs);
-                                return WrapResult(rawResult);
+                                return MaybeWrap(rawResult);
                             }
                             catch { }
                         }
@@ -620,7 +647,7 @@ namespace KzMCPChatPlugin
                                     var actualArgs = new object[genericParamCount];
                                     Array.Copy(resolvedArgs, 1, actualArgs, 0, genericParamCount);
                                     var rawResult = constructed.Invoke(targetObj, actualArgs);
-                                    return WrapResult(rawResult);
+                                    return MaybeWrap(rawResult);
                                 }
                                 catch { }
                             }
@@ -675,7 +702,7 @@ namespace KzMCPChatPlugin
                                         var actualArgs = new object[genericParamCount];
                                         Array.Copy(resolvedArgs, 1, actualArgs, 0, genericParamCount);
                                         var rawResult = constructed.Invoke(targetObj, actualArgs);
-                                        return WrapResult(rawResult);
+                                        return MaybeWrap(rawResult);
                                     }
                                     catch { }
                                 }
@@ -695,7 +722,7 @@ namespace KzMCPChatPlugin
                                                 var actualArgs = new object[genericParamCount];
                                                 Array.Copy(resolvedArgs, 1, actualArgs, 0, genericParamCount);
                                                 var rawResult = constructed.Invoke(targetObj, actualArgs);
-                                                return WrapResult(rawResult);
+                                                return MaybeWrap(rawResult);
                                             }
                                             catch { }
                                         }
@@ -724,7 +751,7 @@ namespace KzMCPChatPlugin
                                         try
                                         {
                                             var rawResult = ifaceMethod.Invoke(targetObj, resolvedArgs);
-                                            return WrapResult(rawResult);
+                                            return MaybeWrap(rawResult);
                                         }
                                         catch { }
                                     }
@@ -736,7 +763,7 @@ namespace KzMCPChatPlugin
                                     try
                                     {
                                         var rawResult = ifaceMethod.Invoke(targetObj, resolvedArgs);
-                                        return WrapResult(rawResult);
+                                        return MaybeWrap(rawResult);
                                     }
                                     catch
                                     {
@@ -756,7 +783,7 @@ namespace KzMCPChatPlugin
             try
             {
                 var rawResult = mi.Invoke(targetObj, resolvedArgs);
-                return WrapResult(rawResult);
+                return MaybeWrap(rawResult);
             }
             catch (TargetInvocationException tie)
             {
@@ -1489,6 +1516,831 @@ namespace KzMCPChatPlugin
         #endregion 通用反射调用
 
         #region 便捷操作（纯反射实现）
+
+        /// <summary>
+        /// 本地化表编辑（增量式，方案A，符合网络传输优化）。
+        /// 支持五个操作：
+        ///   set     —— 增/改（传完整行数组 rows，表里有则覆盖=改，没有则新增；插件内部读全表合并后写回）
+        ///   delete  —— 删（只传 keys 数组，仅需 resourceName）→【走重建删行链路：删表前强制自动备份，表空/不存在拒绝删除】
+        ///   get     —— 查单条（只传 key，仅需 resourceName）
+        ///   list    —— 查全部（不传数据，读整表返回）
+        ///   backup  —— 手动把当前表导出到工程目录备份文件（覆盖，保持唯一最新）
+        ///   rebuild —— 重建删行/改字段：读表→内存改→强制备份→删旧表→建新表→写回（删表前自动备份+表空禁止）
+        ///   restore —— 从最新备份文件重建一张表（恢复误删/救急）
+        /// 纯反射实现：不缓存 MethodInfo/类型，不依赖任何 Rightware.Kanzi.* 具体类型。
+        /// </summary>
+        public object LocalizationEdit(string target, string action, object rows = null, object keys = null, object key = null)
+        {
+            // ★ 全部内部直接反射（ImportRows/ModifyExistingRow/DeleteLocalizationTable/ReadAllRows 等）
+            //   都要在 UI(Dispatcher)线程上操作真实 Kanzi 对象；否则报“调用线程无法访问此对象”。
+            if (!IsUiThread())
+            {
+                var app = System.Windows.Application.Current;
+                if (app != null && app.Dispatcher != null)
+                {
+                    return app.Dispatcher.Invoke(new Func<object>(() =>
+                        LocalizationEditCore(target, action, rows, keys, key)));
+                }
+            }
+            return LocalizationEditCore(target, action, rows, keys, key);
+        }
+
+        private object LocalizationEditCore(string target, string action, object rows = null, object keys = null, object key = null)
+        {
+            action = (action ?? "").Trim().ToLowerInvariant();
+            if (action == "")
+                throw new ArgumentException("action 不能为空（set/delete/get/list/backup/rebuild/restore）");
+
+            // restore 不依赖目标表（表可能已被删，就是用来恢复被删的表）→ 先处理，跳过 target 解析
+            if (action == "restore")
+                return RestoreLocalizationFromBackup();
+
+            // 解析目标：LocalizationTable 对象
+            object targetObj;
+            if (target == "studio" || target == "@studio") targetObj = _studio;
+            else if (target == "project" || target == "@project") targetObj = _project;
+            else targetObj = ResolveObject(target);
+            if (targetObj == null)
+                throw new InvalidOperationException($"无法解析 LocalizationTable 目标: '{target}'");
+
+            switch (action)
+            {
+                case "list":
+                    return ListLocalization(targetObj);
+                case "get":
+                    string gk = key?.ToString();
+                    if (string.IsNullOrEmpty(gk) && keys is IEnumerable ike)
+                    {
+                        foreach (var kk in ike) { gk = kk?.ToString(); break; }
+                    }
+                    if (string.IsNullOrEmpty(gk))
+                        throw new ArgumentException("get 需要传 key（resourceName）");
+                    return GetLocalization(targetObj, gk);
+                case "set":
+                    if (rows == null)
+                        throw new ArgumentException("set 需要传 rows（完整行数组）");
+                    return SetLocalization(targetObj, rows, applyDelete: false, deleteKeys: null);
+                case "delete":
+                    var delKeys = new List<string>();
+                    if (keys is IEnumerable de)
+                        foreach (var kk in de) delKeys.Add(kk?.ToString() ?? "");
+                    if (!string.IsNullOrEmpty(key?.ToString())) delKeys.Add(key.ToString());
+                    if (delKeys.Count == 0)
+                        throw new ArgumentException("delete 需要传 keys（resourceName 数组）或 key");
+                    // ★ 删除走重建链路（ImportTranslations 不认原地删）→ 删表前强制备份 + 表空/不存在禁止
+                    return RebuildLocalization(targetObj, rows: null, deleteKeys: delKeys);
+                case "backup":
+                    return BackupLocalization(targetObj);
+                case "rebuild":
+                    // rebuild：可删（keys）+ 可增改（rows）→ 重建；强制备份 + 护栏
+                    var rbKeys = new List<string>();
+                    if (keys is IEnumerable re)
+                        foreach (var kk in re) rbKeys.Add(kk?.ToString() ?? "");
+                    if (!string.IsNullOrEmpty(key?.ToString())) rbKeys.Add(key.ToString());
+                    return RebuildLocalization(targetObj, rows, rbKeys);
+                default:
+                    throw new ArgumentException($"未知 action: '{action}'（支持 set/delete/get/list/backup/rebuild/restore）");
+            }
+        }
+
+        /// <summary>list：读整表并返回（每条含 resourceName + translations + 行索引）</summary>
+        private object ListLocalization(object targetObj)
+        {
+            // 读全表（现经 LocalizationEdit 统一切 UI 线程执行；ExportTranslations 读操作任意线程均可）
+            var current = ReadAllRows(targetObj);
+            var outList = new List<object>();
+            int idx = 0;
+            foreach (var row in current)
+            {
+                var rn = GetRowResourceName(row);
+                var trans = GetRowTranslations(row); // Dictionary<string,string>
+                var rowDict = new Dictionary<string, object>
+                {
+                    ["index"] = idx++,
+                    ["resourceName"] = rn,
+                    ["translations"] = trans
+                };
+                outList.Add(rowDict);
+            }
+            return outList;
+        }
+
+        /// <summary>get：读整表找单条并返回</summary>
+        private object GetLocalization(object targetObj, string resourceName)
+        {
+            var current = ReadAllRows(targetObj);
+            foreach (var row in current)
+            {
+                if (string.Equals(GetRowResourceName(row), resourceName, StringComparison.Ordinal))
+                {
+                    return new Dictionary<string, object>
+                    {
+                        ["resourceName"] = resourceName,
+                        ["defaultText"] = GetRowDefaultText(row),
+                        ["translations"] = GetRowTranslations(row)
+                    };
+                }
+            }
+            throw new InvalidOperationException($"表中没有 resourceName = '{resourceName}' 的条目");
+        }
+
+        /// <summary>set/delete 核心：读当前全表，合并增删改，ImportTranslations 写回（增量传参，内部合并）</summary>
+        private object SetLocalization(object targetObj, object rows, bool applyDelete, List<string> deleteKeys)
+        {
+            // 规整传入的 rows（set 用）→ List<Dictionary<string,object>>
+            var incoming = new List<Dictionary<string, object>>();
+            if (rows != null)
+            {
+                foreach (var r in (IEnumerable)rows)
+                {
+                    if (r is IDictionary<string, object> d)
+                        incoming.Add(new Dictionary<string, object>(d));
+                    else if (r is IDictionary id2)
+                    {
+                        var dd = new Dictionary<string, object>();
+                        foreach (DictionaryEntry e in id2) dd[e.Key?.ToString() ?? ""] = e.Value;
+                        incoming.Add(dd);
+                    }
+                    else
+                        throw new ArgumentException($"rows 元素需为对象，得到: {r?.GetType().Name}");
+                }
+            }
+
+            // 当前全表（非 UI 线程——V7 既定线程策略；ExportTranslations 读操作任意线程均可）
+            var current = ReadAllRows(targetObj);
+
+            // 解析真实行类型：从现有行实例的 GetType()（避免 AppDomain 多副本 LoadTypeByFullName 拿错实例）
+            Type rowType = current.Count > 0
+                ? current[0].GetType()
+                : LoadTypeByFullName("Rightware.Kanzi.Studio.PluginInterface.LocalizationTableRow");
+
+            // 1) 删除：先把 deleteKeys 规整（去空、去重），再用【List 的删除函数 RemoveAll】删除
+            if (applyDelete && deleteKeys != null && deleteKeys.Count > 0)
+            {
+                // 规整：去空串、去重
+                deleteKeys = deleteKeys.Where(k => !string.IsNullOrEmpty(k)).Distinct().ToList();
+                // 已删除的行 key（统计用）
+                var removed = new List<string>();
+                // ⚠️ 关键：用 List<object> 的 RemoveAll 谓词原地删除匹配 deleteKeys 的行，
+                //    不用之前 Where 过滤“新建 List”的方式；删除后剩下的行仍是表里原有实例。
+                current.RemoveAll(row =>
+                {
+                    var rn = GetRowResourceName(row);
+                    if (string.IsNullOrEmpty(rn)) return false;
+                    if (deleteKeys.Contains(rn, StringComparer.Ordinal))
+                    {
+                        if (!removed.Contains(rn)) removed.Add(rn);
+                        return true;
+                    }
+                    return false;
+                });
+                deleteKeys = removed;
+            }
+
+            // 2) 新增/修改：按 resourceName 合并 incoming
+            //    ⚠️ 关键（loc_gui_test 已验证机制）：LocalizationTableRow 是【只读行】（无 setter），
+            //       修改已有 key 不能用 ModifyExistingRow 改原位实例（setter no-op 改不进）；
+            //       正确方式 = 【删旧行 + new 新行(带新值) + 整表 ImportTranslations 写回】。
+            if (incoming.Count > 0)
+            {
+                foreach (var rd in incoming)
+                {
+                    string rn = GetDictStr(rd, "resourceName") ?? GetDictStr(rd, "key");
+                    if (string.IsNullOrEmpty(rn))
+                        throw new ArgumentException("set 的每个 row 必须有 resourceName（或 key）");
+
+                    // 在 current 里找同 resourceName 的已有行（同一个对象实例）
+                    object existing = current.FirstOrDefault(row => string.Equals(GetRowResourceName(row), rn, StringComparison.Ordinal));
+                    if (existing != null)
+                    {
+                        // 已有行 → 删旧 + new 新行（rd 覆盖、缺失保留旧值）
+                        string newDt = string.IsNullOrEmpty(GetDictStr(rd, "defaultText"))
+                            ? GetRowDefaultText(existing)
+                            : GetDictStr(rd, "defaultText");
+                        var mergedRd = MergeRowValues(existing, rd);
+                        object newRow = BuildLocalizationTableRow(rn, newDt, mergedRd, rowType);
+                        int idx = current.IndexOf(existing);
+                        current.RemoveAt(idx >= 0 ? idx : current.Count - 1);
+                        current.Add(newRow);
+                    }
+                    else
+                    {
+                        // 无该 key → 真新增，才 new 一行
+                        object newRow = BuildLocalizationTableRow(rn, GetDictStr(rd, "defaultText"), rd, rowType);
+                        current.Add(newRow);
+                    }
+                }
+            }
+
+            if (incoming.Count == 0 && !applyDelete)
+                throw new ArgumentException("set 需要 rows");
+
+            // 3) 整表写回：直接 ImportTranslations（恢复 V8 既定方案，不再走框架 importer）
+            ImportRows(targetObj, current);
+
+            var parts = new List<string>();
+            if (applyDelete && deleteKeys != null) parts.Add($"删除 {deleteKeys.Count} 条");
+            if (incoming.Count > 0) parts.Add($"写入 {incoming.Count} 条");
+            return $"✅ Localization 更新完成（{string.Join("，", parts)}；事务后共 {current.Count} 条）";
+        }
+
+        // ===================== 备份 / 重建删行 / 恢复（2026-08-08 新增） =====================
+        // 背景：ImportTranslations 不支持删除/改 resourceName/defaultText（整表写回不认删）。
+        //       于是用「读全表→内存改→删旧表→建新表→写回」实现删行/改字段。
+        //       为防误删：删表前【强制】把当前表导出到工程目录的「唯一最新备份」文件（覆盖），
+        //       且【表不存在或为空 → 拒绝删除也不覆盖备份】。
+
+        /// <summary>工程目录下的备份文件路径：{工程目录}\{工程名}.localization.backup.json</summary>
+        private string BackupFilePath()
+        {
+            string dir = "";
+            try
+            {
+                var fs = Invoke("@project", "get_FileSystemPath", null)?.ToString();
+                if (!string.IsNullOrEmpty(fs))
+                    dir = Path.GetDirectoryName(fs) ?? "";
+            }
+            catch { }
+            string projName = "project";
+            try
+            {
+                var nm = Invoke("@project", "get_Name", null)?.ToString();
+                if (!string.IsNullOrEmpty(nm)) projName = nm;
+            }
+            catch { }
+            if (string.IsNullOrEmpty(dir))
+                dir = Path.GetTempPath();
+            return Path.Combine(dir, projName + ".localization.backup.json");
+        }
+
+        /// <summary>把全表行序列化导出到备份文件（覆盖，保持唯一最新备份）</summary>
+        private string WriteLocalizationBackup(object targetObj, List<object> rows)
+        {
+            var list = new List<object>();
+            foreach (var row in rows)
+            {
+                // translations 是 Dictionary<string,string>，而 JsonUtils.Serialize 只认 Dictionary<string,object>
+                // （否则会走匿名反射分支，对 Dictionary 索引器属性 GetValue 无参调用 → TargetParameterCountException"参数计数不匹配"）
+                // 这里转成 Dictionary<string,object> 再序列化，避免动共享文件 JsonUtils.cs。
+                var tr = new Dictionary<string, object>();
+                foreach (var kv in GetRowTranslations(row))
+                    tr[kv.Key] = kv.Value;
+                list.Add(new Dictionary<string, object>
+                {
+                    ["resourceName"] = GetRowResourceName(row),
+                    ["defaultText"] = GetRowDefaultText(row),
+                    ["translations"] = tr
+                });
+            }
+            var json = JsonUtils.Serialize(list);
+            var path = BackupFilePath();
+            File.WriteAllText(path, json, new UTF8Encoding(false));
+            return path;
+        }
+
+        /// <summary>action=backup：手动把当前表完整导出到备份文件（覆盖，保持唯一最新）</summary>
+        private object BackupLocalization(object targetObj)
+        {
+            var rows = ReadAllRows(targetObj);
+            var path = WriteLocalizationBackup(targetObj, rows);
+            return $"✅ 备份完成：{rows.Count} 行 → {path}";
+        }
+
+        /// <summary>
+        /// 安全护栏：删表/重建前校验。表必须存在且非空，否则抛错——
+        /// 既防止误删（表已没了还去删/重建），也防止把空/异常状态覆盖成「最新备份」砸掉好备份。
+        /// 返回当前全表行（供后续重建用）。
+        /// </summary>
+        private List<object> GuardTableForDestroy(object targetObj)
+        {
+            // 表是否存在：ReadAllRows 内部若找不到 ExportTranslations 会抛 MissingMethodException
+            var rows = ReadAllRows(targetObj);
+            if (rows == null || rows.Count == 0)
+                throw new InvalidOperationException("⚠️ 表不存在或为空（0 行）——拒绝删除/重建，且不覆盖备份（防止误删/覆盖正常备份）。");
+            return rows;
+        }
+
+        /// <summary>
+        /// action=delete/rebuild 核心：重建删行/改字段。
+        /// 流程：校验表非空 → 强制备份当前 → 内存构造新行集(删 keys + 合并 rows) → 删旧表 → 建新表 → 写回。
+        /// </summary>
+        private object RebuildLocalization(object targetObj, object rows, List<string> deleteKeys)
+        {
+            // 1) 护栏：表必须存在且非空（否则不删、不重建、不覆盖备份）
+            var current = GuardTableForDestroy(targetObj);
+
+            // 2) 强制备份当前全表（唯一最新备份，覆盖）—— 必须在删表之前
+            var backupPath = WriteLocalizationBackup(targetObj, current);
+
+            // 3) 内存构造新行集
+            var working = new List<object>(current);
+
+            // 3.1) 删：按 deleteKeys 去掉行
+            var delList = (deleteKeys ?? new List<string>())
+                .Where(k => !string.IsNullOrEmpty(k)).Distinct().ToList();
+            int removed = 0;
+            if (delList.Count > 0)
+            {
+                working.RemoveAll(row =>
+                {
+                    var rn = GetRowResourceName(row);
+                    if (string.IsNullOrEmpty(rn)) return false;
+                    bool hit = delList.Contains(rn, StringComparer.Ordinal);
+                    if (hit) removed++;
+                    return hit;
+                });
+            }
+
+            // 3.2) 增/改：按 resourceName 合并 rows（老隋指定 + loc_gui_test 验证：行只读，增/改统一【新建行】替换）
+            //   - 所有已有 key 的修改（改 translations / defaultText / resourceName）→ 用 {rd + 保留旧值} 新建新行替换旧行
+            //   - resourceName 重命名：旧 key 放 deleteKeys（3.1 已删），新 key 当新增行加进来
+            var incoming = NormalizeIncomingRows(rows);
+            if (incoming.Count > 0)
+            {
+                Type rowType = working.Count > 0
+                    ? working[0].GetType()
+                    : LoadTypeByFullName("Rightware.Kanzi.Studio.PluginInterface.LocalizationTableRow");
+                foreach (var rd in incoming)
+                {
+                    string rn = GetDictStr(rd, "resourceName") ?? GetDictStr(rd, "key");
+                    if (string.IsNullOrEmpty(rn))
+                        throw new ArgumentException("rebuild 的每个 row 必须有 resourceName（或 key）");
+                    object existing = working.FirstOrDefault(
+                        w => string.Equals(GetRowResourceName(w), rn, StringComparison.Ordinal));
+                    if (existing != null)
+                    {
+                        // 已有同 key 行：判断是否改了 defaultText
+                        string oldDt = GetRowDefaultText(existing) ?? "";
+                        bool hasNewDt = rd.ContainsKey("defaultText") && rd["defaultText"] != null
+                                        && GetDictStr(rd, "defaultText") != oldDt;
+                        // ⚠️（loc_gui_test 已验证）：行只读，翻译修改也要【删旧 + new 新行带新翻译】才生效，
+                        //   不能 ModifyExistingRow 原位 setter（no-op）。重建上下文里统一新建行替换。
+                        int idx = working.FindIndex(
+                            w => string.Equals(GetRowResourceName(w), rn, StringComparison.Ordinal));
+                        var mergedRd = MergeRowValues(existing, rd); // rd 未提供字段保留旧值
+                        string newDt = hasNewDt ? GetDictStr(rd, "defaultText")
+                                     : (GetRowDefaultText(existing) ?? "");
+                        working[idx] = BuildLocalizationTableRow(rn, newDt, mergedRd, rowType);
+                    }
+                    else
+                    {
+                        // 无该 key → 新增行（resourceName 重命名：旧 key 走 deleteKeys，这里加新 key）
+                        working.Add(BuildLocalizationTableRow(rn, GetDictStr(rd, "defaultText"), rd, rowType));
+                    }
+                }
+            }
+
+            if (working.Count == 0)
+                throw new InvalidOperationException("⚠️ 重建后表将为空——已中止（不会删表/建表；备份已保留为删除前状态）。");
+
+            // 4) 删旧表
+            DeleteLocalizationTable(targetObj);
+
+            // 5) 建新表（同名）
+            var newTable = CreateEmptyLocalizationTable(targetObj);
+
+            // 6) 写回新行集
+            ImportRows(newTable, working);
+
+            var parts = new List<string>();
+            if (removed > 0) parts.Add($"删除 {removed} 条");
+            if (incoming.Count > 0) parts.Add($"写入 {incoming.Count} 条");
+            return $"✅ 重建完成（{string.Join("，", parts)}；现 {working.Count} 条）\n📦 删除前已自动备份：{backupPath}\n♻️ 旧表已删除并重建为同名新表";
+        }
+
+        /// <summary>把传入 rows 规整成 List&lt;Dictionary&lt;string,object&gt;&gt;（set/rebuild 共用）</summary>
+        private List<Dictionary<string, object>> NormalizeIncomingRows(object rows)
+        {
+            var incoming = new List<Dictionary<string, object>>();
+            if (rows == null) return incoming;
+            foreach (var r in (IEnumerable)rows)
+            {
+                if (r is IDictionary<string, object> d)
+                    incoming.Add(new Dictionary<string, object>(d));
+                else if (r is IDictionary id2)
+                {
+                    var dd = new Dictionary<string, object>();
+                    foreach (DictionaryEntry e in id2) dd[e.Key?.ToString() ?? ""] = e.Value;
+                    incoming.Add(dd);
+                }
+                else
+                    throw new ArgumentException($"rows 元素需为对象，得到: {r?.GetType().Name}");
+            }
+            return incoming;
+        }
+
+        /// <summary>删除本地化表（反射调目标对象上的 Delete()）——删的是整个表项，危险，仅 Rebuild/恢复流程内部调用</summary>
+        private void DeleteLocalizationTable(object targetObj)
+        {
+            var t = targetObj.GetType();
+            var del = t.GetMethod("Delete") ?? t.GetMethod("delete");
+            if (del == null) throw new MissingMethodException($"在 {t.Name} 上找不到 Delete 方法，无法删除本地化表");
+            var result = del.Invoke(targetObj, null);
+            // 删除后确认：立即再读一次应抛/空（不再深究返回值布尔）
+            try { ReadAllRows(targetObj); }
+            catch { /* 表已删，ReadAllRows 找不到即为预期 */ }
+        }
+
+        /// <summary>取本地化表的名字（get_Name，用于建同名新表）</summary>
+        private string GetLocalizationTableName(object table)
+        {
+            try
+            {
+                var m = table.GetType().GetMethod("get_Name")
+                         ?? table.GetType().GetProperty("Name")?.GetGetMethod();
+                var nm = m?.Invoke(table, null)?.ToString();
+                if (!string.IsNullOrEmpty(nm)) return nm;
+            }
+            catch { }
+            return "Localization Table";
+        }
+
+        /// <summary>建一张同名空表：@project.CreateProjectItem(接口类型全名, 表名, Localization库)——参数顺序 [type, 名, 库]</summary>
+        private object CreateEmptyLocalizationTable(object oldTable)
+        {
+            if (_project == null)
+                throw new InvalidOperationException("没有打开的工程");
+            // Localization 库：必须是【真实对象】，不能用 Invoke 返回（Invoke 会把对象 wrap 成 dump 字符串），
+            // 否则 CreateProjectItem 的第三参是 string 找不到匹配。用 ResolveObject 拿真实对象。
+            var lib = ResolveLocaleLibrary();
+            string tableName = GetLocalizationTableName(oldTable);
+            string typeName = "Rightware.Kanzi.Studio.PluginInterface.LocalizationTable";
+            // 用 InvokeRaw：直接返回【真实表对象】（不 WrapResult），省去 ref_id 还原
+            var created = InvokeRaw("@project", "CreateProjectItem",
+                new object[] { "@type:" + typeName, tableName, lib });
+            if (created == null)
+                throw new InvalidOperationException("CreateProjectItem 建表失败：返回 null");
+            return created;
+        }
+
+        /// <summary>解析 Localization 库【真实对象】。优先 InvokeRaw 直接拿对象（不 wrap），兜底按路径/ref。</summary>
+        private object ResolveLocaleLibrary()
+        {
+            // 首选：InvokeRaw 直接返回真实对象（不 WrapResult）
+            try
+            {
+                var lib = InvokeRaw("@project", "get_LocaleLibrary", null);
+                if (lib != null)
+                {
+                    var tn = lib.GetType().Name;
+                    if (tn.IndexOf("Locale", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                        tn.IndexOf("Localization", StringComparison.OrdinalIgnoreCase) >= 0)
+                        return lib;
+                }
+            }
+            catch { }
+            try
+            {
+                var byPath = ResolveObject("/Localization");
+                if (byPath != null)
+                {
+                    var tn = byPath.GetType().Name;
+                    if (tn.IndexOf("Locale", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                        tn.IndexOf("Localization", StringComparison.OrdinalIgnoreCase) >= 0)
+                        return byPath;
+                }
+            }
+            catch { }
+            throw new InvalidOperationException("找不到 Localization 库（LocaleLibrary）");
+        }
+
+        /// <summary>action=restore：从最新备份文件重建一张表（恢复误删/救急）。备份来自工程目录 {工程名}.localization.backup.json</summary>
+        private object RestoreLocalizationFromBackup()
+        {
+            var path = BackupFilePath();
+            if (!File.Exists(path))
+                throw new InvalidOperationException($"没有找到备份文件：{path}（先执行 backup 或 delete/rebuild 会自动备份）");
+            var json = File.ReadAllText(path, Encoding.UTF8);
+            var rowsData = JsonUtils.DeserializeArray(json); // List<Dictionary<string,object>>
+            if (rowsData == null || rowsData.Count == 0)
+                throw new InvalidOperationException($"备份文件为空或无效：{path}");
+
+            // 建一张空表（默认标准名）→ 写回备份行。
+            // 若目标表已存在（如上一次 restore 失败留下的空表），先删掉再重建，保证恢复结果干净。
+            var lib = ResolveLocaleLibrary();
+            string typeName = "Rightware.Kanzi.Studio.PluginInterface.LocalizationTable";
+            RemoveTableIfExists("/Localization/Localization Table");
+            var table = InvokeRaw("@project", "CreateProjectItem",
+                new object[] { "@type:" + typeName, "Localization Table", lib });
+            if (table == null)
+                throw new InvalidOperationException("restore 建表失败");
+
+            // 构造行集
+            Type rowType = LoadTypeByFullName("Rightware.Kanzi.Studio.PluginInterface.LocalizationTableRow");
+            var rows = new List<object>();
+            foreach (var item in rowsData)
+            {
+                var rd = item as Dictionary<string, object> ?? new Dictionary<string, object>();
+                string rn = GetDictStr(rd, "resourceName") ?? "";
+                string dt = GetDictStr(rd, "defaultText");
+                rows.Add(BuildLocalizationTableRow(rn, dt, rd, rowType));
+            }
+            ImportRows(table, rows);
+            return $"✅ 已从备份恢复：{rows.Count} 行 → /Localization/Localization Table\n📦 备份源：{path}";
+        }
+
+        /// <summary>若指定路径存在本地化表，则删除它（restore 重建前清场用）。不存在则静默。</summary>
+        private void RemoveTableIfExists(string path)
+        {
+            object existing = null;
+            try { existing = ResolveObject(path); }
+            catch { return; } // 不存在
+            if (existing == null) return;
+            var t = existing.GetType();
+            var del = t.GetMethod("Delete") ?? t.GetMethod("delete");
+            if (del == null) return;
+            try { del.Invoke(existing, null); }
+            catch { }
+        }
+
+        /// <summary>
+        /// 合并旧行值与传入 rd：rd 提供的字段（defaultText/translations）覆盖；
+        /// rd 未提供的保留旧行值（避免误清空翻译）。返回可传给 BuildLocalizationTableRow 的 rd。
+        /// </summary>
+        private static Dictionary<string, object> MergeRowValues(object existing, Dictionary<string, object> rd)
+        {
+            var merged = new Dictionary<string, object>(rd);
+            // defaultText：rd 未提供或空则保留旧的
+            if (!merged.ContainsKey("defaultText") || string.IsNullOrEmpty(GetDictStr(merged, "defaultText")))
+                merged["defaultText"] = GetRowDefaultText(existing);
+            // translations：rd 未提供（或空）→ 保留旧行全部翻译；rd 提供了 → 以 rd 为准（含新增语言列）
+            bool rdHasTrans = merged.TryGetValue("translations", out var tv)
+                              && tv is IDictionary tdd && tdd.Count > 0;
+            if (!rdHasTrans)
+                merged["translations"] = GetRowTranslations(existing);
+            return merged;
+        }
+
+        /// <summary>读当前全表所有行：返回 List<object>（LocalizationTableRow 实例），通过 ExportTranslations 反射</summary>
+        private List<object> ReadAllRows(object targetObj)
+        {
+            var targetType = targetObj.GetType();
+            // 找 ExportTranslations()
+            MethodInfo exp = null;
+            foreach (var m in targetType.GetMethods(BindingFlags.Public | BindingFlags.Instance))
+            {
+                if (m.Name == "ExportTranslations") { exp = m; break; }
+            }
+            foreach (var iface in targetType.GetInterfaces())
+            {
+                if (exp != null) break;
+                foreach (var m in iface.GetMethods(BindingFlags.Public | BindingFlags.Instance))
+                    if (m.Name == "ExportTranslations") { exp = m; break; }
+            }
+            if (exp == null)
+                throw new MissingMethodException($"在 {targetType.Name} 上找不到 ExportTranslations，无法读取本地化表");
+
+            var result = exp.Invoke(targetObj, null);
+            var list = new List<object>();
+            if (result is IEnumerable en)
+                foreach (var r in en) list.Add(r);
+            return list;
+        }
+
+        /// <summary>构造一个 LocalizationTableRow（优先 3 参构造器，兜底无参+填充；用真实实例类型+兼容非 public 构造器）</summary>
+        private object BuildLocalizationTableRow(string resourceName, string defaultText, Dictionary<string, object> rd, Type rowType)
+        {
+            if (rowType == null)
+                throw new InvalidOperationException("找不到 LocalizationTableRow 类型（程序集未加载?）");
+
+            ConstructorInfo ctor3 = null, ctor0 = null;
+            // 同时搜 public 与 non-public 构造器
+            foreach (var c in rowType.GetConstructors(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance))
+            {
+                var ps = c.GetParameters();
+                if (ps.Length == 3 && ps[0].ParameterType == typeof(string)
+                    && IsDictionaryCompatible(ps[2].ParameterType))
+                    ctor3 = c;
+                else if (ps.Length == 0)
+                    ctor0 = c;
+            }
+            // 也尝试通过类型给定方式找到 3 参构造器（某些 wrapper 用 GetConstructor 更可靠）
+            if (ctor3 == null)
+            {
+                try
+                {
+                    ctor3 = rowType.GetConstructor(
+                        BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance,
+                        null,
+                        new[] { typeof(string), typeof(string), typeof(Dictionary<string, string>) },
+                        null) ?? ctor3;
+                }
+                catch { }
+            }
+
+            // 从 rd 读 translations
+            var langDict = new Dictionary<string, string>();
+            if (rd != null)
+            {
+                if (rd.TryGetValue("translations", out var tr) && tr is IDictionary td)
+                    foreach (DictionaryEntry e in td) langDict[e.Key?.ToString() ?? ""] = e.Value?.ToString() ?? "";
+                else if (rd.TryGetValue("locales", out var lc) && lc is IDictionary ld)
+                    foreach (DictionaryEntry e in ld) langDict[e.Key?.ToString() ?? ""] = e.Value?.ToString() ?? "";
+            }
+
+            if (ctor3 != null)
+            {
+                object dictArg;
+                object[] args3;
+                try
+                {
+                    if (ctor3.GetParameters()[2].ParameterType.IsAssignableFrom(langDict.GetType()))
+                        args3 = new object[] { resourceName ?? "", defaultText ?? "", langDict };
+                    else
+                        args3 = new object[] { resourceName ?? "", defaultText ?? "",
+                            CreateDictionaryOfStringString(langDict, ctor3.GetParameters()[2].ParameterType) };
+                    return ctor3.Invoke(args3);
+                }
+                catch (Exception ex)
+                {
+                    throw new InvalidOperationException($"LocalizationTableRow 3 参构造失败: {ex.InnerException?.Message ?? ex.Message}", ex);
+                }
+            }
+
+            if (ctor0 != null)
+            {
+                object rowObj = ctor0.Invoke(null);
+                PopulateRowByReflection(rowObj, resourceName, langDict);
+                return rowObj;
+            }
+
+            throw new InvalidOperationException($"LocalizationTableRow({rowType.FullName}) 没有可用构造器");
+        }
+
+        /// <summary>整表写回（ImportTranslations），返回 ImportTranslations 的返回值（可能指示是否成功）</summary>
+        private object ImportRows(object targetObj, List<object> rows)
+        {
+            var targetType = targetObj.GetType();
+            var importMethods = targetType.GetMethods(BindingFlags.Public | BindingFlags.Instance)
+                .Where(m => m.Name == "ImportTranslations").ToList();
+            foreach (var iface in targetType.GetInterfaces())
+                importMethods.AddRange(iface.GetMethods(BindingFlags.Public | BindingFlags.Instance)
+                    .Where(m => m.Name == "ImportTranslations"));
+            importMethods = importMethods.GroupBy(m => m.ToString()).Select(g => g.First()).ToList();
+
+            // 真实行类型：优先从已有行实例的 GetType() 拿（避免 AppDomain 多副本 LoadTypeByFullName 拿错实例）
+            Type rowType = rows.Count > 0 ? rows[0].GetType()
+                : LoadTypeByFullName("Rightware.Kanzi.Studio.PluginInterface.LocalizationTableRow");
+
+            Exception lastEx = null;
+            foreach (var c in importMethods)
+            {
+                var ps = c.GetParameters();
+                if (ps.Length != 1 || !IsEnumerableCompatible(ps[0].ParameterType)) continue;
+
+                // 组 List<LocalizationTableRow>
+                object arg;
+                if (rows.Count == 0)
+                {
+                    arg = Activator.CreateInstance(typeof(List<>).MakeGenericType(rowType));
+                }
+                else if (ps[0].ParameterType.IsAssignableFrom(BuildListOfRow(rows, rowType).GetType()))
+                    arg = BuildListOfRow(rows, rowType);
+                else
+                    arg = ConvertListToEnumerable(BuildListOfRow(rows, rowType), ps[0].ParameterType);
+
+                try
+                {
+                    object ret = c.Invoke(targetObj, new object[] { arg });
+                    return ret;
+                }
+                catch (Exception ex) { lastEx = ex.InnerException ?? ex; }
+            }
+            if (lastEx != null)
+                throw new InvalidOperationException($"调用 {targetType.Name}.ImportTranslations 失败: {lastEx.Message}", lastEx);
+            throw new MissingMethodException($"在 {targetType.Name} 上找不到可调用的 ImportTranslations(IEnumerable<LocalizationTableRow>)");
+        }
+
+        /// <summary>把 List<object> 构造成 List<LocalizationTableRow>（用真实行类型）</summary>
+        private IList BuildListOfRow(List<object> rows, Type rowType)
+        {
+            if (rowType == null)
+                rowType = LoadTypeByFullName("Rightware.Kanzi.Studio.PluginInterface.LocalizationTableRow");
+            var list = (IList)Activator.CreateInstance(typeof(List<>).MakeGenericType(rowType));
+            foreach (var r in rows) list.Add(r);
+            return list;
+        }
+
+        /// <summary>取行的 resourceName（get_ResourceName）</summary>
+        private static string GetRowResourceName(object row)
+        {
+            var m = row.GetType().GetMethod("get_ResourceName") ?? row.GetType().GetProperty("ResourceName")?.GetGetMethod();
+            return m?.Invoke(row, null)?.ToString() ?? "";
+        }
+
+        /// <summary>取行的 defaultText（get_DefaultText / get_ResourceName 同源兜底）</summary>
+        private static string GetRowDefaultText(object row)
+        {
+            var m = row.GetType().GetMethod("get_DefaultText") ?? row.GetType().GetProperty("DefaultText")?.GetGetMethod();
+            return m?.Invoke(row, null)?.ToString() ?? "";
+        }
+
+        /// <summary>取行的所有翻译：Dictionary<语言,翻译>（get_Translations → 每项 get_Key/get_Value）</summary>
+        private static Dictionary<string, string> GetRowTranslations(object row)
+        {
+            var dict = new Dictionary<string, string>();
+            var m = row.GetType().GetMethod("get_Translations") ?? row.GetType().GetProperty("Translations")?.GetGetMethod();
+            if (m == null) return dict;
+            var t = m.Invoke(row, null);
+            if (t is IEnumerable en)
+            {
+                foreach (var kv in en)
+                {
+                    var k = kv.GetType().GetMethod("get_Key")?.Invoke(kv, null)?.ToString() ?? "";
+                    var v = kv.GetType().GetMethod("get_Value")?.Invoke(kv, null)?.ToString() ?? "";
+                    dict[k] = v;
+                }
+            }
+            return dict;
+        }
+
+        private static string GetDictStr(Dictionary<string, object> d, string key)
+        {
+            return d.TryGetValue(key, out var v) ? v?.ToString() : null;
+        }
+
+        /// <summary>无参构造 LocalizationTableRow 后，通过属性填充（兜底：仅 ResourceName；Translations 若可写则填）</summary>
+        private static void PopulateRowByReflection(object rowObj, string resourceName, Dictionary<string, string> translations)
+        {
+            var t = rowObj.GetType();
+            var resNameSetter = t.GetProperty("ResourceName")?.GetSetMethod() ?? t.GetMethod("set_ResourceName");
+            if (resNameSetter != null) resNameSetter.Invoke(rowObj, new object[] { resourceName ?? "" });
+
+            var transSetter = t.GetProperty("Translations")?.GetSetMethod() ?? t.GetMethod("set_Translations");
+            var translationsField = t.GetField("Translations");
+            if (transSetter != null)
+                transSetter.Invoke(rowObj, new object[] { translations });
+            else if (translationsField != null && translationsField.FieldType.IsAssignableFrom(translations.GetType()))
+                translationsField.SetValue(rowObj, translations);
+        }
+
+        /// <summary>反射加载指定全名类型（不缓存，遵守全反射规则）</summary>
+
+        /// <summary>反射加载指定全名类型（不缓存，遵守全反射规则）</summary>
+        private static Type LoadTypeByFullName(string fullName)
+        {
+            foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                var t = asm.GetType(fullName);
+                if (t != null) return t;
+            }
+            return Type.GetType(fullName);
+        }
+
+        private static bool IsDictionaryCompatible(Type t)
+        {
+            if (t == typeof(IDictionary<string, string>)) return true;
+            return t.IsGenericType && typeof(IDictionary<,>).IsAssignableFrom(t.GetGenericTypeDefinition());
+        }
+
+        private static bool IsEnumerableCompatible(Type t)
+        {
+            return t == typeof(IEnumerable) || (t.IsGenericType && (t.GetGenericTypeDefinition() == typeof(IEnumerable<>)
+                || typeof(IEnumerable<>).IsAssignableFrom(t)));
+        }
+
+        /// <summary>构造指定类型的 Dictionary<string,string>（兼容非泛型/具体实现）</summary>
+        private static object CreateDictionaryOfStringString(Dictionary<string, string> src, Type dictType)
+        {
+            if (dictType == typeof(Dictionary<string, string>))
+                return new Dictionary<string, string>(src);
+            // 尝试 Activator 创建并逐个 Add
+            if (dictType.IsGenericType && dictType.GetGenericArguments().Length == 2)
+            {
+                try
+                {
+                    var inst = Activator.CreateInstance(dictType);
+                    var add = dictType.GetMethod("Add", new[] { typeof(string), typeof(string) });
+                    if (add != null)
+                    {
+                        foreach (var kv in src) add.Invoke(inst, new object[] { kv.Key, kv.Value });
+                        return inst;
+                    }
+                }
+                catch { }
+            }
+            return src;
+        }
+
+        private static object ConvertListToEnumerable(IList list, Type targetType)
+        {
+            if (targetType.IsGenericType)
+            {
+                var elem = targetType.GetGenericArguments()[0];
+                try
+                {
+                    var arr = Array.CreateInstance(elem, list.Count);
+                    for (int i = 0; i < list.Count; i++) arr.SetValue(list[i], i);
+                    if (targetType.IsAssignableFrom(arr.GetType())) return arr;
+                    var listT = typeof(List<>).MakeGenericType(elem);
+                    var lst = Activator.CreateInstance(listT) as IList;
+                    foreach (var it in list) lst.Add(it);
+                    return lst;
+                }
+                catch { }
+            }
+            return list;
+        }
 
         /// <summary>
         /// 创建节点 — 纯反射
