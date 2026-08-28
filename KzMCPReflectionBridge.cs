@@ -198,7 +198,18 @@ namespace KzMCPChatPlugin
                 return null;
             if (refOrPath.StartsWith("@"))
             {
-                if (_objectStore.TryGetValue(refOrPath, out var obj))
+                // v4: @node:/path → 按节点路径解析（target 场景）
+                if (refOrPath.StartsWith("@node:"))
+                {
+                    var nodeObj = GetNodeByPath(refOrPath.Substring("@node:".Length));
+                    if (nodeObj != null) return nodeObj;
+                    throw new KeyNotFoundException($"无法解析节点路径: '{refOrPath}'");
+                }
+                // v4: 新格式 @obj:23 → 归一化为 @obj23（缓存 key 无冒号）
+                var key = refOrPath;
+                if (refOrPath.StartsWith("@obj:"))
+                    key = "@obj" + refOrPath.Substring("@obj:".Length);
+                if (_objectStore.TryGetValue(key, out var obj))
                     return obj;
                 throw new KeyNotFoundException($"对象引用 '{refOrPath}' 不存在或已失效。使用 kz_list_refs 查看可用引用。");
             }
@@ -748,6 +759,17 @@ namespace KzMCPChatPlugin
                         needsEnumConversion = true; continue;
                     }
 
+                    // v4: @enum:NAME 精准转换（EnumTag 标记）
+                    if (paramType.IsEnum && argVal is EnumTag tag)
+                    {
+                        try
+                        {
+                            converted[i] = Enum.Parse(paramType, tag.Name, true);
+                            needsEnumConversion = true; continue;
+                        }
+                        catch { validMethod = false; break; }
+                    }
+
                     // string → enum 转换（枚举名称转值）
                     if (paramType.IsEnum && argVal is string strVal)
                     {
@@ -792,6 +814,39 @@ namespace KzMCPChatPlugin
         {
             if (a is string s)
             {
+                // ============================================================
+                // v4: 显式类型标识前缀（有标识 → 必须走标识，精准无歧义）
+                // 无标识 → 落到底部自动猜测兜底（兼容老调用）
+                // ============================================================
+
+                // ---------- 数值/基础类型 ----------
+                if (s.StartsWith("@int:"))   { return ParseOr(s, "@int:", int.TryParse, (int v) => v); }
+                if (s.StartsWith("@long:"))  { return ParseOr(s, "@long:", long.TryParse, (long v) => v); }
+                if (s.StartsWith("@float:")) { return ParseOr(s, "@float:", float.TryParse, (float v) => v); }
+                if (s.StartsWith("@double:")) { return ParseOr(s, "@double:", double.TryParse, (double v) => v); }
+                if (s.StartsWith("@decimal:")) { return ParseOr(s, "@decimal:", decimal.TryParse, (decimal v) => v); }
+                if (s.StartsWith("@bool:"))  { return ParseOr(s, "@bool:", bool.TryParse, (bool v) => v); }
+                if (s.StartsWith("@byte:"))  { return ParseOr(s, "@byte:", byte.TryParse, (byte v) => v); }
+                if (s.StartsWith("@char:"))  { var cs = s.Substring("@char:".Length); return cs.Length > 0 ? (object)cs[0] : s; }
+                if (s.StartsWith("@string:")) { return s.Substring("@string:".Length); } // 强制 string（解决 "123" 被转 int 的歧义）
+
+                // ---------- null（用于可空参数，如 CreateFloatProperty 的 lowerBound/upperBound/step）----------
+                if (s == "@null") return null;
+
+                // ---------- 数学类型（System.Windows / System.Windows.Media.Media3D）----------
+                if (s.StartsWith("@vector:"))    { return ParseVector(s.Substring("@vector:".Length)); }
+                if (s.StartsWith("@vector3d:"))  { return ParseVector3D(s.Substring("@vector3d:".Length)); }
+                if (s.StartsWith("@quaternion:")) { return ParseQuaternion(s.Substring("@quaternion:".Length)); }
+
+                // ---------- 枚举：标记交给 FindEnumMethod 按目标方法签名精准转换 ----------
+                if (s.StartsWith("@enum:"))
+                {
+                    var enumName = s.Substring("@enum:".Length).Trim();
+                    if (enumName.Length > 0)
+                        return new EnumTag(enumName);
+                }
+
+                // ---------- 类型 ----------
                 // ★ @type: 前缀 → 解析为 .NET Type 对象（如 @type:string / @type:System.Int32）
                 //   用于 CreateProperty<T> 等带 Type 参数/泛型类型实参的方法，通用支持。
                 if (s.StartsWith("@type:"))
@@ -805,6 +860,42 @@ namespace KzMCPChatPlugin
                     // 解析失败：保持原字符串，避免误吞
                     return s;
                 }
+
+                // ---------- 对象 / 节点引用 ----------
+                // @project / @studio / @projectItem 特殊 target 作为 args 时也解析成对象（如 SaveProject("@project")）
+                if (s == "@project" || s == "project") return _project;
+                if (s == "@studio" || s == "studio") return _studio;
+                if (s == "@projectItem" || s == "projectItem") return _projectItem;
+
+                if (s.StartsWith("@obj:"))
+                {
+                    // 新格式 @obj:10 → @obj10
+                    var refKey = "@obj" + s.Substring("@obj:".Length);
+                    if (_objectStore.ContainsKey(refKey))
+                    {
+                        var resolvedObj = _objectStore[refKey];
+                        if (resolvedObj is Type)
+                            return refKey; // RuntimeType 保持字符串引用，供泛型匹配
+                        return resolvedObj;
+                    }
+                    return s; // 未命中缓存：保持原样
+                }
+                if (s.StartsWith("@node:"))
+                {
+                    try { return GetNodeByPath(s.Substring("@node:".Length)); }
+                    catch { return s; }
+                }
+
+                // ---------- 字典 ----------
+                if (s.StartsWith("@dict:"))
+                {
+                    var jsonPart = s.Substring("@dict:".Length);
+                    if (TryParseDict(jsonPart, out var dictResult))
+                        return dictResult;
+                    return s; // 解析失败保持原样
+                }
+
+                // @ 前缀且命中缓存（老格式 @obj10 / @obj225）
                 if (s.StartsWith("@") && _objectStore.ContainsKey(s))
                 {
                     var resolved = _objectStore[s];
@@ -814,6 +905,8 @@ namespace KzMCPChatPlugin
                         return s;
                     return resolved;
                 }
+
+                // ===== 无标识 → 自动猜测兜底（兼容老调用）=====
                 if (int.TryParse(s, out int i)) return i;
                 if (bool.TryParse(s, out bool b)) return b;
                 if (float.TryParse(s, out float f)) return f;
@@ -850,6 +943,126 @@ namespace KzMCPChatPlugin
             }
 
             return a;
+        }
+
+        // ================ v4 参数标识辅助方法 ================
+
+        /// <summary>解析带前缀的标量，解析失败返回原字符串（避免误吞）。</summary>
+        private static object ParseOr<T>(string s, string prefix, TryParse<T> tryParse, Func<T, object> build)
+        {
+            if (tryParse(s.Substring(prefix.Length), out var v))
+                return build(v);
+            return s;
+        }
+        private delegate bool TryParse<T>(string s, out T value);
+
+        /// <summary>解析 @vector:0,0 → System.Windows.Vector。格式："," 分隔的 x,y。</summary>
+        private static object ParseVector(string body)
+        {
+            var parts = body.Split(',');
+            if (parts.Length < 2) return null;
+            if (double.TryParse(parts[0].Trim(), out double x) && double.TryParse(parts[1].Trim(), out double y))
+            {
+                var vecType = ResolveTypeByName("System.Windows.Vector");
+                if (vecType != null)
+                {
+                    try
+                    {
+                        return Activator.CreateInstance(vecType, new object[] { x, y });
+                    }
+                    catch { }
+                }
+                // 兜底：返回 null 字符串，交给后续库查询/调用方处理
+            }
+            return null;
+        }
+
+        /// <summary>解析 @vector3d:0,0,0 → System.Windows.Media.Media3D.Vector3D。格式："," 分隔。</summary>
+        private static object ParseVector3D(string body)
+        {
+            var parts = body.Split(',');
+            if (parts.Length < 3) return null;
+            if (double.TryParse(parts[0].Trim(), out double x)
+                && double.TryParse(parts[1].Trim(), out double y)
+                && double.TryParse(parts[2].Trim(), out double z))
+            {
+                var vecType = ResolveTypeByName("System.Windows.Media.Media3D.Vector3D");
+                if (vecType != null)
+                {
+                    try
+                    {
+                        return Activator.CreateInstance(vecType, new object[] { x, y, z });
+                    }
+                    catch { }
+                }
+            }
+            return null;
+        }
+
+        /// <summary>解析 @quaternion:x,y,z,w → System.Windows.Media.Media3D.Quaternion。</summary>
+        private static object ParseQuaternion(string body)
+        {
+            var parts = body.Split(',');
+            if (parts.Length < 4) return null;
+            if (double.TryParse(parts[0].Trim(), out double x)
+                && double.TryParse(parts[1].Trim(), out double y)
+                && double.TryParse(parts[2].Trim(), out double z)
+                && double.TryParse(parts[3].Trim(), out double w))
+            {
+                var qType = ResolveTypeByName("System.Windows.Media.Media3D.Quaternion");
+                if (qType != null)
+                {
+                    try
+                    {
+                        return Activator.CreateInstance(qType, new object[] { x, y, z, w });
+                    }
+                    catch { }
+                }
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// 解析 @dict: 前缀后的内容 → Dictionary&lt;string,int&gt;。
+        /// 支持逗号分隔的 k=v 格式：@dict:Level0=0,Level1=1,Level2=2
+        ///（MCP args 里真正的 JSON 对象 {…} 会先被反序列化成 IDictionary，由上部已有分支处理）
+        /// 解析失败返回 false（调用方保留原字符串）。
+        /// </summary>
+        private bool TryParseDict(string body, out Dictionary<string, int> dict)
+        {
+            dict = null;
+            if (string.IsNullOrWhiteSpace(body)) return false;
+            try
+            {
+                var result = new Dictionary<string, int>();
+                foreach (var pair in body.Split(','))
+                {
+                    var idx = pair.IndexOf('=');
+                    if (idx < 0) return false;
+                    var key = pair.Substring(0, idx).Trim();
+                    var valStr = pair.Substring(idx + 1).Trim();
+                    if (key.Length == 0) return false;
+                    if (int.TryParse(valStr, out int ival))
+                        result[key] = ival;
+                    else
+                        return false;
+                }
+                if (result.Count == 0) return false;
+                dict = result;
+                return true;
+            }
+            catch { return false; }
+        }
+
+        /// <summary>
+        /// @enum:NAME 的标记对象。
+        /// ResolveSingleArg 把 @enum: 前缀解析成 EnumTag，
+        /// FindEnumMethod 根据目标方法参数类型对该枚举名做精准 Enum.Parse。
+        /// </summary>
+        private sealed class EnumTag
+        {
+            public string Name { get; }
+            public EnumTag(string name) { Name = name; }
         }
 
         /// <summary>
