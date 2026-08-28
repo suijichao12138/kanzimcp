@@ -1162,6 +1162,11 @@ namespace KzMCPChatPlugin
                 if (s.StartsWith("@vector:"))    { return ParseVector(s.Substring("@vector:".Length)); }
                 if (s.StartsWith("@vector3d:"))  { return ParseVector3D(s.Substring("@vector3d:".Length)); }
                 if (s.StartsWith("@quaternion:")) { return ParseQuaternion(s.Substring("@quaternion:".Length)); }
+                // ---------- Transformation2D（Rightware.Kanzi.Studio.PluginInterface.Transformation2D）----------
+                // 格式 @transformation2d:scaleX,scaleY,rotation,tx,ty（逗号分隔，5 个 double）
+                // 对应构造函数 (System.Windows.Vector scale, double rotation, System.Windows.Vector translation)
+                // 用于 Node2D.RenderTransformation 等只接受 Transformation2D 值的属性（如 1;1;0;0;115 → @transformation2d:1,1,0,0,115）
+                if (s.StartsWith("@transformation2d:")) { return ParseTransformation2D(s.Substring("@transformation2d:".Length)); }
 
                 // ---------- 颜色（System.Windows.Media.Color，#AARRGGBB / #RRGGBB）----------
                 // 构造 WPF Color 对象（ColorBrush.Color 等只接受 Color 值，不接受字符串）。用于 Set("ColorBrush.Color", "@color:#FF9BA014")。
@@ -1341,6 +1346,39 @@ namespace KzMCPChatPlugin
         }
 
         /// <summary>解析 @vector3d:0,0,0 → System.Windows.Media.Media3D.Vector3D。格式："," 分隔。</summary>
+        /// <summary>解析 @transformation2d:1,1,0,0,115 → Rightware.Kanzi.Studio.PluginInterface.Transformation2D（\",\" 分隔，5 个 double）。</summary>
+        /// <remarks>
+        /// 格式：scaleX,scaleY,rotation,tx,ty。对应构造函数 (System.Windows.Vector scale, double rotation, System.Windows.Vector translation)。
+        /// 即 scale=(scaleX,scaleY)、rotation、translation=(tx,ty)。
+        /// 用于 Node2D.RenderTransformation 等只接受 Transformation2D 类型值的属性。
+        /// 构造函数签名已由 PluginInterface.dll 反编译确认（非猜测）。
+        /// </remarks>
+        private static object ParseTransformation2D(string body)
+        {
+            var parts = body.Split(',');
+            if (parts.Length < 5) return null;
+            if (double.TryParse(parts[0].Trim(), out double scaleX)
+                && double.TryParse(parts[1].Trim(), out double scaleY)
+                && double.TryParse(parts[2].Trim(), out double rotation)
+                && double.TryParse(parts[3].Trim(), out double tx)
+                && double.TryParse(parts[4].Trim(), out double ty))
+            {
+                var t2dType = ResolveTypeByName("Rightware.Kanzi.Studio.PluginInterface.Transformation2D");
+                var vecType = ResolveTypeByName("System.Windows.Vector");
+                if (t2dType != null && vecType != null)
+                {
+                    try
+                    {
+                        var scale = Activator.CreateInstance(vecType, new object[] { scaleX, scaleY });
+                        var translation = Activator.CreateInstance(vecType, new object[] { tx, ty });
+                        return Activator.CreateInstance(t2dType, new object[] { scale, rotation, translation });
+                    }
+                    catch { }
+                }
+            }
+            return null;
+        }
+
         private static object ParseVector3D(string body)
         {
             var parts = body.Split(',');
