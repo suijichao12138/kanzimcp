@@ -22,6 +22,7 @@ namespace KzMCPChatPlugin
         private Type _projectType;
         private object _projectItem;
         private Type _projectItemType;
+        private string _lastDefaultHow;   // 最近一次 set_DefaultText 的尝试结果（诊断用）
 
         // ====== V12 多工程支持：工程池 ======
         // 每个已打开工程按名字缓存其 Project/ProjectItem/类型，供 @proj:<name> 与 SelectProject 使用。
@@ -633,6 +634,279 @@ namespace KzMCPChatPlugin
                 ["type"] = t.FullName,
                 ["properties"] = props
             };
+        }
+
+        /// <summary>只读探测一个类型的构造函数 + 方法（不执行任何逻辑，不污染工程）。用于验证如 CreateLocaleCommandRecord 等命令记录是否可加载/可反射。</summary>
+        public object ProbeType(string fullTypeName)
+        {
+            var res = new Dictionary<string, object>();
+            res["fullType"] = fullTypeName;
+            Type t = LoadTypeByFullName(fullTypeName) ?? ResolveTypeByName(fullTypeName);
+            if (t == null)
+            {
+                res["loaded"] = false;
+                res["error"] = "类型未加载到 Studio 进程（LoadTypeByFullName/ResolveTypeByName 均失败）";
+                return res;
+            }
+            res["loaded"] = true;
+            res["type"] = t.FullName;
+            res["assembly"] = t.Assembly?.GetName()?.Name;
+            var ctors = new List<object>();
+            foreach (var c in t.GetConstructors(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance))
+            {
+                ctors.Add("(" + string.Join(", ", c.GetParameters().Select(p => (p.ParameterType.FullName ?? p.ParameterType.Name) + " " + p.Name)) + ")");
+            }
+            res["ctors"] = ctors;
+            var methods = new List<object>();
+            foreach (var m in t.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly)
+                       .Where(m => !m.IsSpecialName || m.Name.StartsWith("get_") || m.Name.StartsWith("set_") || m.Name == "Execute" || m.Name == "CreateProjectItem"))
+            {
+                methods.Add(m.Name + "(" + string.Join(", ", m.GetParameters().Select(p => (p.ParameterType.FullName ?? p.ParameterType.Name) + " " + p.Name)) + ")");
+            }
+            res["methods"] = methods.Distinct().ToList();
+            return res;
+        }
+
+        /// <summary>
+        /// [v13+]: 给本地化表新增一个语言（语言列）。
+        /// 走 CreateLocaleCommandRecord.CreateProjectItem（等价 GUI 菜单"新建语言"）。
+        /// target = 本地化表路径或 @obj 引用；lang = 新语言码（缩写，如 "de"）。
+        /// return：{ success, lang, recordRef, message }。
+        /// </summary>
+        public object AddLanguage(string target, string lang)
+        {
+            // ★ Kanzi 对象操作必须在 UI 线程，否则报"调用线程无法访问此对象"
+            if (!IsUiThread())
+            {
+                var app = System.Windows.Application.Current;
+                if (app != null && app.Dispatcher != null)
+                {
+                    return app.Dispatcher.Invoke(new Func<object>(() =>
+                        AddLanguageCore(target, lang)));
+                }
+            }
+            return AddLanguageCore(target, lang);
+        }
+
+        private object AddLanguageCore(string target, string lang)
+        {
+            var res = new Dictionary<string, object>
+            {
+                ["lang"] = lang,
+                ["target"] = target
+            };
+            if (string.IsNullOrEmpty(lang))
+            {
+                res["success"] = false;
+                res["message"] = "lang 不能为空（传新语言码，如 de）";
+                return res;
+            }
+
+            // ---- 1. 解析目标表 & 拿内部 LocalizationTable 对象 ----
+            object wrapperObj = null;
+            if (target == "project" || target == "@project") wrapperObj = _project;
+            else wrapperObj = ResolveObject(target);
+            if (wrapperObj == null)
+            {
+                res["success"] = false;
+                res["message"] = $"无法解析目标表: '{target}'";
+                return res;
+            }
+            // CreateLocaleCommandRecord 构造需要的是【内部】LocalizationTable
+            // （Rightware.Kanzi.Tool.Logic.Project.ResourceLocalizationItems.LocalizationTable），
+            // 即 wrapper 的 get_WrappedItem() 返回的对象，不是 PluginInterface 包装器。
+            object internalTable = GetWrappedItemRaw(wrapperObj) ?? wrapperObj;
+
+            // ---- 2. 解析 CreateLocaleCommandRecord 类型（全反射）----
+            var recordType = ResolveTypeByName("Rightware.Kanzi.Tool.Logic.Project.ResourceLocalizationItems.CreateLocaleCommandRecord");
+            if (recordType == null)
+            {
+                res["success"] = false;
+                res["message"] = "解析 CreateLocaleCommandRecord 失败（LogicProject 未加载？）";
+                return res;
+            }
+
+            // ---- 3. 构造 CreateLocaleCommandRecord(parent, name) ----
+            ConstructorInfo ctor = null;
+            try
+            {
+                // 按参数兼容匹配：(LocalizationTable, String)
+                ctor = recordType.GetConstructors(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+                    .FirstOrDefault(c =>
+                    {
+                        var p = c.GetParameters();
+                        return p.Length == 2 && p[1].ParameterType == typeof(string) &&
+                               (p[0].ParameterType.IsAssignableFrom(internalTable.GetType()) ||
+                                internalTable.GetType().IsAssignableFrom(p[0].ParameterType));
+                    });
+                if (ctor == null)
+                    ctor = recordType.GetConstructors().FirstOrDefault(c =>
+                    {
+                        var p = c.GetParameters();
+                        return p.Length == 2 && p[1].ParameterType == typeof(string);
+                    });
+            }
+            catch { }
+            if (ctor == null)
+            {
+                res["success"] = false;
+                res["message"] = "CreateLocaleCommandRecord 上找不到 (LocalizationTable, String) 构造器";
+                return res;
+            }
+
+            object record;
+            try
+            {
+                record = ctor.Invoke(new object[] { internalTable, lang });
+            }
+            catch (System.Reflection.TargetInvocationException tie)
+            {
+                res["success"] = false;
+                res["message"] = $"创建 CreateLocaleCommandRecord 失败: {tie.InnerException?.Message ?? tie.Message}";
+                return res;
+            }
+            string recordRef = RegisterObject(record);
+            res["recordRef"] = recordRef;
+
+            // ---- 4. 调 CreateProjectItem(lang) 真正新建语言 ----
+            var createMethod = FindMethodByParamCount(recordType, "CreateProjectItem", 1)
+                              ?? recordType.GetMethod("CreateProjectItem", new[] { typeof(string) });
+            if (createMethod == null)
+            {
+                res["success"] = false;
+                res["message"] = "CreateLocaleCommandRecord 上找不到 CreateProjectItem(String)";
+                return res;
+            }
+            try
+            {
+                createMethod.Invoke(record, new object[] { lang });
+                res["success"] = true;
+                res["message"] = $"已创建语言: {lang}（记录 ref={recordRef}）";
+            }
+            catch (System.Reflection.TargetInvocationException tie)
+            {
+                res["success"] = false;
+                res["message"] = $"CreateLocaleCommandRecord.CreateProjectItem 失败: {tie.InnerException?.Message ?? tie.Message}";
+            }
+            return res;
+        }
+
+        /// <summary>
+        /// [v13+]: 删除本地化表的一个语言（语言列）。
+        /// 等价 GUI 菜单"删除" → Delete ProjectItem ".../Localization Table/<lang>"：
+        /// 对 get_Locales 里匹配 lang 的 Locale 项目项调 Delete()（标准项目项删除）。
+        /// target = 本地化表路径或 @obj 引用；lang = 语言码（缩写，如 "de"）。
+        /// 安全：只删完全匹配的那一个语言；找不到 lang 不删任何东西，返回 found=false。
+        /// return：{ success, lang, found, message }。
+        /// </summary>
+        public object DeleteLanguage(string target, string lang)
+        {
+            // ★ Kanzi 对象操作必须在 UI 线程，否则报"调用线程无法访问此对象"
+            if (!IsUiThread())
+            {
+                var app = System.Windows.Application.Current;
+                if (app != null && app.Dispatcher != null)
+                {
+                    return app.Dispatcher.Invoke(new Func<object>(() =>
+                        DeleteLanguageCore(target, lang)));
+                }
+            }
+            return DeleteLanguageCore(target, lang);
+        }
+
+        private object DeleteLanguageCore(string target, string lang)
+        {
+            var res = new Dictionary<string, object>
+            {
+                ["lang"] = lang,
+                ["target"] = target
+            };
+            if (string.IsNullOrEmpty(lang))
+            {
+                res["success"] = false;
+                res["found"] = false;
+                res["message"] = "lang 不能为空（传要删除的语言码，如 de）";
+                return res;
+            }
+
+            // ---- 1. 解析目标表 & 拿内部 LocalizationTable 对象 ----
+            object wrapperObj = null;
+            if (target == "project" || target == "@project") wrapperObj = _project;
+            else wrapperObj = ResolveObject(target);
+            if (wrapperObj == null)
+            {
+                res["success"] = false;
+                res["found"] = false;
+                res["message"] = $"无法解析目标表: '{target}'";
+                return res;
+            }
+            object internalTable = GetWrappedItemRaw(wrapperObj) ?? wrapperObj;
+
+            // ---- 2. 枚举 get_Locales，找匹配 lang 的 Locale（精确匹配语言码）----
+            object targetLocale = null;
+            string foundName = null;
+            foreach (var lo in GetLocalesList(internalTable))
+            {
+                var ln = GetStringPropValue(lo, "LocaleName")
+                         ?? GetStringPropValue(lo, "Name");
+                if (ln != null && string.Equals(ln.Trim(), lang.Trim(), StringComparison.OrdinalIgnoreCase))
+                {
+                    targetLocale = lo;
+                    foundName = ln;
+                    break;
+                }
+            }
+            if (targetLocale == null)
+            {
+                res["success"] = false;
+                res["found"] = false;
+                res["message"] = $"表中不存在语言 '{lang}'，未删除任何内容（当前语言列见 get_Locales）";
+                return res;
+            }
+            res["found"] = true;
+            res["foundName"] = foundName;
+
+            // ---- 3. 对该 Locale 项目项调 Delete()（等价 GUI Delete ProjectItem）----
+            MethodInfo deleteMethod = null;
+            try
+            {
+                deleteMethod = FindMethod(targetLocale.GetType(), "Delete", Type.EmptyTypes);
+                if (deleteMethod == null)
+                {
+                    deleteMethod = targetLocale.GetType().GetMethod("Delete", Type.EmptyTypes);
+                }
+            }
+            catch { }
+            if (deleteMethod == null)
+            {
+                res["success"] = false;
+                res["message"] = $"Locale 类型 {targetLocale.GetType().Name} 上找不到 Delete() 方法";
+                return res;
+            }
+            try
+            {
+                object delRes = deleteMethod.Invoke(targetLocale, null);
+                bool deleted = delRes == null || (delRes is bool b && b);
+                if (!deleted)
+                {
+                    res["success"] = false;
+                    res["message"] = $"Delete() 返回了假值（结果 {delRes?.ToString() ?? "null"}），语言 '{foundName}' 可能未删除";
+                    return res;
+                }
+                res["success"] = true;
+                res["message"] = $"已删除语言: {foundName}";
+            }
+            catch (System.Reflection.TargetInvocationException tie)
+            {
+                res["success"] = false;
+                res["message"] = $"删除语言 '{foundName}' 失败: {tie.InnerException?.Message ?? tie.Message}";
+            }
+            catch (Exception ex)
+            {
+                res["success"] = false;
+                res["message"] = $"删除语言 '{foundName}' 失败: {ex.Message}";
+            }
+            return res;
         }
 
         #endregion 对象引用管理
@@ -2120,742 +2394,6 @@ namespace KzMCPChatPlugin
 
         #region 便捷操作（纯反射实现）
 
-        /// <summary>
-        /// 本地化表编辑（增量式，方案A，符合网络传输优化）。
-        /// 支持五个操作：
-        ///   set     —— 增/改（传完整行数组 rows，表里有则覆盖=改，没有则新增；插件内部读全表合并后写回）
-        ///   delete  —— 删（只传 keys 数组，仅需 resourceName）→【走重建删行链路：删表前强制自动备份，表空/不存在拒绝删除】
-        ///   get     —— 查单条（只传 key，仅需 resourceName）
-        ///   list    —— 查全部（不传数据，读整表返回）
-        ///   backup  —— 手动把当前表导出到工程目录备份文件（覆盖，保持唯一最新）
-        ///   rebuild —— 重建删行/改字段：读表→内存改→强制备份→删旧表→建新表→写回（删表前自动备份+表空禁止）
-        ///   restore —— 从最新备份文件重建一张表（恢复误删/救急）
-        /// 纯反射实现：不缓存 MethodInfo/类型，不依赖任何 Rightware.Kanzi.* 具体类型。
-        /// </summary>
-        public object LocalizationEdit(string target, string action, object rows = null, object keys = null, object key = null)
-        {
-            // ★ 全部内部直接反射（ImportRows/ModifyExistingRow/DeleteLocalizationTable/ReadAllRows 等）
-            //   都要在 UI(Dispatcher)线程上操作真实 Kanzi 对象；否则报“调用线程无法访问此对象”。
-            if (!IsUiThread())
-            {
-                var app = System.Windows.Application.Current;
-                if (app != null && app.Dispatcher != null)
-                {
-                    return app.Dispatcher.Invoke(new Func<object>(() =>
-                        LocalizationEditCore(target, action, rows, keys, key)));
-                }
-            }
-            return LocalizationEditCore(target, action, rows, keys, key);
-        }
-
-        private object LocalizationEditCore(string target, string action, object rows = null, object keys = null, object key = null)
-        {
-            action = (action ?? "").Trim().ToLowerInvariant();
-            if (action == "")
-                throw new ArgumentException("action 不能为空（set/delete/get/list/backup/rebuild/restore）");
-
-            // restore 不依赖目标表（表可能已被删，就是用来恢复被删的表）→ 先处理，跳过 target 解析
-            if (action == "restore")
-                return RestoreLocalizationFromBackup();
-
-            // 解析目标：LocalizationTable 对象
-            object targetObj;
-            if (target == "studio" || target == "@studio") targetObj = _studio;
-            else if (target == "project" || target == "@project") targetObj = _project;
-            else targetObj = ResolveObject(target);
-            if (targetObj == null)
-                throw new InvalidOperationException($"无法解析 LocalizationTable 目标: '{target}'");
-
-            switch (action)
-            {
-                case "list":
-                    return ListLocalization(targetObj);
-                case "get":
-                    string gk = key?.ToString();
-                    if (string.IsNullOrEmpty(gk) && keys is IEnumerable ike)
-                    {
-                        foreach (var kk in ike) { gk = kk?.ToString(); break; }
-                    }
-                    if (string.IsNullOrEmpty(gk))
-                        throw new ArgumentException("get 需要传 key（resourceName）");
-                    return GetLocalization(targetObj, gk);
-                case "set":
-                    if (rows == null)
-                        throw new ArgumentException("set 需要传 rows（完整行数组）");
-                    return SetLocalization(targetObj, rows, applyDelete: false, deleteKeys: null);
-                case "delete":
-                    var delKeys = new List<string>();
-                    if (keys is IEnumerable de)
-                        foreach (var kk in de) delKeys.Add(kk?.ToString() ?? "");
-                    if (!string.IsNullOrEmpty(key?.ToString())) delKeys.Add(key.ToString());
-                    if (delKeys.Count == 0)
-                        throw new ArgumentException("delete 需要传 keys（resourceName 数组）或 key");
-                    // ★ 删除走重建链路（ImportTranslations 不认原地删）→ 删表前强制备份 + 表空/不存在禁止
-                    return RebuildLocalization(targetObj, rows: null, deleteKeys: delKeys);
-                case "backup":
-                    return BackupLocalization(targetObj);
-                case "rebuild":
-                    // rebuild：可删（keys）+ 可增改（rows）→ 重建；强制备份 + 护栏
-                    var rbKeys = new List<string>();
-                    if (keys is IEnumerable re)
-                        foreach (var kk in re) rbKeys.Add(kk?.ToString() ?? "");
-                    if (!string.IsNullOrEmpty(key?.ToString())) rbKeys.Add(key.ToString());
-                    return RebuildLocalization(targetObj, rows, rbKeys);
-                default:
-                    throw new ArgumentException($"未知 action: '{action}'（支持 set/delete/get/list/backup/rebuild/restore）");
-            }
-        }
-
-        /// <summary>list：读整表并返回（每条含 resourceName + translations + 行索引）</summary>
-        private object ListLocalization(object targetObj)
-        {
-            // 读全表（现经 LocalizationEdit 统一切 UI 线程执行；ExportTranslations 读操作任意线程均可）
-            var current = ReadAllRows(targetObj);
-            var outList = new List<object>();
-            int idx = 0;
-            foreach (var row in current)
-            {
-                var rn = GetRowResourceName(row);
-                var trans = GetRowTranslations(row); // Dictionary<string,string>
-                var rowDict = new Dictionary<string, object>
-                {
-                    ["index"] = idx++,
-                    ["resourceName"] = rn,
-                    ["translations"] = trans
-                };
-                outList.Add(rowDict);
-            }
-            return outList;
-        }
-
-        /// <summary>get：读整表找单条并返回</summary>
-        private object GetLocalization(object targetObj, string resourceName)
-        {
-            var current = ReadAllRows(targetObj);
-            foreach (var row in current)
-            {
-                if (string.Equals(GetRowResourceName(row), resourceName, StringComparison.Ordinal))
-                {
-                    return new Dictionary<string, object>
-                    {
-                        ["resourceName"] = resourceName,
-                        ["defaultText"] = GetRowDefaultText(row),
-                        ["translations"] = GetRowTranslations(row)
-                    };
-                }
-            }
-            throw new InvalidOperationException($"表中没有 resourceName = '{resourceName}' 的条目");
-        }
-
-        /// <summary>set/delete 核心：读当前全表，合并增删改，ImportTranslations 写回（增量传参，内部合并）</summary>
-        private object SetLocalization(object targetObj, object rows, bool applyDelete, List<string> deleteKeys)
-        {
-            // 规整传入的 rows（set 用）→ List<Dictionary<string,object>>
-            var incoming = new List<Dictionary<string, object>>();
-            if (rows != null)
-            {
-                foreach (var r in (IEnumerable)rows)
-                {
-                    if (r is IDictionary<string, object> d)
-                        incoming.Add(new Dictionary<string, object>(d));
-                    else if (r is IDictionary id2)
-                    {
-                        var dd = new Dictionary<string, object>();
-                        foreach (DictionaryEntry e in id2) dd[e.Key?.ToString() ?? ""] = e.Value;
-                        incoming.Add(dd);
-                    }
-                    else
-                        throw new ArgumentException($"rows 元素需为对象，得到: {r?.GetType().Name}");
-                }
-            }
-
-            // 当前全表（非 UI 线程——V7 既定线程策略；ExportTranslations 读操作任意线程均可）
-            var current = ReadAllRows(targetObj);
-
-            // 解析真实行类型：从现有行实例的 GetType()（避免 AppDomain 多副本 LoadTypeByFullName 拿错实例）
-            Type rowType = current.Count > 0
-                ? current[0].GetType()
-                : LoadTypeByFullName("Rightware.Kanzi.Studio.PluginInterface.LocalizationTableRow");
-
-            // 1) 删除：先把 deleteKeys 规整（去空、去重），再用【List 的删除函数 RemoveAll】删除
-            if (applyDelete && deleteKeys != null && deleteKeys.Count > 0)
-            {
-                // 规整：去空串、去重
-                deleteKeys = deleteKeys.Where(k => !string.IsNullOrEmpty(k)).Distinct().ToList();
-                // 已删除的行 key（统计用）
-                var removed = new List<string>();
-                // ⚠️ 关键：用 List<object> 的 RemoveAll 谓词原地删除匹配 deleteKeys 的行，
-                //    不用之前 Where 过滤“新建 List”的方式；删除后剩下的行仍是表里原有实例。
-                current.RemoveAll(row =>
-                {
-                    var rn = GetRowResourceName(row);
-                    if (string.IsNullOrEmpty(rn)) return false;
-                    if (deleteKeys.Contains(rn, StringComparer.Ordinal))
-                    {
-                        if (!removed.Contains(rn)) removed.Add(rn);
-                        return true;
-                    }
-                    return false;
-                });
-                deleteKeys = removed;
-            }
-
-            // 2) 新增/修改：按 resourceName 合并 incoming
-            //    ⚠️ 关键（loc_gui_test 已验证机制）：LocalizationTableRow 是【只读行】（无 setter），
-            //       修改已有 key 不能用 ModifyExistingRow 改原位实例（setter no-op 改不进）；
-            //       正确方式 = 【删旧行 + new 新行(带新值) + 整表 ImportTranslations 写回】。
-            if (incoming.Count > 0)
-            {
-                foreach (var rd in incoming)
-                {
-                    string rn = GetDictStr(rd, "resourceName") ?? GetDictStr(rd, "key");
-                    if (string.IsNullOrEmpty(rn))
-                        throw new ArgumentException("set 的每个 row 必须有 resourceName（或 key）");
-
-                    // 在 current 里找同 resourceName 的已有行（同一个对象实例）
-                    object existing = current.FirstOrDefault(row => string.Equals(GetRowResourceName(row), rn, StringComparison.Ordinal));
-                    if (existing != null)
-                    {
-                        // 已有行 → 删旧 + new 新行（rd 覆盖、缺失保留旧值）
-                        string newDt = string.IsNullOrEmpty(GetDictStr(rd, "defaultText"))
-                            ? GetRowDefaultText(existing)
-                            : GetDictStr(rd, "defaultText");
-                        var mergedRd = MergeRowValues(existing, rd);
-                        object newRow = BuildLocalizationTableRow(rn, newDt, mergedRd, rowType);
-                        int idx = current.IndexOf(existing);
-                        current.RemoveAt(idx >= 0 ? idx : current.Count - 1);
-                        current.Add(newRow);
-                    }
-                    else
-                    {
-                        // 无该 key → 真新增，才 new 一行
-                        object newRow = BuildLocalizationTableRow(rn, GetDictStr(rd, "defaultText"), rd, rowType);
-                        current.Add(newRow);
-                    }
-                }
-            }
-
-            if (incoming.Count == 0 && !applyDelete)
-                throw new ArgumentException("set 需要 rows");
-
-            // 3) 整表写回：直接 ImportTranslations（恢复 V8 既定方案，不再走框架 importer）
-            ImportRows(targetObj, current);
-
-            var parts = new List<string>();
-            if (applyDelete && deleteKeys != null) parts.Add($"删除 {deleteKeys.Count} 条");
-            if (incoming.Count > 0) parts.Add($"写入 {incoming.Count} 条");
-            return $"✅ Localization 更新完成（{string.Join("，", parts)}；事务后共 {current.Count} 条）";
-        }
-
-        // ===================== 备份 / 重建删行 / 恢复（2026-08-08 新增） =====================
-        // 背景：ImportTranslations 不支持删除/改 resourceName/defaultText（整表写回不认删）。
-        //       于是用「读全表→内存改→删旧表→建新表→写回」实现删行/改字段。
-        //       为防误删：删表前【强制】把当前表导出到工程目录的「唯一最新备份」文件（覆盖），
-        //       且【表不存在或为空 → 拒绝删除也不覆盖备份】。
-
-        /// <summary>工程目录下的备份文件路径：{工程目录}\{工程名}.localization.backup.json</summary>
-        private string BackupFilePath()
-        {
-            string dir = "";
-            try
-            {
-                var fs = Invoke("@project", "get_FileSystemPath", null)?.ToString();
-                if (!string.IsNullOrEmpty(fs))
-                    dir = Path.GetDirectoryName(fs) ?? "";
-            }
-            catch { }
-            string projName = "project";
-            try
-            {
-                var nm = Invoke("@project", "get_Name", null)?.ToString();
-                if (!string.IsNullOrEmpty(nm)) projName = nm;
-            }
-            catch { }
-            if (string.IsNullOrEmpty(dir))
-                dir = Path.GetTempPath();
-            return Path.Combine(dir, projName + ".localization.backup.json");
-        }
-
-        /// <summary>把全表行序列化导出到备份文件（覆盖，保持唯一最新备份）</summary>
-        private string WriteLocalizationBackup(object targetObj, List<object> rows)
-        {
-            var list = new List<object>();
-            foreach (var row in rows)
-            {
-                // translations 是 Dictionary<string,string>，而 JsonUtils.Serialize 只认 Dictionary<string,object>
-                // （否则会走匿名反射分支，对 Dictionary 索引器属性 GetValue 无参调用 → TargetParameterCountException"参数计数不匹配"）
-                // 这里转成 Dictionary<string,object> 再序列化，避免动共享文件 JsonUtils.cs。
-                var tr = new Dictionary<string, object>();
-                foreach (var kv in GetRowTranslations(row))
-                    tr[kv.Key] = kv.Value;
-                list.Add(new Dictionary<string, object>
-                {
-                    ["resourceName"] = GetRowResourceName(row),
-                    ["defaultText"] = GetRowDefaultText(row),
-                    ["translations"] = tr
-                });
-            }
-            var json = JsonUtils.Serialize(list);
-            var path = BackupFilePath();
-            File.WriteAllText(path, json, new UTF8Encoding(false));
-            return path;
-        }
-
-        /// <summary>action=backup：手动把当前表完整导出到备份文件（覆盖，保持唯一最新）</summary>
-        private object BackupLocalization(object targetObj)
-        {
-            var rows = ReadAllRows(targetObj);
-            var path = WriteLocalizationBackup(targetObj, rows);
-            return $"✅ 备份完成：{rows.Count} 行 → {path}";
-        }
-
-        /// <summary>
-        /// 安全护栏：删表/重建前校验。表必须存在且非空，否则抛错——
-        /// 既防止误删（表已没了还去删/重建），也防止把空/异常状态覆盖成「最新备份」砸掉好备份。
-        /// 返回当前全表行（供后续重建用）。
-        /// </summary>
-        private List<object> GuardTableForDestroy(object targetObj)
-        {
-            // 表是否存在：ReadAllRows 内部若找不到 ExportTranslations 会抛 MissingMethodException
-            var rows = ReadAllRows(targetObj);
-            if (rows == null || rows.Count == 0)
-                throw new InvalidOperationException("⚠️ 表不存在或为空（0 行）——拒绝删除/重建，且不覆盖备份（防止误删/覆盖正常备份）。");
-            return rows;
-        }
-
-        /// <summary>
-        /// action=delete/rebuild 核心：重建删行/改字段。
-        /// 流程：校验表非空 → 强制备份当前 → 内存构造新行集(删 keys + 合并 rows) → 删旧表 → 建新表 → 写回。
-        /// </summary>
-        private object RebuildLocalization(object targetObj, object rows, List<string> deleteKeys)
-        {
-            // 1) 护栏：表必须存在且非空（否则不删、不重建、不覆盖备份）
-            var current = GuardTableForDestroy(targetObj);
-
-            // 2) 强制备份当前全表（唯一最新备份，覆盖）—— 必须在删表之前
-            var backupPath = WriteLocalizationBackup(targetObj, current);
-
-            // 3) 内存构造新行集
-            var working = new List<object>(current);
-
-            // 3.1) 删：按 deleteKeys 去掉行
-            var delList = (deleteKeys ?? new List<string>())
-                .Where(k => !string.IsNullOrEmpty(k)).Distinct().ToList();
-            int removed = 0;
-            if (delList.Count > 0)
-            {
-                working.RemoveAll(row =>
-                {
-                    var rn = GetRowResourceName(row);
-                    if (string.IsNullOrEmpty(rn)) return false;
-                    bool hit = delList.Contains(rn, StringComparer.Ordinal);
-                    if (hit) removed++;
-                    return hit;
-                });
-            }
-
-            // 3.2) 增/改：按 resourceName 合并 rows（老隋指定 + loc_gui_test 验证：行只读，增/改统一【新建行】替换）
-            //   - 所有已有 key 的修改（改 translations / defaultText / resourceName）→ 用 {rd + 保留旧值} 新建新行替换旧行
-            //   - resourceName 重命名：旧 key 放 deleteKeys（3.1 已删），新 key 当新增行加进来
-            var incoming = NormalizeIncomingRows(rows);
-            if (incoming.Count > 0)
-            {
-                Type rowType = working.Count > 0
-                    ? working[0].GetType()
-                    : LoadTypeByFullName("Rightware.Kanzi.Studio.PluginInterface.LocalizationTableRow");
-                foreach (var rd in incoming)
-                {
-                    string rn = GetDictStr(rd, "resourceName") ?? GetDictStr(rd, "key");
-                    if (string.IsNullOrEmpty(rn))
-                        throw new ArgumentException("rebuild 的每个 row 必须有 resourceName（或 key）");
-                    object existing = working.FirstOrDefault(
-                        w => string.Equals(GetRowResourceName(w), rn, StringComparison.Ordinal));
-                    if (existing != null)
-                    {
-                        // 已有同 key 行：判断是否改了 defaultText
-                        string oldDt = GetRowDefaultText(existing) ?? "";
-                        bool hasNewDt = rd.ContainsKey("defaultText") && rd["defaultText"] != null
-                                        && GetDictStr(rd, "defaultText") != oldDt;
-                        // ⚠️（loc_gui_test 已验证）：行只读，翻译修改也要【删旧 + new 新行带新翻译】才生效，
-                        //   不能 ModifyExistingRow 原位 setter（no-op）。重建上下文里统一新建行替换。
-                        int idx = working.FindIndex(
-                            w => string.Equals(GetRowResourceName(w), rn, StringComparison.Ordinal));
-                        var mergedRd = MergeRowValues(existing, rd); // rd 未提供字段保留旧值
-                        string newDt = hasNewDt ? GetDictStr(rd, "defaultText")
-                                     : (GetRowDefaultText(existing) ?? "");
-                        working[idx] = BuildLocalizationTableRow(rn, newDt, mergedRd, rowType);
-                    }
-                    else
-                    {
-                        // 无该 key → 新增行（resourceName 重命名：旧 key 走 deleteKeys，这里加新 key）
-                        working.Add(BuildLocalizationTableRow(rn, GetDictStr(rd, "defaultText"), rd, rowType));
-                    }
-                }
-            }
-
-            if (working.Count == 0)
-                throw new InvalidOperationException("⚠️ 重建后表将为空——已中止（不会删表/建表；备份已保留为删除前状态）。");
-
-            // 4) 删旧表
-            DeleteLocalizationTable(targetObj);
-
-            // 5) 建新表（同名）
-            var newTable = CreateEmptyLocalizationTable(targetObj);
-
-            // 6) 写回新行集
-            ImportRows(newTable, working);
-
-            var parts = new List<string>();
-            if (removed > 0) parts.Add($"删除 {removed} 条");
-            if (incoming.Count > 0) parts.Add($"写入 {incoming.Count} 条");
-            return $"✅ 重建完成（{string.Join("，", parts)}；现 {working.Count} 条）\n📦 删除前已自动备份：{backupPath}\n♻️ 旧表已删除并重建为同名新表";
-        }
-
-        /// <summary>把传入 rows 规整成 List&lt;Dictionary&lt;string,object&gt;&gt;（set/rebuild 共用）</summary>
-        private List<Dictionary<string, object>> NormalizeIncomingRows(object rows)
-        {
-            var incoming = new List<Dictionary<string, object>>();
-            if (rows == null) return incoming;
-            foreach (var r in (IEnumerable)rows)
-            {
-                if (r is IDictionary<string, object> d)
-                    incoming.Add(new Dictionary<string, object>(d));
-                else if (r is IDictionary id2)
-                {
-                    var dd = new Dictionary<string, object>();
-                    foreach (DictionaryEntry e in id2) dd[e.Key?.ToString() ?? ""] = e.Value;
-                    incoming.Add(dd);
-                }
-                else
-                    throw new ArgumentException($"rows 元素需为对象，得到: {r?.GetType().Name}");
-            }
-            return incoming;
-        }
-
-        /// <summary>删除本地化表（反射调目标对象上的 Delete()）——删的是整个表项，危险，仅 Rebuild/恢复流程内部调用</summary>
-        private void DeleteLocalizationTable(object targetObj)
-        {
-            var t = targetObj.GetType();
-            var del = t.GetMethod("Delete") ?? t.GetMethod("delete");
-            if (del == null) throw new MissingMethodException($"在 {t.Name} 上找不到 Delete 方法，无法删除本地化表");
-            var result = del.Invoke(targetObj, null);
-            // 删除后确认：立即再读一次应抛/空（不再深究返回值布尔）
-            try { ReadAllRows(targetObj); }
-            catch { /* 表已删，ReadAllRows 找不到即为预期 */ }
-        }
-
-        /// <summary>取本地化表的名字（get_Name，用于建同名新表）</summary>
-        private string GetLocalizationTableName(object table)
-        {
-            try
-            {
-                var m = table.GetType().GetMethod("get_Name")
-                         ?? table.GetType().GetProperty("Name")?.GetGetMethod();
-                var nm = m?.Invoke(table, null)?.ToString();
-                if (!string.IsNullOrEmpty(nm)) return nm;
-            }
-            catch { }
-            return "Localization Table";
-        }
-
-        /// <summary>建一张同名空表：@project.CreateProjectItem(接口类型全名, 表名, Localization库)——参数顺序 [type, 名, 库]</summary>
-        private object CreateEmptyLocalizationTable(object oldTable)
-        {
-            if (_project == null)
-                throw new InvalidOperationException("没有打开的工程");
-            // Localization 库：必须是【真实对象】，不能用 Invoke 返回（Invoke 会把对象 wrap 成 dump 字符串），
-            // 否则 CreateProjectItem 的第三参是 string 找不到匹配。用 ResolveObject 拿真实对象。
-            var lib = ResolveLocaleLibrary();
-            string tableName = GetLocalizationTableName(oldTable);
-            string typeName = "Rightware.Kanzi.Studio.PluginInterface.LocalizationTable";
-            // 用 InvokeRaw：直接返回【真实表对象】（不 WrapResult），省去 ref_id 还原
-            var created = InvokeRaw("@project", "CreateProjectItem",
-                new object[] { "@type:" + typeName, tableName, lib });
-            if (created == null)
-                throw new InvalidOperationException("CreateProjectItem 建表失败：返回 null");
-            return created;
-        }
-
-        /// <summary>解析 Localization 库【真实对象】。优先 InvokeRaw 直接拿对象（不 wrap），兜底按路径/ref。</summary>
-        private object ResolveLocaleLibrary()
-        {
-            // 首选：InvokeRaw 直接返回真实对象（不 WrapResult）
-            try
-            {
-                var lib = InvokeRaw("@project", "get_LocaleLibrary", null);
-                if (lib != null)
-                {
-                    var tn = lib.GetType().Name;
-                    if (tn.IndexOf("Locale", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                        tn.IndexOf("Localization", StringComparison.OrdinalIgnoreCase) >= 0)
-                        return lib;
-                }
-            }
-            catch { }
-            try
-            {
-                var byPath = ResolveObject("/Localization");
-                if (byPath != null)
-                {
-                    var tn = byPath.GetType().Name;
-                    if (tn.IndexOf("Locale", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                        tn.IndexOf("Localization", StringComparison.OrdinalIgnoreCase) >= 0)
-                        return byPath;
-                }
-            }
-            catch { }
-            throw new InvalidOperationException("找不到 Localization 库（LocaleLibrary）");
-        }
-
-        /// <summary>action=restore：从最新备份文件重建一张表（恢复误删/救急）。备份来自工程目录 {工程名}.localization.backup.json</summary>
-        private object RestoreLocalizationFromBackup()
-        {
-            var path = BackupFilePath();
-            if (!File.Exists(path))
-                throw new InvalidOperationException($"没有找到备份文件：{path}（先执行 backup 或 delete/rebuild 会自动备份）");
-            var json = File.ReadAllText(path, Encoding.UTF8);
-            var rowsData = JsonUtils.DeserializeArray(json); // List<Dictionary<string,object>>
-            if (rowsData == null || rowsData.Count == 0)
-                throw new InvalidOperationException($"备份文件为空或无效：{path}");
-
-            // 建一张空表（默认标准名）→ 写回备份行。
-            // 若目标表已存在（如上一次 restore 失败留下的空表），先删掉再重建，保证恢复结果干净。
-            var lib = ResolveLocaleLibrary();
-            string typeName = "Rightware.Kanzi.Studio.PluginInterface.LocalizationTable";
-            RemoveTableIfExists("/Localization/Localization Table");
-            var table = InvokeRaw("@project", "CreateProjectItem",
-                new object[] { "@type:" + typeName, "Localization Table", lib });
-            if (table == null)
-                throw new InvalidOperationException("restore 建表失败");
-
-            // 构造行集
-            Type rowType = LoadTypeByFullName("Rightware.Kanzi.Studio.PluginInterface.LocalizationTableRow");
-            var rows = new List<object>();
-            foreach (var item in rowsData)
-            {
-                var rd = item as Dictionary<string, object> ?? new Dictionary<string, object>();
-                string rn = GetDictStr(rd, "resourceName") ?? "";
-                string dt = GetDictStr(rd, "defaultText");
-                rows.Add(BuildLocalizationTableRow(rn, dt, rd, rowType));
-            }
-            ImportRows(table, rows);
-            return $"✅ 已从备份恢复：{rows.Count} 行 → /Localization/Localization Table\n📦 备份源：{path}";
-        }
-
-        /// <summary>若指定路径存在本地化表，则删除它（restore 重建前清场用）。不存在则静默。</summary>
-        private void RemoveTableIfExists(string path)
-        {
-            object existing = null;
-            try { existing = ResolveObject(path); }
-            catch { return; } // 不存在
-            if (existing == null) return;
-            var t = existing.GetType();
-            var del = t.GetMethod("Delete") ?? t.GetMethod("delete");
-            if (del == null) return;
-            try { del.Invoke(existing, null); }
-            catch { }
-        }
-
-        /// <summary>
-        /// 合并旧行值与传入 rd：rd 提供的字段（defaultText/translations）覆盖；
-        /// rd 未提供的保留旧行值（避免误清空翻译）。返回可传给 BuildLocalizationTableRow 的 rd。
-        /// </summary>
-        private static Dictionary<string, object> MergeRowValues(object existing, Dictionary<string, object> rd)
-        {
-            var merged = new Dictionary<string, object>(rd);
-            // defaultText：rd 未提供或空则保留旧的
-            if (!merged.ContainsKey("defaultText") || string.IsNullOrEmpty(GetDictStr(merged, "defaultText")))
-                merged["defaultText"] = GetRowDefaultText(existing);
-            // translations：rd 未提供（或空）→ 保留旧行全部翻译；rd 提供了 → 以 rd 为准（含新增语言列）
-            bool rdHasTrans = merged.TryGetValue("translations", out var tv)
-                              && tv is IDictionary tdd && tdd.Count > 0;
-            if (!rdHasTrans)
-                merged["translations"] = GetRowTranslations(existing);
-            return merged;
-        }
-
-        /// <summary>读当前全表所有行：返回 List<object>（LocalizationTableRow 实例），通过 ExportTranslations 反射</summary>
-        private List<object> ReadAllRows(object targetObj)
-        {
-            var targetType = targetObj.GetType();
-            // 找 ExportTranslations()
-            MethodInfo exp = null;
-            foreach (var m in targetType.GetMethods(BindingFlags.Public | BindingFlags.Instance))
-            {
-                if (m.Name == "ExportTranslations") { exp = m; break; }
-            }
-            foreach (var iface in targetType.GetInterfaces())
-            {
-                if (exp != null) break;
-                foreach (var m in iface.GetMethods(BindingFlags.Public | BindingFlags.Instance))
-                    if (m.Name == "ExportTranslations") { exp = m; break; }
-            }
-            if (exp == null)
-                throw new MissingMethodException($"在 {targetType.Name} 上找不到 ExportTranslations，无法读取本地化表");
-
-            var result = exp.Invoke(targetObj, null);
-            var list = new List<object>();
-            if (result is IEnumerable en)
-                foreach (var r in en) list.Add(r);
-            return list;
-        }
-
-        /// <summary>构造一个 LocalizationTableRow（优先 3 参构造器，兜底无参+填充；用真实实例类型+兼容非 public 构造器）</summary>
-        private object BuildLocalizationTableRow(string resourceName, string defaultText, Dictionary<string, object> rd, Type rowType)
-        {
-            if (rowType == null)
-                throw new InvalidOperationException("找不到 LocalizationTableRow 类型（程序集未加载?）");
-
-            ConstructorInfo ctor3 = null, ctor0 = null;
-            // 同时搜 public 与 non-public 构造器
-            foreach (var c in rowType.GetConstructors(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance))
-            {
-                var ps = c.GetParameters();
-                if (ps.Length == 3 && ps[0].ParameterType == typeof(string)
-                    && IsDictionaryCompatible(ps[2].ParameterType))
-                    ctor3 = c;
-                else if (ps.Length == 0)
-                    ctor0 = c;
-            }
-            // 也尝试通过类型给定方式找到 3 参构造器（某些 wrapper 用 GetConstructor 更可靠）
-            if (ctor3 == null)
-            {
-                try
-                {
-                    ctor3 = rowType.GetConstructor(
-                        BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance,
-                        null,
-                        new[] { typeof(string), typeof(string), typeof(Dictionary<string, string>) },
-                        null) ?? ctor3;
-                }
-                catch { }
-            }
-
-            // 从 rd 读 translations
-            var langDict = new Dictionary<string, string>();
-            if (rd != null)
-            {
-                if (rd.TryGetValue("translations", out var tr) && tr is IDictionary td)
-                    foreach (DictionaryEntry e in td) langDict[e.Key?.ToString() ?? ""] = e.Value?.ToString() ?? "";
-                else if (rd.TryGetValue("locales", out var lc) && lc is IDictionary ld)
-                    foreach (DictionaryEntry e in ld) langDict[e.Key?.ToString() ?? ""] = e.Value?.ToString() ?? "";
-            }
-
-            if (ctor3 != null)
-            {
-                object dictArg;
-                object[] args3;
-                try
-                {
-                    if (ctor3.GetParameters()[2].ParameterType.IsAssignableFrom(langDict.GetType()))
-                        args3 = new object[] { resourceName ?? "", defaultText ?? "", langDict };
-                    else
-                        args3 = new object[] { resourceName ?? "", defaultText ?? "",
-                            CreateDictionaryOfStringString(langDict, ctor3.GetParameters()[2].ParameterType) };
-                    return ctor3.Invoke(args3);
-                }
-                catch (Exception ex)
-                {
-                    throw new InvalidOperationException($"LocalizationTableRow 3 参构造失败: {ex.InnerException?.Message ?? ex.Message}", ex);
-                }
-            }
-
-            if (ctor0 != null)
-            {
-                object rowObj = ctor0.Invoke(null);
-                PopulateRowByReflection(rowObj, resourceName, langDict);
-                return rowObj;
-            }
-
-            throw new InvalidOperationException($"LocalizationTableRow({rowType.FullName}) 没有可用构造器");
-        }
-
-        /// <summary>整表写回（ImportTranslations），返回 ImportTranslations 的返回值（可能指示是否成功）</summary>
-        private object ImportRows(object targetObj, List<object> rows)
-        {
-            var targetType = targetObj.GetType();
-            var importMethods = targetType.GetMethods(BindingFlags.Public | BindingFlags.Instance)
-                .Where(m => m.Name == "ImportTranslations").ToList();
-            foreach (var iface in targetType.GetInterfaces())
-                importMethods.AddRange(iface.GetMethods(BindingFlags.Public | BindingFlags.Instance)
-                    .Where(m => m.Name == "ImportTranslations"));
-            importMethods = importMethods.GroupBy(m => m.ToString()).Select(g => g.First()).ToList();
-
-            // 真实行类型：优先从已有行实例的 GetType() 拿（避免 AppDomain 多副本 LoadTypeByFullName 拿错实例）
-            Type rowType = rows.Count > 0 ? rows[0].GetType()
-                : LoadTypeByFullName("Rightware.Kanzi.Studio.PluginInterface.LocalizationTableRow");
-
-            Exception lastEx = null;
-            foreach (var c in importMethods)
-            {
-                var ps = c.GetParameters();
-                if (ps.Length != 1 || !IsEnumerableCompatible(ps[0].ParameterType)) continue;
-
-                // 组 List<LocalizationTableRow>
-                object arg;
-                if (rows.Count == 0)
-                {
-                    arg = Activator.CreateInstance(typeof(List<>).MakeGenericType(rowType));
-                }
-                else if (ps[0].ParameterType.IsAssignableFrom(BuildListOfRow(rows, rowType).GetType()))
-                    arg = BuildListOfRow(rows, rowType);
-                else
-                    arg = ConvertListToEnumerable(BuildListOfRow(rows, rowType), ps[0].ParameterType);
-
-                try
-                {
-                    object ret = c.Invoke(targetObj, new object[] { arg });
-                    return ret;
-                }
-                catch (Exception ex) { lastEx = ex.InnerException ?? ex; }
-            }
-            if (lastEx != null)
-                throw new InvalidOperationException($"调用 {targetType.Name}.ImportTranslations 失败: {lastEx.Message}", lastEx);
-            throw new MissingMethodException($"在 {targetType.Name} 上找不到可调用的 ImportTranslations(IEnumerable<LocalizationTableRow>)");
-        }
-
-        /// <summary>把 List<object> 构造成 List<LocalizationTableRow>（用真实行类型）</summary>
-        private IList BuildListOfRow(List<object> rows, Type rowType)
-        {
-            if (rowType == null)
-                rowType = LoadTypeByFullName("Rightware.Kanzi.Studio.PluginInterface.LocalizationTableRow");
-            var list = (IList)Activator.CreateInstance(typeof(List<>).MakeGenericType(rowType));
-            foreach (var r in rows) list.Add(r);
-            return list;
-        }
-
-        /// <summary>取行的 resourceName（get_ResourceName）</summary>
-        private static string GetRowResourceName(object row)
-        {
-            var m = row.GetType().GetMethod("get_ResourceName") ?? row.GetType().GetProperty("ResourceName")?.GetGetMethod();
-            return m?.Invoke(row, null)?.ToString() ?? "";
-        }
-
-        /// <summary>取行的 defaultText（get_DefaultText / get_ResourceName 同源兜底）</summary>
-        private static string GetRowDefaultText(object row)
-        {
-            var m = row.GetType().GetMethod("get_DefaultText") ?? row.GetType().GetProperty("DefaultText")?.GetGetMethod();
-            return m?.Invoke(row, null)?.ToString() ?? "";
-        }
-
-        /// <summary>取行的所有翻译：Dictionary<语言,翻译>（get_Translations → 每项 get_Key/get_Value）</summary>
-        private static Dictionary<string, string> GetRowTranslations(object row)
-        {
-            var dict = new Dictionary<string, string>();
-            var m = row.GetType().GetMethod("get_Translations") ?? row.GetType().GetProperty("Translations")?.GetGetMethod();
-            if (m == null) return dict;
-            var t = m.Invoke(row, null);
-            if (t is IEnumerable en)
-            {
-                foreach (var kv in en)
-                {
-                    var k = kv.GetType().GetMethod("get_Key")?.Invoke(kv, null)?.ToString() ?? "";
-                    var v = kv.GetType().GetMethod("get_Value")?.Invoke(kv, null)?.ToString() ?? "";
-                    dict[k] = v;
-                }
-            }
-            return dict;
-        }
 
         private static string GetDictStr(Dictionary<string, object> d, string key)
         {
@@ -3933,6 +3471,1958 @@ namespace KzMCPChatPlugin
                     return m;
             }
             return null;
+        }
+
+        /// <summary>
+        /// [V13 本地化资源] 读取本地化表里按 locale 使用的资源（字体等 NodeResource）。
+        /// 反编译 LogicProject.dll 钉死的链路（2026-08-18，非脑补）：
+        ///   路径1：wrapper.get_WrappedItem() → KanziLocalizationTable → get_LocalizationTableRecords() → KanziTranslationList → GetLocalizedResourceList() → IEnumerable&lt;NodeResource&gt;
+        ///   路径2（兜底，不依赖 wrapper 暴露 get_WrappedItem）：AppDomain 已加载的 LogicProject 程序集 → GetType("KanziLocalizationTable") → 同链路
+        /// 说明：普通文本走 GetTranslations（LocalizationTableRow.get_Translations），
+        /// 字体等资源引用走 GetLocalizedResourceList，两者是不同通道。
+        /// 只读，不影响现有工程；每个资源注册成 @obj 引用，可继续用 kz_invoke 操作。
+        /// </summary>
+        public object GetLocalizedResources(string target)
+        {
+            var wrapperObj = ResolveObject(target);
+            if (wrapperObj == null)
+                throw new InvalidOperationException($"target '{target}' 解析为 null");
+
+            // ---- 路径1：穿透 wrapper 拿内部对象（KanziLocalizationTable） ----
+            var internalObj = GetWrappedItemRaw(wrapperObj) ?? wrapperObj;
+            var results = TryGetLocalizedResourcesFromObject(internalObj);
+            if (results != null)
+                return results;
+
+            // ---- 路径2：从 LogicProject 程序集按类型名反射定位（兜底，不依赖 get_WrappedItem） ----
+            results = TryGetLocalizedResourcesFromLogicProject();
+            if (results != null)
+                return results;
+
+            // 两条路径都失败 → 报错（不再静默返回空，便于排查）
+            string usedType = internalObj?.GetType().FullName ?? "null";
+            throw new InvalidOperationException(
+                $"读本地化资源失败：wrapper 穿透对象({usedType})与 LogicProject 反射均拿不到" +
+                $"  'get_LocalizationTableRecords'/'GetLocalizedResourceList'（本地化资源通道）。" +
+                $"  target='{target}'");
+        }
+
+        /// <summary>
+        /// 本地化表单条目操作（v13，不删表、保字体/A引用）。走内部对象 ResourceLocalizationItems.LocalizationTable 的
+        /// ResourceDictionaryInterface 接口（GetEntry/Remove/Add/SetOrCreate/RenameResource），通过 GetInterfaceMap 调用
+        ///（显式接口实现，普通反射看不到）。支持 operation：list/get/add/set/delete/rename。
+        /// rows: [{ "resourceName":KEY, "type":"text|font|style|node", "defaultText":"...", "translations":{...}, "targetRef":"@objN" }]
+        /// 全部单条目操作，绝不删整表 → 字体/A引用天然保留。纯反射，不缓存类型。
+        /// </summary>
+        public object LocalizationEntries(string target, string operation, object rows = null, object keys = null, object key = null)
+        {
+            if (!IsUiThread())
+            {
+                var app = System.Windows.Application.Current;
+                if (app != null && app.Dispatcher != null)
+                {
+                    return app.Dispatcher.Invoke(new Func<object>(() =>
+                        LocalizationEntriesCore(target, operation, rows, keys, key)));
+                }
+            }
+            return LocalizationEntriesCore(target, operation, rows, keys, key);
+        }
+
+        private object LocalizationEntriesCore(string target, string operation, object rows, object keys, object key)
+        {
+            operation = (operation ?? "").Trim().ToLowerInvariant();
+            if (operation == "")
+                throw new ArgumentException("operation 不能为空（list/get/add/set/delete/rename）");
+
+            // 解析目标并穿透到内部对象（ResourceLocalizationItems.LocalizationTable，有 ResourceDictionaryInterface）
+            var wrapperObj = ResolveObject(target);
+            if (wrapperObj == null)
+                throw new InvalidOperationException($"无法解析本地化表 target: '{target}'");
+            var internalObj = GetWrappedItemRaw(wrapperObj) ?? wrapperObj;
+
+            switch (operation)
+            {
+                case "list":
+                    return ListEntries(internalObj);
+                case "get":
+                {
+                    var gk = key?.ToString();
+                    if (string.IsNullOrEmpty(gk) && keys is IEnumerable ike)
+                        foreach (var kk in ike) { gk = kk?.ToString(); break; }
+                    if (string.IsNullOrEmpty(gk))
+                        throw new ArgumentException("get 需要传 key（resourceName）");
+                    return GetEntryByKey(internalObj, gk);
+                }
+                case "add":
+                {
+                    if (rows == null)
+                        throw new ArgumentException("add 需要传 rows（多行数组，每行带 resourceName + type）");
+                    return AddEntries(internalObj, rows);
+                }
+                case "set":
+                {
+                    if (rows == null)
+                        throw new ArgumentException("set 需要传 rows（多行数组）");
+                    return SetEntries(internalObj, rows);
+                }
+                case "delete":
+                {
+                    var delKeys = new List<string>();
+                    if (keys is IEnumerable de)
+                        foreach (var kk in de) delKeys.Add(kk?.ToString() ?? "");
+                    if (!string.IsNullOrEmpty(key?.ToString())) delKeys.Add(key.ToString());
+                    if (delKeys.Count == 0)
+                        throw new ArgumentException("delete 需要传 keys 数组或 key");
+                    return DeleteEntries(internalObj, delKeys);
+                }
+                case "rename":
+                {
+                    var rnKeys = new List<string>();
+                    if (keys is IEnumerable rne)
+                        foreach (var kk in rne) rnKeys.Add(kk?.ToString() ?? "");
+                    if (rnKeys.Count < 2)
+                        throw new ArgumentException("rename 需要 keys=[旧key, 新key]");
+                    return RenameEntry(internalObj, rnKeys[0], rnKeys[1]);
+                }
+                default:
+                    throw new ArgumentException($"未知 operation: '{operation}'（支持 list/get/add/set/delete）");
+            }
+        }
+
+        /// <summary>
+        /// 本地化表【文本行】增/改（defaultText/translations）。走 wrapper 的 ImportTranslations(
+        /// IEnumerable.LocalizationTableRow>) —— v8 实测通道。构造真实 LocalizationTableRow 对象
+        /// （PluginInterface.LocalizationTableRow），设 ResourceName + Translations，再提交。
+        /// 只改纯文本行；字体/style/node 条目的 ResourceReference 在 ResourceDictionary 字典，
+        /// 不受此操作影响（v8 已验证：删表重建会丢字体引用，而 ImportTranslations 只覆盖文本值不删字典）。
+        /// 纯反射，不缓存类型。
+        /// </summary>
+        public object LocalizationRowsWrite(string target, object rows)
+        {
+            if (!IsUiThread())
+            {
+                var app = System.Windows.Application.Current;
+                if (app != null && app.Dispatcher != null)
+                {
+                    return app.Dispatcher.Invoke(new Func<object>(() => LocalizationRowsWriteCore(target, rows)));
+                }
+            }
+            return LocalizationRowsWriteCore(target, rows);
+        }
+
+        private object LocalizationRowsWriteCore(string target, object rows)
+        {
+            var wrapperObj = ResolveObject(target);
+            if (wrapperObj == null)
+                throw new InvalidOperationException($"无法解析本地化表 target: '{target}'");
+
+            // 构造 LocalizationTableRow 类型：需具体类（接口无 ctor）。优先带 3 参 (string,string,IDictionary<string,string>) ctor
+            // 的具体实现类；找不到可 new 的具体类则报错。
+            Type rowType = null;
+            ConstructorInfo rowCtor = null;
+            foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                if (asm.IsDynamic) continue;
+                Type[] types;
+                try { types = asm.GetTypes(); } catch { continue; }
+                foreach (var t in types)
+                {
+                    if (t == null || !t.IsClass || t.IsAbstract) continue;
+                    if (t.Name == "LocalizationTableRow" || t.FullName?.Contains("LocalizationTableRow") == true)
+                    {
+                        var ctor = t.GetConstructor(new[] { typeof(string), typeof(string), typeof(IDictionary<string, string>) });
+                        if (ctor != null)
+                        {
+                            rowType = t;
+                            rowCtor = ctor;
+                            break;
+                        }
+                    }
+                }
+                if (rowType != null) break;
+            }
+            if (rowType == null)
+            {
+                // 回退：任意具体 LocalizationTableRow，无参构造
+                rowType = LoadTypeByFullName("Rightware.Kanzi.Studio.PluginInterface.LocalizationTableRow")
+                          ?? LoadTypeByFullName("Rightware.Kanzi.Studio.PluginInterface.Implementation.LocalizationTableRow");
+                if (rowType != null && rowType.IsClass && !rowType.IsAbstract)
+                    rowCtor = rowType.GetConstructor(Type.EmptyTypes);
+            }
+            if (rowType == null || rowCtor == null)
+                throw new InvalidOperationException("找不到可构造的 LocalizationTableRow 具体类（无 3 参/无参 ctor）");
+
+            // 收集行的 resourceName + translations
+            var translationsDict = new Dictionary<string, string>();
+            var rowObjs = new List<object>();
+            foreach (var r in rows as IEnumerable)
+            {
+                if (r == null) continue;
+                var rn = DictRow(r, "resourceName");
+                if (string.IsNullOrEmpty(rn)) continue;
+                var defaultText = DictRow(r, "defaultText");
+                // translations（若同传入语言映射）
+                var tr = ExtractRow(r, "translations");
+                var dict = new Dictionary<string, string>();
+                if (tr is IDictionary io && io != null)
+                    foreach (var kk in io.Keys) dict[kk.ToString()] = io[kk]?.ToString();
+                object rowObj;
+                var ctorPs = rowCtor.GetParameters();
+                if (ctorPs.Length == 3)
+                    rowObj = rowCtor.Invoke(new object[] { rn ?? "", defaultText ?? "", (object)dict });
+                else
+                {
+                    rowObj = rowCtor.Invoke(null);
+                    PopulateRowByReflection(rowObj, rn, dict.Count > 0 ? dict : null);
+                }
+                rowObjs.Add(rowObj);
+            }
+            if (rowObjs.Count == 0)
+                return new Dictionary<string, object> { ["written"] = 0 };
+
+            // 转成目标类型的 IList/数组（IEnumerable<LocalizationTableRow>）
+            var arr = Array.CreateInstance(rowType, rowObjs.Count);
+            for (int i = 0; i < rowObjs.Count; i++) arr.SetValue(rowObjs[i], i);
+
+            // 调用 wrapper.ImportTranslations
+            object result = null;
+            try
+            {
+                result = InvokeCore(target, "ImportTranslations", new object[] { arr });
+            }
+            catch (Exception ex)
+            {
+                return new Dictionary<string, object> { ["written"] = 0, ["error"] = "ImportTranslations: " + ex.Message };
+            }
+            return new Dictionary<string, object> { ["written"] = rowObjs.Count, ["result"] = result?.ToString() };
+        }
+
+        /// <summary>从 row 字典取对象字段（translations 等）。</summary>
+        private static object ExtractRow(object row, string field)
+        {
+            if (row is IDictionary<string, object> d && d.TryGetValue(field, out var v))
+                return v;
+            if (row is IDictionary dd && dd.Contains(field))
+                return dd[field];
+            return null;
+        }
+
+        /// <summary>
+        /// 读本地化表单【单行】（按 ResourceName/key）。调 wrapper.ExportTranslations() 拿全部
+        /// LocalizationTableRow，按 ResourceName 匹配，返回该行的 DefaultText + Translations
+        /// （语言→值字典）。对文本行/字体行都适用——直接验证“每种语言能读到什么”。
+        /// 全部纯反射，不碰对象图。
+        /// </summary>
+        public object LocalizationRowsRead(string target, string key)
+        {
+            if (!IsUiThread())
+            {
+                var app = System.Windows.Application.Current;
+                if (app != null && app.Dispatcher != null)
+                {
+                    return app.Dispatcher.Invoke(new Func<object>(() => LocalizationRowsReadCore(target, key)));
+                }
+            }
+            return LocalizationRowsReadCore(target, key);
+        }
+
+        private object LocalizationRowsReadCore(string target, string key)
+        {
+            var wrapperObj = ResolveObject(target);
+            if (wrapperObj == null)
+                return new Dictionary<string, object> { ["error"] = $"无法解析本地化表 target: '{target}'" };
+            // wrapper.ExportTranslations() -> IEnumerable<LocalizationTableRow>
+            var rows = InvokeNamedMethod(wrapperObj, "ExportTranslations", new object[0]);
+            if (rows is IEnumerable en)
+            {
+                foreach (var row in en)
+                {
+                    if (row == null) continue;
+                    var rn = GetStringPropValue(row, "ResourceName");
+                    if (string.IsNullOrEmpty(key) || string.Equals(rn, key, StringComparison.Ordinal))
+                    {
+                        return BuildRowReadResult(row);
+                    }
+                }
+                return new Dictionary<string, object> { ["found"] = false, ["key"] = key };
+            }
+            throw new InvalidOperationException("ExportTranslations() 未返回可枚举行集合");
+        }
+
+        /// <summary>把单个 LocalizationTableRow 读成可用结果（DefaultText + 语言字典）。</summary>
+        private Dictionary<string, object> BuildRowReadResult(object row)
+        {
+            var res = new Dictionary<string, object>
+            {
+                ["resourceName"] = GetStringPropValue(row, "ResourceName"),
+                ["defaultText"] = GetStringPropValue(row, "DefaultText")
+            };
+            // get_Translations -> IEnumerable<KeyValuePair<string,string>>
+            var tr = InvokeNamedMethod(row, "get_Translations", new object[0])
+                      ?? TryCallInterfaceGetter(row, "get_Translations");
+            var langs = new Dictionary<string, string>();
+            if (tr is IEnumerable ten)
+            {
+                foreach (var kv in ten)
+                {
+                    try
+                    {
+                        // KeyValuePair<string,string>.Key / .Value
+                        var k = kv.GetType().GetProperty("Key")?.GetValue(kv, null)?.ToString();
+                        var v = kv.GetType().GetProperty("Value")?.GetValue(kv, null)?.ToString();
+                        if (k != null) langs[k] = v;
+                    }
+                    catch { /* 单语言项忽略 */ }
+                }
+            }
+            // 转成 Dictionary<string,object>，让 FormatInvokeResult 能展开每个语言值
+            var langsObj = new Dictionary<string, object>();
+            foreach (var kv in langs) langsObj[kv.Key] = kv.Value;
+            res["translations"] = langsObj;
+            res["languageCount"] = langs.Count;
+            return res;
+        }
+
+        /// <summary>按名字直接 Invoke（普通反射，找不到返回 null）。</summary>
+        private static object InvokeNamedMethod(object obj, string name, object[] args)
+        {
+            if (obj == null) return null;
+            try
+            {
+                var m = obj.GetType().GetMethod(name);
+                return m?.Invoke(obj, args);
+            }
+            catch { return null; }
+        }
+
+        /// <summary>读对象公开 string 属性，失败返回 null（与 TryGetStringProp 回调版对应，返回式）。</summary>
+        private static string GetStringPropValue(object obj, string name)
+        {
+            try
+            {
+                var p = obj.GetType().GetProperty(name);
+                if (p == null) return null;
+                var v = p.GetValue(obj, null);
+                return v != null ? Convert.ToString(v) : null;
+            }
+            catch { return null; }
+        }
+
+        /// <summary>返回式 bool 属性读取（对称 GetStringPropValue），失败返回 null。</summary>
+        private static bool? GetBoolPropValue(object obj, string name)
+        {
+            try
+            {
+                var p = obj.GetType().GetProperty(name);
+                if (p == null) return null;
+                var v = p.GetValue(obj, null);
+                return v is bool b ? b : (bool?)null;
+            }
+            catch { return null; }
+        }
+
+        /// <summary>
+        /// 诊断：把“拿到 entry 的同一个内部对象”(ResourceLocalizationItems.LocalizationTable)
+        /// 的【全部接口方法】列出来（public + 每个接口的显式方法，带签名），以便找出读翻译/文本的
+        /// 隐藏接口入口（像 get_Entries 一样是显式接口实现）。只读元数据，绝不 Invoke，不碰对象图。
+        /// </summary>
+        public object LocalizationDumpInterfaces(string target)
+        {
+            var wrapperObj = ResolveObject(target);
+            if (wrapperObj == null)
+                return new Dictionary<string, object> { ["error"] = $"无法解析 target: '{target}'" };
+            var internalObj = GetWrappedItemRaw(wrapperObj) ?? wrapperObj;
+            var t = internalObj.GetType();
+
+            var ifaces = new List<object>();
+            foreach (var ifc in t.GetInterfaces())
+            {
+                try
+                {
+                    var map = t.GetInterfaceMap(ifc);
+                    var mlist = new List<object>();
+                    for (int i = 0; i < map.InterfaceMethods.Length; i++)
+                    {
+                        var im = map.InterfaceMethods[i];
+                        var tm = map.TargetMethods[i];
+                        try
+                        {
+                            mlist.Add(new Dictionary<string, object>
+                            {
+                                ["name"] = im.Name + "(" + string.Join(", ", im.GetParameters().Select(p => p.ParameterType.Name)) + ") -> " + im.ReturnType.Name,
+                                ["target"] = tm.Name,
+                                ["explicit"] = tm.DeclaringType != t
+                            });
+                        }
+                        catch { /* 单方法解析失败跳过 */ }
+                    }
+                    ifaces.Add(new Dictionary<string, object>
+                    {
+                        ["interface"] = ifc.FullName,
+                        ["methods"] = mlist
+                    });
+                }
+                catch { /* 该接口映射失败跳过 */ }
+            }
+            return new Dictionary<string, object>
+            {
+                ["target"] = target,
+                ["type"] = t.FullName,
+                ["interfaceCount"] = ifaces.Count,
+                ["interfaces"] = ifaces,
+                ["ownerNodeRef"] = TryResolveOwnerNodeRef(internalObj)
+            };
+        }
+
+        /// <summary>诊断：尝试从内部对象调 get_OwnerNode()（接口方法），返回注册的引用（失败则为 null）。</summary>
+        private object TryResolveOwnerNodeRef(object internalObj)
+        {
+            try
+            {
+                var owner = TryCallInterfaceGetter(internalObj, "get_OwnerNode");
+                if (owner == null) return "(get_OwnerNode 返回 null)";
+                return new Dictionary<string, object>
+                {
+                    ["ref_id"] = RegisterObject(owner),
+                    ["type"] = owner.GetType().FullName
+                };
+            }
+            catch (Exception ex) { return "(get_OwnerNode 异常: " + ex.Message + ")"; }
+        }
+
+        /// <summary>
+        /// 通用：在 target 的内部对象（若 wrapper 可穿透）上调指定接口 getter 或 0 参接口方法。
+        /// 用于挖普通反射看不到的显式接口实现（如 get_NodeReferences / GetFirstEntryForResource 等）。
+        /// 结果：RegisterObject 引用 + 若是 IEnumerable 再展成一个受限列表（预算内）。
+        /// </summary>
+        public object LocalizationIface(string target, string method, object[] args = null, string key = null)
+        {
+            var wrapperObj = ResolveObject(target);
+            if (wrapperObj == null)
+                return new Dictionary<string, object> { ["error"] = $"无法解析 target: '{target}'" };
+            var internalObj = GetWrappedItemRaw(wrapperObj) ?? wrapperObj;
+            if (string.IsNullOrEmpty(method)) return new Dictionary<string, object> { ["error"] = "缺 method" };
+
+            // 若给了 key 且没显式 args，则把 key 作为唯一参数传（如 GetEntry(key)）
+            if (!string.IsNullOrEmpty(key) && (args == null || args.Length == 0))
+                args = new object[] { key };
+
+            object result = null;
+            bool isGetter = method.StartsWith("get_", StringComparison.Ordinal);
+            if (isGetter || args == null || args.Length == 0)
+                result = TryCallInterfaceGetter(internalObj, method);
+            // getter 也可能不是接口方法而是普通类方法 → 接口找不到时兜底普通反射
+            if (result == null)
+                result = InvokeNamedMethod(internalObj, method, args ?? new object[0]);
+            if (result == null && !isGetter)
+                result = TryCallInterfaceMethod(internalObj, method, args ?? new object[0]);
+
+            if (result == null)
+                return new Dictionary<string, object> { ["method"] = method, ["key"] = key, ["result"] = null };
+
+            var res = new Dictionary<string, object>
+            {
+                ["method"] = method,
+                ["resultType"] = result.GetType().FullName
+            };
+            // 枚举结果（受限）
+            if (result is IEnumerable en)
+            {
+                var list = new List<object>();
+                int n = 0;
+                foreach (var item in en)
+                {
+                    if (n++ >= 200) { list.Add("...(>200 截断)"); break; }
+                    var itemRef = RegisterObject(item);
+                    var name = GetStringPropValue(item, "Name") ?? GetStringPropValue(item, "Key");
+                    var entry = new Dictionary<string, object>
+                    {
+                        ["ref_id"] = itemRef,
+                        ["type"] = item.GetType().Name,
+                        ["name"] = name,
+                        ["count"] = item is ICollection c ? c.Count : (object)null
+                    };
+                    // 若是 ResourceDictionaryEntry，补 isText + 资源引用目标（拿字体）
+                    entry["isText"] = GetBoolPropValue(item, "IsText");
+                    var rref = TryCallInterfaceGetter(item, "get_ResourceReference")
+                                ?? InvokeNamedMethod(item, "get_ResourceReference", new object[0]);
+                    if (rref != null)
+                    {
+                        var tgt = TryCallInterfaceGetter(rref, "get_Target")
+                                  ?? InvokeNamedMethod(rref, "get_Target", new object[0]);
+                        if (tgt != null)
+                            entry["targetRef"] = RegisterObject(tgt);
+                        entry["targetName"] = GetStringPropValue(rref, "DisplayName")
+                                              ?? GetStringPropValue(rref, "Path")
+                                              ?? GetStringPropValue(rref, "RelativePath");
+                    }
+                    list.Add(entry);
+                }
+                res["items"] = list;
+                res["itemCount"] = n;
+            }
+            else
+            {
+                // 非枚举结果：若是 entry，展开它的 Key/isText/资源目标
+                res["ref_id"] = RegisterObject(result);
+                res["isText"] = GetBoolPropValue(result, "IsText");
+                res["name"] = GetStringPropValue(result, "Name") ?? GetStringPropValue(result, "Key");
+                var rref2 = TryCallInterfaceGetter(result, "get_ResourceReference")
+                            ?? InvokeNamedMethod(result, "get_ResourceReference", new object[0]);
+                if (rref2 != null)
+                {
+                    var tgt2 = TryCallInterfaceGetter(rref2, "get_Target")
+                               ?? InvokeNamedMethod(rref2, "get_Target", new object[0]);
+                    if (tgt2 != null)
+                        res["targetRef"] = RegisterObject(tgt2);
+                    res["targetName"] = GetStringPropValue(rref2, "DisplayName")
+                                        ?? GetStringPropValue(rref2, "Path")
+                                        ?? GetStringPropValue(rref2, "RelativePath");
+                }
+            }
+            return res;
+        }
+
+        /// <summary>list：枚举所有条目（复用 get_Entries 通道）</summary>
+        private object ListEntries(object internalObj)
+        {
+            var ent = TryCallInterfaceGetter(internalObj, "get_Entries");
+            if (ent is IEnumerable en)
+            {
+                // 一次性建 Locale 地图（locale name -> Locale 对象），供逐条 GetEntry 查翻译（验证过比 get_Entries 可靠）
+                var locales = GetLocalesList(internalObj);
+                var defaultMap = BuildDefaultValueMap(internalObj, en);
+                var resources = new List<object>();
+                foreach (var entry in en)
+                {
+                    if (entry == null) continue;
+                    var refId = RegisterObject(entry);
+                    var info = BuildEntryInfo(entry, refId);
+                    var key = GetStringPropValue(entry, "Key");
+                    info["default"] = key != null && defaultMap.TryGetValue(key, out var dv) ? dv : null;
+                    // 各语言翻译：逐条走 GetEntry(验证过可靠)
+                    info["translations"] = key != null
+                        ? ReadEntryAcrossLocales(locales, key)
+                        : (object)new Dictionary<string, object>();
+                    resources.Add(info);
+                }
+                return new Dictionary<string, object>
+                {
+                    ["count"] = resources.Count,
+                    ["resources"] = resources
+                };
+            }
+            throw new InvalidOperationException("本地化表 get_Entries() 未能调用（接口映射失败）");
+        }
+
+        /// <summary>get：按 key 取单个条目（GetEntry），附 default + 各语言翻译（走每个 Locale 的 GetEntry(key)，已验证可靠）。</summary>
+        private object GetEntryByKey(object internalObj, string rn)
+        {
+            var entry = TryCallInterfaceMethod(internalObj, "GetEntry", new object[] { rn });
+            if (entry == null)
+                return new Dictionary<string, object> { ["found"] = false, ["key"] = rn };
+            var refId = RegisterObject(entry);
+            var info = BuildEntryInfo(entry, refId);
+            var key = GetStringPropValue(entry, "Key") ?? rn;
+            // default = 主表 entry 自身值（文本=RelativePath，字体=Target.Name）
+            info["default"] = TryGetEntryValue(entry) ?? key;
+            // 各语言翻译：遍历 get_Locales，逐个 Locale 调 GetEntry(key)（已验证可拿到每语言值）
+            info["translations"] = ReadEntryAcrossLocales(internalObj, key);
+            return info;
+        }
+
+        /// <summary>遍历 get_Locales，对每个 Locale 调 GetEntry(key) 取该语言的值（文本=RelativePath，字体=Target.Name）。
+        /// 注意：internalObj 是表对象，虽实现 IEnumerable（枚举的是 entries），绝不能当 locale 列表用——必须 GetLocalesList。</summary>
+        private static Dictionary<string, object> ReadEntryAcrossLocales(object internalObj, string key)
+        {
+            var locales = GetLocalesList(internalObj);
+            return ReadEntryAcrossLocales(locales, key);
+        }
+
+        /// <summary>从 internalObj 枚举 get_Locales 返回 List（locale name -> Locale 对象表），供复用。</summary>
+        private static List<object> GetLocalesList(object internalObj)
+        {
+            var list = new List<object>();
+            try
+            {
+                var locales = TryCallInterfaceGetter(internalObj, "get_Locales")
+                              ?? InvokeNamedMethod(internalObj, "get_Locales", new object[0]);
+                if (locales is IEnumerable locEn)
+                    foreach (var lo in locEn) list.Add(lo);
+            }
+            catch { }
+            return list;
+        }
+
+        /// <summary>遍历 Locale 集合，逐个 Locale 调 GetEntry(key) 取该语言值。</summary>
+        private static Dictionary<string, object> ReadEntryAcrossLocales(IEnumerable localeList, string key)
+        {
+            var result = new Dictionary<string, object>();
+            try
+            {
+                if (localeList == null) return result;
+                int budget = 60; // 14 locale × 少量调用
+                foreach (var localeObj in localeList)
+                {
+                    if (--budget < 0) break;
+                    var localeName = GetStringPropValue(localeObj, "LocaleName")
+                                     ?? GetStringPropValue(localeObj, "Name");
+                    if (localeName == null) localeName = "?";
+                    var lentry = TryCallInterfaceMethod(localeObj, "GetEntry", new object[] { key })
+                                 ?? InvokeNamedMethod(localeObj, "GetEntry", new object[] { key });
+                    if (lentry != null)
+                        result[localeName] = TryGetEntryValue(lentry) ?? GetStringPropValue(lentry, "Key");
+                }
+            }
+            catch { /* 失败返回 partial */ }
+            return result;
+        }
+
+        /// <summary>从单 entry 读值：isText→resourceRef.RelativePath（翻译文本），否则→Target.Name（如 FontFamily）。
+        /// 兼容 locale 字体行：Target 可能解析为 DynamicProperty 集合而读不到 Name，此时从 resourceRef.ToString()
+        /// （形如 "ProjectItemReference: SourceHanSansSC ABSOLUTE"）提取字体名。</summary>
+        private static string TryGetEntryValue(object entry)
+        {
+            try
+            {
+                var t = entry.GetType();
+                // 读 ResourceReference：优先接口 getter（穿透显式接口实现），再退普通属性
+                object refVal = TryCallInterfaceGetter(entry, "get_ResourceReference");
+                if (refVal == null)
+                {
+                    var refProp = t.GetProperty("ResourceReference");
+                    refVal = refProp?.GetValue(entry, null);
+                }
+                if (refVal == null)
+                {
+                    // 无 ResourceReference：可能就是纯文本 entry，直接看 Key
+                    return GetStringPropValue(entry, "Key") ?? GetStringPropValue(entry, "Name");
+                }
+                bool isText = false;
+                try
+                {
+                    object iv = TryCallInterfaceGetter(entry, "get_IsText");
+                    if (iv == null)
+                    {
+                        var it = entry.GetType().GetProperty("IsText");
+                        iv = it?.GetValue(entry, null);
+                    }
+                    if (iv is bool b) isText = b;
+                }
+                catch { }
+                if (isText)
+                    return GetStringPropValue(refVal, "RelativePath")
+                           ?? GetStringPropValue(refVal, "Path")
+                           ?? GetStringPropValue(refVal, "DisplayName")
+                           ?? ExtractRefName(refVal);
+                // 字体/非文本：验证通过的流程——字体名在 resourceRef.ToString()（形如
+                // "ProjectItemReference: SourceHanSansSC ABSOLUTE"），ExtractRefName 提取；
+                // Target 常指向 DynamicProperty（如 FontFiles）读不到，仅作最后备援。
+                var rn = ExtractRefName(refVal);
+                if (!string.IsNullOrEmpty(rn)) return rn;
+                return TryReadTargetName(refVal)
+                       ?? GetStringPropValue(refVal, "DisplayName")
+                       ?? GetStringPropValue(refVal, "Path")
+                       ?? GetStringPropValue(refVal, "RelativePath");
+            }
+            catch { return null; }
+        }
+
+        /// <summary>读 ProjectItemReference 的 Target 的 Name（FontFamily 等）；Target 非单一对象时返回 null。</summary>
+        private static string TryReadTargetName(object refVal)
+        {
+            try
+            {
+                var tp = refVal.GetType().GetProperty("Target");
+                var tv = tp?.GetValue(refVal, null);
+                if (tv != null)
+                {
+                    var n = GetStringPropValue(tv, "Name");
+                    if (!string.IsNullOrEmpty(n)) return n;
+                    var p = GetStringPropValue(tv, "Path");
+                    if (!string.IsNullOrEmpty(p)) return p;
+                }
+                return null;
+            }
+            catch { return null; }
+        }
+
+        /// <summary>从 resourceRef 对象提取显示名：优先 Name；否则 ToString()（形如 "ProjectItemReference: SourceHanSansSC ABSOLUTE"）里取引用名。</summary>
+        private static string ExtractRefName(object refObj)
+        {
+            try
+            {
+                var n = GetStringPropValue(refObj, "Name");
+                if (!string.IsNullOrEmpty(n) && n.IndexOf("ProjectItemReference") < 0) return n;
+                var n2 = GetStringPropValue(refObj, "Value");
+                if (!string.IsNullOrEmpty(n2) && n2.IndexOf("ProjectItemReference") < 0) return n2;
+                // ToString() 提取："ProjectItemReference: XXX ABSOLUTE" → XXX
+                var toStr = refObj.ToString();
+                if (!string.IsNullOrEmpty(toStr))
+                {
+                    var idx = toStr.LastIndexOf(":");
+                    if (idx >= 0)
+                    {
+                        var seg = toStr.Substring(idx + 1).Trim();
+                        // 去掉尾缀修饰（ABSOLUTE/RELATIVE）
+                        var sp = seg.LastIndexOf(' ');
+                        if (sp > 0) seg = seg.Substring(0, sp).Trim();
+                        if (seg.Length > 0) return seg;
+                    }
+                }
+                return toStr;
+            }
+            catch { return null; }
+        }
+
+        /// <summary>
+        /// 一次性枚举 14 个 Locale，每个 Locale 的 get_Entries 建 {localeName -> {key -> value}}。
+        /// 供 list/get 逐条取各语言翻译。预算受限（14 × 条目数），不在 UI 线程外跑巨量。
+        /// </summary>
+        /// <summary>主表 default：条目 key -> 值（文本=RelativePath，字体=Target.Name）。</summary>
+        private static Dictionary<string, object> BuildDefaultValueMap(object internalObj, IEnumerable mainEntries)
+        {
+            var map = new Dictionary<string, object>();
+            try
+            {
+                foreach (var entry in mainEntries)
+                {
+                    if (entry == null) continue;
+                    var k = GetStringPropValue(entry, "Key");
+                    if (k == null) continue;
+                    map[k] = TryGetEntryValue(entry) ?? k;
+                }
+            }
+            catch { }
+            return map;
+        }
+
+        /// <summary>add：批量新增带 type 的多行（Add/SetOrCreate）</summary>
+        private object AddEntries(object internalObj, object rows)
+        {
+            var added = new List<object>();
+            var errors = new List<object>();
+            foreach (var r in rows as IEnumerable)
+            {
+                if (r == null) continue;
+                try
+                {
+                    var entry = BuildEntryFromRow(internalObj, r);
+                    if (entry == null)
+                    {
+                        errors.Add(new Dictionary<string, object> { ["key"] = DictRow(r, "resourceName"), ["error"] = "无法构造对应 type 的条目" });
+                        continue;
+                    }
+                    var addResult = new Dictionary<string, object>
+                    {
+                        ["key"] = DictRow(r, "resourceName"),
+                        ["type"] = DictRow(r, "type"),
+                        ["added"] = false,
+                        ["defaultSetHow"] = _lastDefaultHow
+                    };
+                    try
+                    {
+                        var rn = DictRow(r, "resourceName");
+                        addResult["signatures"] = DumpWriteMethodSignatures(internalObj);
+                        addResult["entryCaps"] = DumpEntryTypeCaps(entry);
+                        {
+                            string howKey = null;
+                            var keySet = TrySetEntryKeyViaInterface(entry, rn, out howKey);
+                            addResult["entryKey"] = TryGetEntryKeyViaInterface(entry);   // 读回 entry 的 Key，确认是否设上
+                            addResult["keySet"] = keySet;
+                            addResult["keySetHow"] = howKey;
+                        }
+                        // 正确调用（运行时签名确认）：SetOrCreate(ResourceDictionaryEntry, bool) 优先（老隋指示），失败再试 Add。
+                        var tried = new List<object>();
+                        foreach (var mn in new[] { "SetOrCreate", "Add" })
+                        {
+                            object ok = null;
+                            try
+                            {
+                                ok = TryCallInterfaceMethod(internalObj, mn, new object[] { entry, true });
+                            }
+                            catch (Exception ex2)
+                            {
+                                ok = "THROW:" + ex2.Message;
+                            }
+                            bool thisOk = ok == null || (ok is bool bb && bb);  // void 返回 null 视为成功（SetOrCreate 是 void）
+                            tried.Add(new Dictionary<string, object>
+                            {
+                                ["method"] = mn,
+                                ["return"] = ok == null ? null : (ok + "(" + ok.GetType().Name + ")"),
+                                ["ok"] = thisOk
+                            });
+                        }
+                        bool isOk = tried.OfType<Dictionary<string, object>>().Any(t => (bool)t["ok"]);
+                        addResult["added"] = isOk;
+                        addResult["tried"] = tried;
+                        // 各语言翻译写入：row.translations = {语言:值}，对每个 Locale 构造含该语言值的 entry，SetOrCreate 到对应 Locale
+                        try
+                        {
+                            var trObj = ExtractRow(r, "translations");
+                            var trMap = new Dictionary<string, object>();
+                            if (trObj is IDictionary trd)
+                            {
+                                var locales = GetLocalesList(internalObj);
+                                int tbudget = 200;
+                                foreach (System.Collections.DictionaryEntry de in trd)
+                                {
+                                    if (--tbudget < 0) break;
+                                    var lang = de.Key?.ToString();
+                                    var langVal = de.Value?.ToString();
+                                    if (string.IsNullOrEmpty(lang)) continue;
+                                    object localeObj = null;
+                                    foreach (var lo in locales)
+                                    {
+                                        var ln = GetStringPropValue(lo, "LocaleName") ?? GetStringPropValue(lo, "Name");
+                                        if (ln == lang) { localeObj = lo; break; }
+                                    }
+                                    if (localeObj == null)
+                                    {
+                                        trMap[lang] = "NO-LOCALE";
+                                        continue;
+                                    }
+                                    // 构造该语言 text entry（Key=rn，值=langVal），SetOrCreate 到 Locale
+                                    var lent = BuildTextEntry(internalObj, rn, langVal, out string lentHow);
+                                    if (lent == null) { trMap[lang] = "BUILD-FAIL:" + lentHow; continue; }
+                                    var lok = TryCallInterfaceMethod(localeObj, "SetOrCreate", new object[] { lent, true });
+                                    trMap[lang] = lok == null ? "SET-OK(volatile)" : (lok + "(" + lok.GetType().Name + ")");
+                                }
+                            }
+                            addResult["translationsTried"] = trMap;
+                        }
+                        catch (Exception ext)
+                        {
+                            addResult["translationsError"] = ext.Message;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        addResult["error"] = ex.Message;
+                    }
+                    added.Add(addResult);
+                }
+                catch (Exception ex)
+                {
+                    errors.Add(new Dictionary<string, object> { ["key"] = DictRow(r, "resourceName"), ["error"] = ex.Message });
+                }
+            }
+            return new Dictionary<string, object> { ["addedCount"] = added.Count, ["added"] = added, ["errors"] = errors };
+        }
+
+        /// <summary>set：批量修改多行。改文本/翻译/引用。取原条目→改字段→SetOrCreate，保留原 type/A引用。</summary>
+        private object SetEntries(object internalObj, object rows)
+        {
+            var updated = new List<object>();
+            var errors = new List<object>();
+            foreach (var r in rows as IEnumerable)
+            {
+                if (r == null) continue;
+                var rn = DictRow(r, "resourceName");
+                try
+                {
+                    // 与 add 一致：用新构造重建 entry（SetOrCreate 对已有 key 即更新）。不依赖 ApplyRowToExisting(旧逻辑改内存对象)。
+                    var entry = BuildEntryFromRow(internalObj, r);
+                    if (entry == null)
+                        throw new InvalidOperationException("构造条目失败");
+                    var upd = new Dictionary<string, object> { ["key"] = rn, ["updated"] = false };
+                    try
+                    {
+                        // 正确调用：SetOrCreate(ResourceDictionaryEntry, bool)。第一参 entry，第二参 bool=true。void 返回(null)即视为成功。
+                        var ok = TryCallInterfaceMethod(internalObj, "SetOrCreate", new object[] { entry, true });
+                        bool isOk = ok == null || (ok is bool bb && bb);   // void 返回 null 视为成功
+                        upd["updated"] = isOk;
+                        if (ok != null && !(ok is bool))
+                            upd["return"] = ok + "(" + ok.GetType().Name + ")";
+                        upd["defaultSetHow"] = _lastDefaultHow;
+                        // 各语言翻译写入：与 add 一致
+                        try
+                        {
+                            var trObj = ExtractRow(r, "translations");
+                            var trMap = new Dictionary<string, object>();
+                            if (trObj is IDictionary trd)
+                            {
+                                var locales = GetLocalesList(internalObj);
+                                int tbudget = 200;
+                                foreach (System.Collections.DictionaryEntry de in trd)
+                                {
+                                    if (--tbudget < 0) break;
+                                    var lang = de.Key?.ToString();
+                                    var langVal = de.Value?.ToString();
+                                    if (string.IsNullOrEmpty(lang)) continue;
+                                    object localeObj = null;
+                                    foreach (var lo in locales)
+                                    {
+                                        var ln = GetStringPropValue(lo, "LocaleName") ?? GetStringPropValue(lo, "Name");
+                                        if (ln == lang) { localeObj = lo; break; }
+                                    }
+                                    if (localeObj == null) { trMap[lang] = "NO-LOCALE"; continue; }
+                                    var lent = BuildTextEntry(internalObj, rn, langVal, out string lentHow);
+                                    if (lent == null) { trMap[lang] = "BUILD-FAIL:" + lentHow; continue; }
+                                    var lok = TryCallInterfaceMethod(localeObj, "SetOrCreate", new object[] { lent, true });
+                                    trMap[lang] = lok == null ? "SET-OK(volatile)" : (lok + "(" + lok.GetType().Name + ")");
+                                }
+                            }
+                            upd["translationsTried"] = trMap;
+                        }
+                        catch (Exception ext)
+                        {
+                            upd["translationsError"] = ext.Message;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        upd["error"] = "SetOrCreate: " + ex.Message;
+                    }
+                    updated.Add(upd);
+                }
+                catch (Exception ex)
+                {
+                    errors.Add(new Dictionary<string, object> { ["key"] = rn, ["error"] = ex.Message });
+                }
+            }
+            return new Dictionary<string, object> { ["updatedCount"] = updated.Count, ["updated"] = updated, ["errors"] = errors };
+        }
+
+        /// <summary>delete：按 key 批量删单行（Remove，不删表）</summary>
+        private object DeleteEntries(object internalObj, List<string> keys)
+        {
+            var deleted = new List<object>();
+            var errors = new List<object>();
+            foreach (var rn in keys)
+            {
+                var del = new Dictionary<string, object> { ["key"] = rn, ["deleted"] = false };
+                try
+                {
+                    del["signatures"] = DumpWriteMethodSignatures(internalObj);
+                    // 正确调用：Remove(string, bool) 删 key（返回 void(null)，不抛异常即视为删除生效）。
+                    var ok = TryCallInterfaceMethod(internalObj, "Remove", new object[] { rn, true });
+                    // Remove(string,bool) 返回 void(null)：返回 null 视为删除已执行，bool false 才算失败。
+                    bool removed = ok == null || (ok is bool bb && bb);
+                    del["deleted"] = removed;
+                    if (ok != null && !(ok is bool))
+                        del["return"] = ok + "(" + ok.GetType().Name + ")";
+                }
+                catch (Exception ex)
+                {
+                    del["error"] = "Remove: " + ex.Message;
+                }
+                deleted.Add(del);
+            }
+            return new Dictionary<string, object> { ["deletedCount"] = deleted.Count, ["deleted"] = deleted, ["errors"] = errors };
+        }
+
+        /// <summary>rename：重命名单条目（RenameResource）</summary>
+        private object RenameEntry(object internalObj, string oldKey, string newKey)
+        {
+            // 尝试直接 RenameResource(old,new)。签名 (string,string,bool,Node)——只传前两参，其余默认 null/false
+            object ok = null;
+            try
+            {
+                ok = TryCallInterfaceMethod(internalObj, "RenameResource", new object[] { oldKey, newKey });
+            }
+            catch { ok = null; }
+            // void 返回(null)即视为成功；只有抛异常才失败
+            bool renamed = ok == null || (ok is bool b && b);
+            if (!renamed)
+                throw new InvalidOperationException($"重命名 '{oldKey}' → '{newKey}' 失败（RenameResource 返回 false）");
+            return new Dictionary<string, object> { ["oldKey"] = oldKey, ["newKey"] = newKey, ["renamed"] = renamed };
+        }
+
+        /// <summary>从 row 构造 ResourceDictionaryEntry（带 type）。文本=无 ResourceReference；font/style/node=New 带引用。</summary>
+        private object BuildEntryFromRow(object internalObj, object row)
+        {
+            var rn = DictRow(row, "resourceName");
+            var type = (DictRow(row, "type") ?? "text").ToLowerInvariant();
+            var entryType = LoadTypeByFullName(
+                "Rightware.Kanzi.Tool.Logic.Project.ResourceDictionaryItems.ResourceDictionaryEntry");
+            if (entryType == null)
+                throw new InvalidOperationException("找不到 ResourceDictionaryEntry 类型");
+
+            object entry;
+            _lastDefaultHow = null;
+            if (type == "text")
+            {
+                // 正确构造：new ResourceDictionaryEntry(key, new ProjectItemReference(text, ContentType.TEXT))
+                var dt = DictRow(row, "defaultText") ?? rn;
+                var pir = CreateProjectItemReferenceWithText(dt, "TEXT");
+                if (pir == null) _lastDefaultHow = "PIR-CTOR-FAIL";
+                else _lastDefaultHow = "pir(text=" + (dt ?? "") + ",TEXT)";
+                entry = ConstructEntryWithRef(entryType, rn, pir);
+            }
+            else
+            {
+                // font/style/node：new ResourceDictionaryEntry(key, new ProjectItemReference(targetRef, ContentType))
+                var targetRef = DictRow(row, "targetRef");
+                string ctName = type.ToUpperInvariant();   // FONT/STYLE/NODE → ContentType
+                if (type == "node") ctName = "NODE";
+                if (type == "font") ctName = "FONT";
+                if (type == "style") ctName = "STYLE";
+                object pir = null;
+                if (!string.IsNullOrEmpty(targetRef))
+                {
+                    var refObj = ResolveObject(targetRef);
+                    if (refObj != null)
+                        pir = CreateProjectItemReferenceForObj(refObj, ctName);
+                }
+                entry = ConstructEntryWithRef(entryType, rn, pir);
+            }
+            if (entry == null)
+                throw new InvalidOperationException("构造 ResourceDictionaryEntry 失败");
+            return entry;
+        }
+
+        /// <summary>构造带文本值的 text entry（用于写入某语言翻译）。用正确构造：new ResourceDictionaryEntry(key, new ProjectItemReference(text, TEXT))。</summary>
+        private object BuildTextEntry(object internalObj, string rn, string langVal, out string how)
+        {
+            how = null;
+            try
+            {
+                var entryType = LoadTypeByFullName(
+                    "Rightware.Kanzi.Tool.Logic.Project.ResourceDictionaryItems.ResourceDictionaryEntry");
+                if (entryType == null) { how = "NO-TYPE"; return null; }
+                var pir = CreateProjectItemReferenceWithText(langVal, "TEXT");
+                if (pir == null) { how = "PIR-CTOR-FAIL"; return null; }
+                var entry = ConstructEntryWithRef(entryType, rn, pir);
+                how = "entry(key=" + rn + ",pir(text=" + (langVal ?? "") + "))";
+                return entry;
+            }
+            catch (Exception ex)
+            {
+                how = "THROW:" + ex.Message;
+                return null;
+            }
+        }
+
+        /// <summary>用 new ResourceDictionaryEntry(key, ProjectItemReference) 构造带 key + 引用的 entry。</summary>
+        private static object ConstructEntryWithRef(Type entryType, string key, object pir)
+        {
+            if (pir == null) return null;
+            try
+            {
+                var ctor = entryType.GetConstructor(new[] { typeof(string), pir.GetType() });
+                if (ctor == null) return null;
+                return ctor.Invoke(new object[] { key, pir });
+            }
+            catch { return null; }
+        }
+
+        /// <summary>new ProjectItemReference(text, ContentType.X) 构造承载文本的引用。</summary>
+        private static object CreateProjectItemReferenceWithText(string text, string contentTypeName)
+        {
+            try
+            {
+                var pirType = LoadTypeByFullName("Rightware.Kanzi.Tool.Logic.Project.ProjectItemReference");
+                if (pirType == null) return null;
+                var ct = ResolveContentTypeEnum(contentTypeName);
+                if (ct == null) return null;
+                var ctor = pirType.GetConstructor(new[] { typeof(string), ct.GetType() });
+                if (ctor == null) return null;
+                return ctor.Invoke(new object[] { text, ct });
+            }
+            catch { return null; }
+        }
+
+        /// <summary>new ProjectItemReference(target, ContentType.X) 构造指向资源对象的引用（font/style/node）。</summary>
+        private static object CreateProjectItemReferenceForObj(object target, string contentTypeName)
+        {
+            try
+            {
+                var pirType = LoadTypeByFullName("Rightware.Kanzi.Tool.Logic.Project.ProjectItemReference");
+                if (pirType == null) return null;
+                // 优先用 (ProjectItemInterface target) ctor
+                var ctor1 = pirType.GetConstructor(new[] { target.GetType() });
+                if (ctor1 != null) return ctor1.Invoke(new object[] { target });
+                var ct = ResolveContentTypeEnum(contentTypeName);
+                if (ct == null) return null;
+                var ctor2 = pirType.GetConstructor(new[] { typeof(string), ct.GetType() });
+                if (ctor2 == null) return null;
+                return ctor2.Invoke(new object[] { GetStringPropValue(target, "Name") ?? target.ToString(), ct });
+            }
+            catch { return null; }
+        }
+
+        /// <summary>解析 ProjectItemReferenceContentType 枚举值（TEXT/FONT/STYLE/NODE 等）。</summary>
+        private static object ResolveContentTypeEnum(string name)
+        {
+            try
+            {
+                var et = LoadTypeByFullName("Rightware.Kanzi.Tool.Logic.Project.ProjectItemReferenceContentType")
+                         ?? AppDomain.CurrentDomain.GetAssemblies()
+                             .SelectMany(a => { try { return a.GetTypes(); } catch { return new Type[0]; } })
+                             .FirstOrDefault(t => t.Name == "ProjectItemReferenceContentType");
+                if (et == null) return null;
+                string fieldName = name.ToUpperInvariant() == "NODE" ? "NODE" : name.ToUpperInvariant();
+                var f = et.GetField(fieldName) ?? et.GetFields().FirstOrDefault(x => x.Name.ToUpperInvariant() == name.ToUpperInvariant());
+                if (f != null) return f.GetValue(null);
+                // 枚举名里找匹配
+                foreach (var fn in et.GetEnumNames())
+                {
+                    if (fn.ToUpperInvariant().Contains(name.ToUpperInvariant()) || name.ToUpperInvariant().Contains(fn.ToUpperInvariant()))
+                        return Enum.Parse(et, fn);
+                }
+                return null;
+            }
+            catch { return null; }
+        }
+
+        /// <summary>对已有条目应用 row 的修改字段（改 defaultText/密钥/引用）。保留 type。</summary>
+        private void ApplyRowToExisting(object internalObj, object entry, object row)
+        {
+            var rn = DictRow(row, "resourceName");
+            if (!string.IsNullOrEmpty(rn))
+                TrySetEntryKeyViaInterface(entry, rn, out _);
+            var defaultText = DictRow(row, "defaultText");
+            if (defaultText != null)
+                TrySetStringDefaultText(entry, defaultText);
+            var type = (DictRow(row, "type") ?? "").ToLowerInvariant();
+            var targetRef = DictRow(row, "targetRef");
+            if (type != "text" && !string.IsNullOrEmpty(targetRef))
+            {
+                var refObj = ResolveObject(targetRef);
+                ApplyResourceReference(entry, refObj);
+            }
+        }
+
+        /// <summary>设置 entry 的 ResourceReference（font/style/node）。refObj 是目标资源（FontFamily/Style/Node 等）。</summary>
+        private void ApplyResourceReference(object entry, object refObj)
+        {
+            if (refObj == null) return;
+            try
+            {
+                // 尝试直接 set_ResourceReference；若需要 ProjectItemReference 包装，fallback 到 set_ResourceReferenceNull
+                var t = entry.GetType();
+                var setRef = t.GetProperty("ResourceReference")?.GetSetMethod() ?? t.GetMethod("set_ResourceReference");
+                if (setRef != null)
+                {
+                    // 若参数类型是 ProjectItemReference，需构造；否则直接放 refObj
+                    var p0 = setRef.GetParameters()[0].ParameterType;
+                    if (p0.IsAssignableFrom(refObj.GetType()))
+                        setRef.Invoke(entry, new object[] { refObj });
+                    else if (p0.FullName != null && p0.FullName.Contains("ProjectItemReference"))
+                    {
+                        var pir = CreateProjectItemReference(refObj);
+                        if (pir != null) setRef.Invoke(entry, new object[] { pir });
+                    }
+                }
+            }
+            catch { /* 设置失败静默（调用方会报错） */ }
+        }
+
+        /// <summary>构造 ProjectItemReference 指向目标资源（若需包装）。</summary>
+        private object CreateProjectItemReference(object target)
+        {
+            try
+            {
+                var pirType = LoadTypeByFullName(
+                    "Rightware.Kanzi.Tool.Logic.Project.ProjectItemReference");
+                if (pirType == null)
+                {
+                    // 用 new ResourceDictionaryEntry(ProjectItemReference, string) 走引用构造更稳
+                    return null;
+                }
+                var ctor = pirType.GetConstructor(new[] { target.GetType() })
+                           ?? pirType.GetConstructor(Type.EmptyTypes);
+                if (ctor == null) return null;
+                var pir = ctor.Invoke(new[] { target });
+                return pir;
+            }
+            catch { return null; }
+        }
+
+        /// <summary>设置 DefaultText（若可写）。</summary>
+        private static void TrySetStringDefaultText(object obj, string val)
+        {
+            try
+            {
+                var setter = obj.GetType().GetProperty("DefaultText")?.GetSetMethod()
+                             ?? obj.GetType().GetMethod("set_DefaultText");
+                setter?.Invoke(obj, new object[] { val });
+            }
+            catch { }
+        }
+
+        private static bool TrySetStringDefaultText2(object obj, string val, out string how)
+        {
+            how = null;
+            if (obj == null || val == null) return false;
+            try
+            {
+                var p = obj.GetType().GetProperty("DefaultText");
+                var setter = p?.GetSetMethod(true);
+                if (setter != null && setter.GetParameters()[0].ParameterType == typeof(string))
+                {
+                    setter.Invoke(obj, new object[] { val });
+                    how = "DefaultText prop setter: " + setter.Name;
+                    return true;
+                }
+                foreach (var f in new[] { BindingFlags.Public, BindingFlags.NonPublic, BindingFlags.Public | BindingFlags.NonPublic })
+                {
+                    var m = obj.GetType().GetMethod("set_DefaultText", f | BindingFlags.Instance);
+                    if (m != null && m.GetParameters().Length == 1 && m.GetParameters()[0].ParameterType == typeof(string))
+                    {
+                        m.Invoke(obj, new object[] { val });
+                        how = "set_DefaultText method (";
+                        return true;
+                    }
+                }
+                how = "NO-DEFAULTTEXT-SETTER";
+            }
+            catch (Exception ex)
+            {
+                how = "THROW:" + ex.Message;
+            }
+            return false;
+        }
+
+        /// <summary>设置 string 属性（Key 等）。</summary>
+        private static void TrySetStringProp(object obj, string propName, string val)
+        {
+            try
+            {
+                var setter = obj.GetType().GetProperty(propName)?.GetSetMethod()
+                             ?? obj.GetType().GetMethod("set_" + propName);
+                setter?.Invoke(obj, new object[] { val });
+            }
+            catch { }
+        }
+
+        /// <summary>通过接口映射读取属性值（处理显式接口实现的属性，如 ResourceDictionaryEntry.Key 的 get_Key）。</summary>
+        private static string TryGetEntryKeyViaInterface(object entry)
+        {
+            if (entry == null) return null;
+            try
+            {
+                var g = entry.GetType().GetProperty("Key")?.GetGetMethod();
+                if (g != null)
+                {
+                    var v = g.Invoke(entry, null);
+                    return v?.ToString();
+                }
+                foreach (var ifc in entry.GetType().GetInterfaces())
+                {
+                    InterfaceMapping map;
+                    try { map = entry.GetType().GetInterfaceMap(ifc); }
+                    catch { continue; }
+                    for (int i = 0; i < map.InterfaceMethods.Length; i++)
+                    {
+                        var im = map.InterfaceMethods[i];
+                        var tm = map.TargetMethods[i];
+                        if (im.Name == "get_Key" || im.Name.EndsWith(".get_Key")) return tm.Invoke(entry, null)?.ToString();
+                    }
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        /// <summary>通过接口映射设置属性（处理显式接口实现的属性，如 ResourceDictionaryEntry.Key 的 set_Key）。</summary>
+        private static bool TrySetEntryKeyViaInterface(object entry, string key, out string how)
+        {
+            how = null;
+            if (entry == null || key == null) return false;
+            try
+            {
+                // 1) 普通属性 setter（含 private）
+                var p = entry.GetType().GetProperty("Key");
+                var setter = p?.GetSetMethod(true);   // true=incl nonpublic
+                if (setter != null)
+                {
+                    setter.Invoke(entry, new object[] { key });
+                    how = "prop setter: " + setter.Name;
+                    return true;
+                }
+                // 2) set_Key 方法（Public + NonPublic）
+                foreach (var f in new[] { BindingFlags.Public, BindingFlags.NonPublic, BindingFlags.Public | BindingFlags.NonPublic })
+                {
+                    var m = entry.GetType().GetMethod("set_Key", f | BindingFlags.Instance);
+                    if (m != null && m.GetParameters().Length == 1 && m.GetParameters()[0].ParameterType == typeof(string))
+                    {
+                        m.Invoke(entry, new object[] { key });
+                        how = "method " + m.Name + " (" + m.Attributes + ")";
+                        return true;
+                    }
+                }
+                // 3) 接口映射里的 set_Key（显式接口实现，方法名可能是 <Interface>.set_Key 或 set_Key）
+                foreach (var ifc in entry.GetType().GetInterfaces())
+                {
+                    InterfaceMapping map;
+                    try { map = entry.GetType().GetInterfaceMap(ifc); }
+                    catch { continue; }
+                    for (int i = 0; i < map.InterfaceMethods.Length; i++)
+                    {
+                        var im = map.InterfaceMethods[i];
+                        var tm = map.TargetMethods[i];
+                        if (im.Name == "set_Key" || im.Name.EndsWith(".set_Key"))
+                        {
+                            var ps = tm.GetParameters();
+                            if (ps.Length == 1 && ps[0].ParameterType == typeof(string))
+                            {
+                                tm.Invoke(entry, new object[] { key });
+                                how = "iface " + im.Name + " -> " + tm.Name + " (" + tm.Attributes + ")";
+                                return true;
+                            }
+                        }
+                    }
+                }
+                how = "NO-SETTER-FOUND";
+            }
+            catch (Exception ex)
+            {
+                how = "THROW:" + ex.Message;
+            }
+            return false;
+        }
+
+        /// <summary>从 dict 行取字段值。</summary>
+        private static string DictRow(object row, string field)
+        {
+            if (row is IDictionary<string, object> d && d.TryGetValue(field, out var v))
+                return v?.ToString();
+            return null;
+        }
+
+        /// <summary>
+        /// 通过接口映射精确调用带参数的接口方法（显式接口实现）。按名字匹配可兼容的参数数量/类型，
+        /// 遍历所有接口；无匹配或不兼容返回 null。
+        /// </summary>
+        private static object TryCallInterfaceMethod(object obj, string methodName, object[] args)
+        {
+            if (obj == null || string.IsNullOrEmpty(methodName)) return null;
+            var t = obj.GetType();
+            object lastErr = null;
+            int matched = 0;
+            foreach (var ifc in t.GetInterfaces())
+            {
+                InterfaceMapping map;
+                try { map = t.GetInterfaceMap(ifc); }
+                catch { continue; }
+                for (int i = 0; i < map.InterfaceMethods.Length; i++)
+                {
+                    if (map.InterfaceMethods[i].Name != methodName) continue;
+                    var tm = map.TargetMethods[i];
+                    var ps = tm.GetParameters();
+                    if (ps.Length != (args?.Length ?? 0)) continue;   // 参数数量不匹配则跳过
+                    // ★ 参数类型兼容性检查：每个实参类型必须能赋值给形参类型（避免匹配到同名同参数量但类型不符的重载，
+                    //   如 Remove(string) 误匹配到 Remove(DynamicProperty)）
+                    bool typeOk = true;
+                    for (int k = 0; k < ps.Length; k++)
+                    {
+                        var arg = args[k];
+                        var pt = ps[k].ParameterType;
+                        if (arg == null)
+                        {
+                            // null 实参：仅当形参为引用类型或可空类型才可能匹配
+                            if (pt.IsValueType && Nullable.GetUnderlyingType(pt) == null) { typeOk = false; break; }
+                        }
+                        else if (!pt.IsInstanceOfType(arg))
+                        {
+                            typeOk = false;
+                            break;
+                        }
+                    }
+                    if (!typeOk) continue;   // 类型不符 → 跳过，找真正的重载
+                    matched++;
+                    try
+                    {
+                        return tm.Invoke(obj, args);
+                    }
+                    catch (TargetInvocationException tie)
+                    {
+                        lastErr = tie.InnerException ?? tie;
+                        continue;
+                    }
+                    catch (Exception ex) { lastErr = ex; continue; }
+                }
+            }
+            if (matched > 0 && lastErr is Exception le)
+                throw new InvalidOperationException($"接口方法 {methodName} 调用失败: {le.Message}");
+            return null;
+        }
+
+        /// <summary>诊断：列出 Insert/Add/SetOrCreate/Remove 等写方法在 internalObj 上的运行时参数类型（含接口映射）。</summary>
+        private static object DumpWriteMethodSignatures(object obj)
+        {
+            var res = new List<object>();
+            if (obj == null) return new Dictionary<string, object> { ["type"] = "null", ["methods"] = res };
+            var target = new[] { "Insert", "Add", "SetOrCreate", "Remove", "GenerateUniqueResourceID", "GetEntry", "get_Entries" };
+            var seen = new HashSet<string>();
+            int typeCount = 0, ifaceCount = 0;
+            var typeName = obj.GetType().FullName;
+            void AddSig(string from, string name, Type[] ps, Type ret)
+            {
+                var key = from + "#" + name + "#" + string.Join(",", ps.Select(p => (object)p.Name));
+                if (!seen.Add(key)) return;
+                res.Add(new Dictionary<string, object>
+                {
+                    ["from"] = from,
+                    ["method"] = name,
+                    ["params"] = ps.Select(p => (object)new Dictionary<string, object>
+                    {
+                        ["type"] = p.FullName ?? p.Name,
+                        ["kind"] = p.IsValueType ? (Nullable.GetUnderlyingType(p) != null ? "nullable" : "val") : "ref"
+                    }).ToList(),
+                    ["return"] = ret?.FullName ?? ret?.Name
+                });
+            }
+            try
+            {
+                foreach (var m in obj.GetType().GetMethods())
+                {
+                    if (target.Contains(m.Name)) { typeCount++; AddSig("type", m.Name, m.GetParameters().Select(p => p.ParameterType).ToArray(), m.ReturnType); }
+                }
+            }
+            catch (Exception ex) { res.Add(new Dictionary<string, object> { ["typeErr"] = ex.Message }); }
+            try
+            {
+                foreach (var ifc in obj.GetType().GetInterfaces())
+                {
+                    try
+                    {
+                        var map = obj.GetType().GetInterfaceMap(ifc);
+                        for (int i = 0; i < map.InterfaceMethods.Length; i++)
+                        {
+                            var im = map.InterfaceMethods[i];
+                            if (!target.Contains(im.Name)) continue;
+                            ifaceCount++;
+                            var tm = map.TargetMethods[i];
+                            var ps = tm.GetParameters().Select(p => p.ParameterType).ToArray();
+                            AddSig("iface:" + ifc.Name, im.Name, ps, tm.ReturnType);
+                        }
+                    }
+                    catch (Exception ex) { res.Add(new Dictionary<string, object> { ["ifaceErr_" + ifc.Name] = ex.Message }); }
+                }
+            }
+            catch (Exception ex) { res.Add(new Dictionary<string, object> { ["ifacesErr"] = ex.Message }); }
+            // 汇总信息放最前
+            var meta = new Dictionary<string, object>
+            {
+                ["type"] = typeName,
+                ["typeMethodHits"] = typeCount,
+                ["ifaceHits"] = ifaceCount,
+                ["ifaces"] = obj.GetType().GetInterfaces().Select(i => i.Name).ToList()
+            };
+            res.Insert(0, meta);
+            return res;
+        }
+
+        /// <summary>
+        /// 从任意“能拿到本地化资源列表的对象”提取资源。核心链路（反编译钉死）：
+        ///   obj → get_LocalizationTableRecords() → KanziTranslationList → GetLocalizedResourceList() → IEnumerable&lt;NodeResource&gt;
+        /// 找不到核心方法时返回 null（让上一层走兜底路径），而非抛错。
+        /// </summary>
+        private object TryGetLocalizedResourcesFromObject(object obj)
+        {
+            if (obj == null) return null;
+            return TryGetFromObjectWithDepth(obj, 0);
+        }
+
+        /// <summary>
+        /// 从任意对象尝试读本地化资源。严格受限：绝不无限递归对象图。
+        /// 只做确定性、有目标的查找（见 TryProbeOne），总调用次数/深度硬上限，避免卡死线程。
+        /// </summary>
+        private object TryGetFromObjectWithDepth(object obj, int depth)
+        {
+            if (obj == null) return null;
+            var probe = new ProbeState { Budget = 60, MaxDepth = 3 };
+            return ProbeRecursive(obj, 0, probe);
+        }
+
+        /// <summary>受控探测状态（总调用预算 + 深度上限 + 去重）。</summary>
+        private sealed class ProbeState
+        {
+            public int Budget;
+            public int MaxDepth;
+            public readonly HashSet<object> Seen = new HashSet<object>(KzRefComparer.Instance);
+        }
+
+        /// <summary>
+        /// 确定性探测：对 obj 及其直系关联对象做有限步骤查找，绝不遍历整个对象图。
+        ///   a. 自身有 GetLocalizedResourceList → 直接读；
+        ///   b. 自身有 get_LocalizationTableRecords → 对结果再查 GetLocalizedResourceList；
+        ///   c. 通过 Item→wrappedItem→内部对象链只探 1 层；
+        ///   每探一层都扣预算，超预算立即中止。
+        /// </summary>
+        private object ProbeRecursive(object obj, int depth, ProbeState st)
+        {
+            if (obj == null || depth > st.MaxDepth) return null;
+            if (!st.Seen.Add(obj)) return null;
+
+            var t = obj.GetType();
+
+            // a. 自身有 GetLocalizedResourceList → 直接读
+            var lm = FindMethodByParamCount(t, "GetLocalizedResourceList", 0);
+            if (lm != null && st.Budget-- > 0)
+            {
+                object lr;
+                try { lr = lm.Invoke(obj, null); }
+                catch (TargetInvocationException tie)
+                {
+                    throw new InvalidOperationException($"GetLocalizedResourceList 调用失败: {tie.InnerException?.Message ?? tie.Message}");
+                }
+                if (lr != null) return BuildLocalizedResourcesResult(lr);
+            }
+
+            // a2. 自身有 get_Resources（字体=ResourceReference 通道，ResourceDictionaryWrapper 上有）→ 直接枚举
+            if (st.Budget-- > 0)
+            {
+                var rm0 = t.GetMethod("get_Resources") ?? FindMethodByParamCount(t, "get_Resources", 0);
+                if (rm0 != null)
+                {
+                    object res;
+                    try { res = rm0.Invoke(obj, null); }
+                    catch { res = null; }
+                    if (res is IEnumerable resEnum)
+                        return BuildLocalizedResourcesResult(resEnum);
+                }
+            }
+
+            // a3. 通过接口映射精确调 get_Resources（显式接口实现，普通 GetMethod 看不到）
+            if (st.Budget-- > 0)
+            {
+                object ifRes = TryCallInterfaceGetter(obj, "get_Resources");
+                if (ifRes is IEnumerable ifResEnum)
+                    return BuildLocalizedResourcesResult(ifResEnum);
+            }
+
+            // a4. 通过接口映射精确调 get_Entries（取所有资源字典条目：文本+字体等）。
+            //     每行是 ResourceDictionaryEntry，其 get_ResourceReference() 即字体/资源引用。
+            //     这是 ResourceLocalizationItems.LocalizationTable 上真正能拿到字体引用的通道（显式接口实现）。
+            if (st.Budget > 0)
+            {
+                object ent = null;
+                // 优先接口映射（get_Entries 是 ResourceDictionaryInterface 显式实现，普通反射看不到）
+                ent = TryCallInterfaceGetter(obj, "get_Entries");
+                if (ent == null)
+                {
+                    try
+                    {
+                        var en = obj.GetType().GetMethod("get_Entries")
+                                 ?? FindMethodByParamCount(obj.GetType(), "get_Entries", 0);
+                        ent = en?.Invoke(obj, null);
+                    }
+                    catch { ent = null; }
+                }
+                st.Budget--;
+                if (ent is IEnumerable entEnum)
+                    return BuildEntriesResult(entEnum);
+            }
+
+            // b. 自身有 get_LocalizationTableRecords → 结果递归
+            if (st.Budget-- > 0)
+            {
+                var rm = t.GetMethod("get_LocalizationTableRecords")
+                         ?? FindMethodByParamCount(t, "get_LocalizationTableRecords", 0);
+                if (rm != null)
+                {
+                    object rl;
+                    try { rl = rm.Invoke(obj, null); }
+                    catch { rl = null; }
+                    if (rl != null)
+                    {
+                        var r = ProbeRecursive(rl, depth + 1, st);
+                        if (r != null) return r;
+                    }
+                }
+            }
+
+            // c. 只穿透关键关联：get_WrappedItem / get_HostingItem（1 层，不进接口海量方法）
+            if (st.Budget-- > 0)
+            {
+                var inner = GetWrappedItemRaw(obj) ?? TryGetHostingItem(obj);
+                if (inner != null && !ReferenceEquals(inner, obj))
+                {
+                    var r = ProbeRecursive(inner, depth + 1, st);
+                    if (r != null) return r;
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>尝试取 get_HostingItem（对象宿主），返回 null 表示无。</summary>
+        private static object TryGetHostingItem(object obj)
+        {
+            if (obj == null) return null;
+            try
+            {
+                var m = obj.GetType().GetMethod("get_HostingItem")
+                        ?? FindMethodByParamCount(obj.GetType(), "get_HostingItem", 0);
+                if (m == null) return null;
+                var v = m.Invoke(obj, null);
+                return v;
+            }
+            catch { return null; }
+        }
+
+        /// <summary>
+        /// 通过接口映射精确调用指定名字的接口 getter（显式接口实现，普通 GetMethod 看不到）。
+        /// 只按名字匹配，不遍历全部方法；返回 null 表示无此接口 getter 或调用失败。
+        /// </summary>
+        private static object TryCallInterfaceGetter(object obj, string getterName)
+        {
+            if (obj == null || string.IsNullOrEmpty(getterName)) return null;
+            var t = obj.GetType();
+            foreach (var ifc in t.GetInterfaces())
+            {
+                InterfaceMapping map;
+                try { map = t.GetInterfaceMap(ifc); }
+                catch { continue; }
+                for (int i = 0; i < map.InterfaceMethods.Length; i++)
+                {
+                    if (map.InterfaceMethods[i].Name != getterName) continue;
+                    var tm = map.TargetMethods[i];
+                    try
+                    {
+                        var v = tm.Invoke(obj, null);
+                        return v;
+                    }
+                    catch { return null; }
+                }
+            }
+            return null;
+        }
+
+        /// <summary>占位（保留签名，避免外部引用出错；当前探测不依赖它）。</summary>
+        private static bool SkipPropForTraversal(Type t) => true;
+
+        /// <summary>引用相等比较器（兼容 .NET Framework，避免依赖 .NET 5+ 的 ReferenceEqualityComparer）。</summary>
+        private sealed class KzRefComparer : IEqualityComparer<object>
+        {
+            public static readonly KzRefComparer Instance = new KzRefComparer();
+            public bool Equals(object x, object y) => ReferenceEquals(x, y);
+            public int GetHashCode(object obj) => System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(obj);
+        }
+
+
+        /// <summary>
+        /// 路径2：兜底扫描，不依赖 wrapper 的 get_WrappedItem。
+        /// ① 扫描对象池（@obj 引用缓存）：找任意带 GetLocalizedResourceList 方法的对象（如用户已引用的表记录集合）直接读；
+        /// ② 若 LogicProject 程序集已加载且其类型实现了本地化记录接口（多态），则尝试按类型名匹配池内对象。
+        /// 2. 全反射，不直接引用具体类型（符合 KzMCPPlugin 铁律）。
+        /// </summary>
+        private object TryGetLocalizedResourcesFromLogicProject()
+        {
+            // ① 扫描对象池：任意已注册对象，若它（或其内部对象）能提供 GetLocalizedResourceList 就直接读。
+            //    全局预算保护：对象池可能很大，总探测次数超限立即放弃，绝不阻塞。
+            int globalBudget = 1200;
+            foreach (var kv in _objectStore.ToList())
+            {
+                if (globalBudget <= 0) break;
+                globalBudget--;
+                var obj = kv.Value;
+                if (obj == null) continue;
+                try
+                {
+                    // 本身有核心链路
+                    var r1 = TryGetLocalizedResourcesFromObject(obj);
+                    if (r1 != null) return r1;
+                    // 穿透它拿内部对象再试
+                    var inner = GetWrappedItemRaw(obj);
+                    if (inner != null && !ReferenceEquals(inner, obj))
+                    {
+                        var r2 = TryGetLocalizedResourcesFromObject(inner);
+                        if (r2 != null) return r2;
+                    }
+                }
+                catch { /* 单个对象失败不阻塞整体扫描 */ }
+            }
+            return null;
+        }
+
+        /// <summary>把 GetLocalizedResourceList 的返回值（IEnumerable<NodeResource>）枚举成结构化字典列表。</summary>
+        private object BuildLocalizedResourcesResult(object localizedResult)
+        {
+            var resources = new List<object>();
+            if (localizedResult is IEnumerable en)
+            {
+                foreach (var resource in en)
+                {
+                    var refId = RegisterObject(resource);
+                    resources.Add(BuildResourceInfo(resource, refId));
+                }
+            }
+            else if (localizedResult != null)
+            {
+                var refId = RegisterObject(localizedResult);
+                resources.Add(BuildResourceInfo(localizedResult, refId));
+            }
+
+            return new Dictionary<string, object>
+            {
+                ["count"] = resources.Count,
+                ["resources"] = resources
+            };
+        }
+
+        /// <summary>
+        /// 枚举 ResourceDictionaryEntry 条目（get_Entries 的结果）。每行 = ResourceDictionaryEntry，
+        /// 其中 get_Key() 为 resourceName、get_ResourceReference() 为字体/资源引用（ProjectItemReference）。
+        /// 逐个提取可读信息并注册 @obj 引用，方便后续 kz_invoke 深入 target（FontFamily 等）。
+        /// </summary>
+        private object BuildEntriesResult(IEnumerable entries)
+        {
+            var resources = new List<object>();
+            try
+            {
+                foreach (var entry in entries)
+                {
+                    if (entry == null) continue;
+                    var refId = RegisterObject(entry);
+                    resources.Add(BuildEntryInfo(entry, refId));
+                }
+            }
+            catch (Exception ex)
+            {
+                // 单个条目失败不中断整体，记录错误并继续
+                resources.Add(new Dictionary<string, object>
+                {
+                    ["error"] = "枚举 entry 失败: " + ex.Message
+                });
+            }
+
+            return new Dictionary<string, object>
+            {
+                ["count"] = resources.Count,
+                ["resources"] = resources
+            };
+        }
+
+        /// <summary>从 ResourceDictionaryEntry 提取可读信息：Key / IsText / IsAlias / IsURL / ResourceReference 目标(FontFamily)。</summary>
+        private Dictionary<string, object> BuildEntryInfo(object entry, string refId)
+        {
+            var t = entry.GetType();
+            var info = new Dictionary<string, object>
+            {
+                ["ref_id"] = refId,
+                ["type"] = t.Name,
+                ["fullType"] = t.FullName
+            };
+
+            // 条目 key（resourceName，如 SourceHanSansSCfontFamily）
+            TryGetStringProp(entry, "Key", v => info["key"] = v);
+
+            // 条目属性标记
+            TryGetBoolProp(entry, "IsText", v => info["isText"] = v);
+            TryGetBoolProp(entry, "IsAlias", v => info["isAlias"] = v);
+            TryGetBoolProp(entry, "IsURL", v => info["isUrl"] = v);
+            // ★ 枚举 entry 所有可读公开属性（不含资源引用本身，避免递归）——给完整画面
+            DumpReadableProps(entry, info);
+
+            // 资源引用（get_ResourceReference → ProjectItemReference → Target = FontFamily 等）
+            try
+            {
+                object refVal = null;
+                var refProp = t.GetProperty("ResourceReference");
+                if (refProp != null)
+                    refVal = refProp.GetValue(entry, null);
+                if (refVal != null)
+                {
+                    var rrRef = RegisterObject(refVal);
+                    info["resourceRef"] = rrRef;
+                    info["resourceRefType"] = refVal.GetType().Name;
+                    info["resourceRefFullType"] = refVal.GetType().FullName;
+
+                    // 引用目标（FontFamily 等）——ProjectItemReference.get_Target
+                    TryGetStringProp(refVal, "Name", v => info["resourceRefName"] = v);
+                    TryGetStringProp(refVal, "Path", v => info["resourceRefPath"] = v);
+                    // resourceRef 全部可读属性
+                    DumpReadableProps(refVal, info, "resourceRef_");
+                    try
+                    {
+                        var targetProp = refVal.GetType().GetProperty("Target");
+                        var targetVal = targetProp?.GetValue(refVal, null);
+                        if (targetVal != null && !ReferenceEquals(targetVal, refVal))
+                        {
+                            var tgtRef = RegisterObject(targetVal);
+                            info["targetRef"] = tgtRef;
+                            info["targetType"] = targetVal.GetType().Name;
+                            info["targetFullType"] = targetVal.GetType().FullName;
+                            TryGetStringProp(targetVal, "Name", v => info["targetName"] = v);
+                            TryGetStringProp(targetVal, "Path", v => info["targetPath"] = v);
+                            DumpReadableProps(targetVal, info, "target_");
+                        }
+                    }
+                    catch { /* Target 属性不存在则忽略 */ }
+                }
+            }
+            catch { /* ResourceReference 属性不存在则忽略 */ }
+
+            // ★ 内容类型（对齐 add 的 type）：text | font | style | node
+            try
+            {
+                bool isText = info.TryGetValue("isText", out var it) && it is bool ib && ib;
+                string targetTypeName = info.TryGetValue("targetType", out var tt) ? Convert.ToString(tt) : null;
+                string ct;
+                if (isText)
+                    ct = "text";
+                else if (targetTypeName != null && targetTypeName.IndexOf("Font", StringComparison.OrdinalIgnoreCase) >= 0)
+                    ct = "font";
+                else if (targetTypeName != null && targetTypeName.IndexOf("Style", StringComparison.OrdinalIgnoreCase) >= 0)
+                    ct = "style";
+                else
+                    ct = "node";
+                info["contentType"] = ct;
+            }
+            catch { info["contentType"] = "node"; }
+
+            return info;
+        }
+
+        /// <summary>
+        /// 安全枚举对象的可读公开属性：浅层读取，标量/字符串直接 ToString；复杂对象只记类型名，
+        /// 不递归不 get 深层（避免触 Kanzi 巨大对象图/成环 → 崩溃）。用于给“增删改查走 Entry”做完整画面。
+        /// </summary>
+        /// <summary>dump entity 类型的构造函数 + 方法面（找设文本/值的正确入口）。</summary>
+        private static object DumpEntryTypeCaps(object entry)
+        {
+            var res = new Dictionary<string, object>();
+            try
+            {
+                var t = entry.GetType();
+                res["type"] = t.FullName;
+                res["ctors"] = t.GetConstructors(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+                    .Select(c => (object)("(" + string.Join(", ", c.GetParameters().Select(p => (p.ParameterType.FullName ?? p.ParameterType.Name) + " " + p.Name)) + ")"))
+                    .ToList();
+                res["props"] = t.GetProperties(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+                    .Select(p => (object)(p.Name + ":" + (p.PropertyType.Name)))
+                    .ToList();
+                res["methods"] = t.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly)
+                    .Select(m => m.Name)
+                    .Distinct()
+                    .Where(n => !n.StartsWith("get_") && !n.StartsWith("set_"))
+                    .Select(n => (object)n)
+                    .ToList();
+                // resourceRef(ProjectItemReference) 的可写入口：setters + 属性 + 构造函数
+                try
+                {
+                    var rr = t.GetProperty("ResourceReference")?.GetValue(entry, null);
+                    if (rr != null)
+                    {
+                        var rt = rr.GetType();
+                        var rrC = new Dictionary<string, object>();
+                        rrC["type"] = rt.FullName;
+                        rrC["props"] = rt.GetProperties(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+                            .Where(p => p.CanWrite || p.CanRead)
+                            .Select(p => (object)(p.Name + ":" + (p.PropertyType.Name) + (p.CanWrite ? "(w)" : "(r)")))
+                            .ToList();
+                        rrC["setters"] = rt.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly)
+                            .Where(m => m.Name.StartsWith("set_"))
+                            .Select(m => (object)(m.Name + "(" + string.Join(",", m.GetParameters().Select(p => p.ParameterType.Name)) + ")"))
+                            .ToList();
+                        rrC["ctors"] = rt.GetConstructors(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+                            .Select(c => (object)("(" + string.Join(", ", c.GetParameters().Select(p => (p.ParameterType.FullName ?? p.ParameterType.Name) + " " + p.Name)) + ")"))
+                            .ToList();
+                        res["resourceRefCaps"] = rrC;
+                    }
+                }
+                catch { }
+            }
+            catch (Exception ex) { res["error"] = ex.Message; }
+            return res;
+        }
+
+        private static void DumpReadableProps(object obj, Dictionary<string, object> into, string prefix = "")
+        {
+            if (obj == null) return;
+            Type t;
+            try { t = obj.GetType(); } catch { return; }
+            PropertyInfo[] props;
+            try { props = t.GetProperties(BindingFlags.Public | BindingFlags.Instance); }
+            catch { return; }
+            foreach (var p in props)
+            {
+                if (p.GetIndexParameters().Length > 0) continue;      // 跳过索引器
+                if (p.GetMethod == null) continue;                    // 只读不了就跳过
+                if (!p.CanRead) continue;
+                try
+                {
+                    var val = p.GetValue(obj, null);
+                    if (val == null)
+                        into[prefix + p.Name] = null;
+                    else
+                    {
+                        // 标量表类型直接存；复杂对象只存类型名，避免递归
+                        if (IsScalarType(val.GetType()))
+                            into[prefix + p.Name] = val;
+                        else
+                            into[prefix + p.Name + "__type"] = val.GetType().Name;
+                    }
+                }
+                catch { /* 个别属性 get 抛错就跳过 */ }
+            }
+        }
+
+        private static bool IsScalarType(Type t)
+        {
+            if (t.IsPrimitive || t.IsEnum) return true;
+            if (t == typeof(string) || t == typeof(decimal) || t == typeof(DateTime) || t == typeof(TimeSpan)) return true;
+            var u = Nullable.GetUnderlyingType(t);
+            if (u != null && (u.IsPrimitive || u.IsEnum || u == typeof(decimal))) return true;
+            return false;
+        }
+
+
+        /// <summary>从 NodeResource/资源对象上提取可读信息（resourceID/name/path/引用标记），注册 @obj 引用。</summary>
+        private Dictionary<string, object> BuildResourceInfo(object resource, string refId)
+        {
+            var t = resource.GetType();
+            var info = new Dictionary<string, object>
+            {
+                ["ref_id"] = refId,
+                ["type"] = t.Name,
+                ["fullType"] = t.FullName
+            };
+
+            // NodeResource 常用只读字段，逐个兜底反射（存在才读，不存在忽略）
+            TryGetStringProp(resource, "Name", v => info["name"] = v);
+            TryGetStringProp(resource, "Path", v => info["path"] = v);
+            TryGetStringProp(resource, "ResourceID", v => info["resourceID"] = v);
+
+            // ProjectItemReference 才有：get_IsResourceReference / get_IsText / get_Target
+            TryGetBoolProp(resource, "IsResourceReference", v => info["isResourceReference"] = v);
+            TryGetBoolProp(resource, "IsText", v => info["isText"] = v);
+
+            // 目标对象（FontFamily 等）——若 resource 是引用类型，get_Target 返回目标；若是 NodeResource 本体，目标即自身
+            try
+            {
+                var targetProp = t.GetProperty("Target");
+                var targetVal = targetProp?.GetValue(resource, null);
+                if (targetVal != null && !ReferenceEquals(targetVal, resource))
+                {
+                    var tgtRef = RegisterObject(targetVal);
+                    info["targetRef"] = tgtRef;
+                    info["targetType"] = targetVal.GetType().Name;
+                    info["targetFullType"] = targetVal.GetType().FullName;
+                    TryGetStringProp(targetVal, "Name", v => info["targetName"] = v);
+                    TryGetStringProp(targetVal, "Path", v => info["targetPath"] = v);
+                }
+            }
+            catch { /* Target 属性不存在则忽略 */ }
+            return info;
+        }
+
+        private static void TryGetStringProp(object obj, string name, Action<string> set)
+        {
+            try
+            {
+                var p = obj.GetType().GetProperty(name);
+                if (p == null) return;
+                var v = p.GetValue(obj, null);
+                if (v != null) set(Convert.ToString(v));
+            }
+            catch { }
+        }
+
+        private static void TryGetBoolProp(object obj, string name, Action<bool> set)
+        {
+            try
+            {
+                var p = obj.GetType().GetProperty(name);
+                if (p == null) return;
+                if (p.GetValue(obj, null) is bool b) set(b);
+            }
+            catch { }
         }
 
         /// <summary>直扡反射调 get_WrappedItem 拿内部对象（不经过 WrapResult 的 IEnumerable 展开）</summary>
