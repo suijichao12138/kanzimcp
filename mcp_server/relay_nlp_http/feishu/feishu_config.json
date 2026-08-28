@@ -1,0 +1,32 @@
+{
+  "reload": { "watch_interval_s": 3, "enabled": true },
+
+  "bots": [
+    {
+      "name": "suijichao",
+      "app_id": "cli_aaa263872939dce2",
+      "app_secret": "*****",
+      "relay_url": "ws://10.10.118.152:58080/suijichao",
+      "http_bind_ip": "10.10.118.152",
+      "inbox_dir": "inbox_suijichao"
+    },
+	{
+      "name": "test",
+      "app_id": "cli_aaf4088eb9b85cd9",
+      "app_secret": "*****",
+      "relay_url": "ws://10.10.118.152:58080/test",
+      "http_bind_ip": "10.10.118.152",
+      "inbox_dir": "inbox_test"
+    },
+	{
+      "name": "zhenghaitao",
+      "app_id": "cli_aa08e01f08389cc0",
+      "app_secret": "*****",
+      "relay_url": "ws://10.10.118.152:58080/test",
+      "http_bind_ip": "10.10.118.152",
+      "inbox_dir": "inbox_zhenghaitao"
+    }
+  ],
+
+  "http": { "host": "0.0.0.0", "port": 8081 }
+}
