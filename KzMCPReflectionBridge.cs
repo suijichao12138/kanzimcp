@@ -23,6 +23,24 @@ namespace KzMCPChatPlugin
         private object _projectItem;
         private Type _projectItemType;
 
+        // ====== V12 多工程支持：工程池 ======
+        // 每个已打开工程按名字缓存其 Project/ProjectItem/类型，供 @proj:<name> 与 SelectProject 使用。
+        // KanziStudio 本身只有 get_Project(当前Project)/get_Solution/get_PrimaryProject/get_ActiveProject；
+        // 所有已打开工程的枚举在 Solution.get_Projects()（返回 IEnumerable<Project>），反编译确认（非脑补）。
+        private class ProjectSlot
+        {
+            public object Project;
+            public object ProjectItem;
+            public Type ProjectType;
+            public Type ProjectItemType;
+            public string Name;
+            public bool IsActive;
+            public bool IsPrimary;
+        }
+        private readonly Dictionary<string, ProjectSlot> _projectPool = new Dictionary<string, ProjectSlot>(StringComparer.OrdinalIgnoreCase);
+        private object _solutionCached;
+        private string _selectedProjectName;   // SelectProject 选中的工程名；null=默认 ActiveProject
+
         // ====== 对象引用缓存 ======
         private readonly Dictionary<string, object> _objectStore = new Dictionary<string, object>();
         private readonly Dictionary<object, string> _objectToRefId = new Dictionary<object, string>();
@@ -109,6 +127,7 @@ namespace KzMCPChatPlugin
             _projectType = _project?.GetType();
             if (_project != null)
                 CacheReflectionTypes();
+            RefreshProjects();
         }
 
         // ====== 属性 ======
@@ -133,7 +152,251 @@ namespace KzMCPChatPlugin
             _projectType = _project?.GetType();
             if (_project != null)
                 CacheReflectionTypes();
+            // V12：刷新工程池；若之前 SelectProject 选中的工程仍存在，则维持该选中工程为当前上下文
+            RefreshProjects();
+            var prev = _selectedProjectName;
+            _selectedProjectName = null;
+            if (!string.IsNullOrEmpty(prev))
+            {
+                try { SelectProject(prev); } catch { /* SelectProject 内部已回退 ActiveProject */ }
+            }
         }
+
+        // ====== V12 多工程支持 ======
+
+        /// <summary>V12 内部：拿 <c>KanziStudio</c> 的 <c>Solution</c> 对象（@studio.get_Solution）。
+        /// 通过它才能枚举所有已打开工程（Solution.get_Projects）。</summary>
+        private object GetSolution()
+        {
+            if (_solutionCached != null) return _solutionCached;
+            object sol = null;
+            try
+            {
+                var m = FindMethod(_studio.GetType(), "get_Solution", Type.EmptyTypes);
+                if (m != null) sol = m.Invoke(_studio, null);
+            }
+            catch { }
+            _solutionCached = sol;
+            return sol;
+        }
+
+        /// <summary>V12：枚举所有已打开工程（Solution.get_Projects → IEnumerable&lt;Project&gt;），
+        /// 填充 <c>_projectPool</c> 并把每个工程对象注册为 <c>@proj:&lt;工程名&gt;</c> 别名。
+        /// 不切换当前上下文（不碰 ActiveProject）。</summary>
+        public void RefreshProjects()
+        {
+            _projectPool.Clear();
+            object sol = GetSolution();
+            if (sol == null) return;
+
+            object projects;
+            try
+            {
+                var m = FindMethod(sol.GetType(), "get_Projects", Type.EmptyTypes);
+                if (m == null) return;
+                projects = m.Invoke(sol, null);
+            }
+            catch { return; }
+            if (projects == null) return;
+
+            // 确定当前 ActiveProject 对象（用于标记 isActive）
+            object activeProj = null;
+            try { activeProj = _studio.ActiveProject; } catch { }
+            object primaryProj = null;
+            try
+            {
+                var pm = FindMethod(sol.GetType(), "get_PrimaryProject", Type.EmptyTypes);
+                if (pm != null) primaryProj = pm.Invoke(sol, null);
+            }
+            catch { }
+
+            var items = projects as System.Collections.IEnumerable;
+            if (items == null) return;
+
+            int idx = 0;
+            foreach (var projObj in items)
+            {
+                if (projObj == null) continue;
+                idx++;
+                var slot = new ProjectSlot();
+                slot.Project = projObj;
+                slot.ProjectType = projObj.GetType();
+                // 名称：优先 Name 属性，退而求其次用默认别名
+                string name = null;
+                try
+                {
+                    var nameProp = slot.ProjectType.GetProperty("Name");
+                    name = nameProp?.GetValue(projObj)?.ToString();
+                }
+                catch { }
+                if (string.IsNullOrEmpty(name))
+                    name = "project" + idx;
+                // 确保名字唯一
+                string key = name;
+                int n = 2;
+                while (_projectPool.ContainsKey(key))
+                    key = name + "_" + (n++);
+                slot.Name = key;
+                slot.IsActive = ReferenceEquals(projObj, activeProj);
+                slot.IsPrimary = ReferenceEquals(projObj, primaryProj);
+                // 缓存 ProjectItem/WrappedItem
+                try
+                {
+                    var wm = slot.ProjectType.GetMethod("get_WrappedItem",
+                        BindingFlags.Public | BindingFlags.Instance | BindingFlags.FlattenHierarchy,
+                        null, Type.EmptyTypes, null);
+                    if (wm != null)
+                    {
+                        var wi = wm.Invoke(projObj, null);
+                        if (wi != null)
+                        {
+                            slot.ProjectItem = wi;
+                            slot.ProjectItemType = wi.GetType();
+                        }
+                    }
+                }
+                catch { }
+
+                _projectPool[key] = slot;
+                // 注册 @proj:<name> 别名；但若该对象已是 @project/@projectItem（当前活跃工程），
+                // 不覆盖其别名（避免破坏 @project 语义），路径解析走 _projectPool 即可。
+                if (!ReferenceEquals(projObj, _project) && !ReferenceEquals(projObj, _projectItem))
+                {
+                    try { RegisterWithId(projObj, "@proj:" + key); } catch { }
+                }
+            }
+        }
+
+        /// <summary>V12：列出所有已打开工程。返回数组，每项 { name, isActive, isPrimary }。</summary>
+        public Dictionary<string, object>[] ListProjects()
+        {
+            var result = new List<Dictionary<string, object>>();
+            foreach (var kv in _projectPool)
+            {
+                var s = kv.Value;
+                result.Add(new Dictionary<string, object>
+                {
+                    ["name"] = s.Name,
+                    ["isActive"] = s.IsActive,
+                    ["isPrimary"] = s.IsPrimary,
+                    ["ref"] = "@proj:" + s.Name
+                });
+            }
+            return result.ToArray();
+        }
+
+        /// <summary>V12：选择指定工程为「当前操作上下文」。之后所有基于 @project 的调用（路径解析/CreateProjectItem 等）
+        /// 自动作用于该工程，且**不切换 Kanzi Studio 的 ActiveProject**（不打扰老隋正在编辑的工程）。
+        /// name 为空/null/等于 ActiveProject 名 → 切回 ActiveProject。</summary>
+        public string SelectProject(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name))
+            {
+                // 切回 ActiveProject
+                _selectedProjectName = null;
+                object ap;
+                try { ap = _studio.ActiveProject; } catch { ap = null; }
+                if (ap != null)
+                {
+                    _project = ap;
+                    _projectType = ap.GetType();
+                    _projectItem = null;
+                    _projectItemType = null;
+                    CacheReflectionTypes();
+                }
+                return $"已切回 ActiveProject: {GetProjectName()}";
+            }
+
+            name = name.Trim();
+            ProjectSlot slot;
+            if (!_projectPool.TryGetValue(name, out slot))
+            {
+                // 工程池里没有：尝试刷新一次再找
+                RefreshProjects();
+                if (!_projectPool.TryGetValue(name, out slot))
+                    throw new KeyNotFoundException($"找不到工程 '{name}'。用 kz_list_projects 查看所有已打开工程。");
+            }
+
+            _selectedProjectName = slot.Name;
+            _project = slot.Project;
+            _projectType = slot.ProjectType;
+            _projectItem = slot.ProjectItem;
+            _projectItemType = slot.ProjectItemType;
+            if (_projectItem == null)
+                CacheReflectionTypes(); // 兜底：若未缓存 WrappedItem，走通用路径
+
+            return $"已切换到工程: {slot.Name}" + (slot.IsActive ? " (ActiveProject)" : "") +
+                   (slot.IsPrimary ? " (Primary)" : "");
+        }
+
+        /// <summary>V12：当前操作的工程名（SelectProject 选中的，未选中则为 ActiveProject 名）。</summary>
+        public string GetSelectedProjectName()
+        {
+            return _selectedProjectName ?? GetProjectName();
+        }
+
+        /// <summary>V12：解析 `@proj:&lt;name&gt;` 或 `@proj:&lt;name&gt;/&lt;path&gt;`。
+        /// 纯工程名→工程对象；带路径→临时切到该工程解析节点/项目项后切回（不动 ActiveProject）。</summary>
+        private object ResolveProjPath(string body)
+        {
+            body = body.TrimStart('/');
+            int slash = body.IndexOf('/');
+            string projName;
+            string path;
+            if (slash >= 0)
+            {
+                projName = body.Substring(0, slash);
+                path = body.Substring(slash + 1);
+            }
+            else
+            {
+                projName = body;
+                path = null;
+            }
+            if (string.IsNullOrEmpty(projName))
+                throw new KeyNotFoundException($"@proj: 缺少工程名");
+
+            ProjectSlot slot;
+            if (!_projectPool.TryGetValue(projName, out slot))
+            {
+                RefreshProjects();
+                if (!_projectPool.TryGetValue(projName, out slot))
+                    throw new KeyNotFoundException($"找不到工程 '{projName}'。用 kz_list_projects 查看所有已打开工程。");
+            }
+
+            // 纯工程名 → 返回工程对象
+            if (string.IsNullOrEmpty(path))
+                return slot.Project;
+
+            // 带路径 → 临时切换当前上下文解析，再切回
+            object oldProject = _project;
+            object oldProjectItem = _projectItem;
+            Type oldProjectType = _projectType;
+            Type oldProjectItemType = _projectItemType;
+            try
+            {
+                _project = slot.Project;
+                _projectType = slot.ProjectType;
+                _projectItem = slot.ProjectItem;
+                _projectItemType = slot.ProjectItemType;
+                if (_projectItem == null) CacheReflectionTypes();
+
+                var node = GetNodeByPath(path);
+                if (node != null) return node;
+                var pi = GetProjectItem(path);
+                if (pi != null) return pi;
+                throw new KeyNotFoundException($"在工程 '{projName}' 中找不到节点/项目项: '{path}'");
+            }
+            finally
+            {
+                _project = oldProject;
+                _projectType = oldProjectType;
+                _projectItem = oldProjectItem;
+                _projectItemType = oldProjectItemType;
+            }
+        }
+
+
 
         // ====== 调试/诊断方法 ======
         public string[] DebugListProjectMethods()
@@ -275,6 +538,11 @@ namespace KzMCPChatPlugin
                 return null;
             if (refOrPath.StartsWith("@"))
             {
+                // V12: @proj:<工程名>[/路径] → 指定工程（及其中节点/项目项）
+                if (refOrPath.StartsWith("@proj:", StringComparison.OrdinalIgnoreCase))
+                {
+                    return ResolveProjPath(refOrPath.Substring("@proj:".Length));
+                }
                 // v4: @node:/path → 按节点路径解析（target 场景）
                 if (refOrPath.StartsWith("@node:"))
                 {
@@ -517,7 +785,7 @@ namespace KzMCPChatPlugin
             else if (target == "projectItem" || target == "@projectItem")
                 targetObj = _projectItem;
             else
-                targetObj = ResolveObject(target);
+                targetObj = ResolveObject(target);  // V12: 内含 @proj:<名称>[/路径] 解析
 
             if (targetObj == null)
                 throw new InvalidOperationException($"target '{target}' 解析为 null");

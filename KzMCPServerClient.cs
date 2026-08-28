@@ -277,12 +277,28 @@ namespace KzMCPChatPlugin
                     inputSchema = new { type = "object", properties = new { } }
                 },
                 new {
-                    name = "kz_invoke",
-                    description = "通用反射调用：在任意 Kanzi Studio API 对象上调用任意方法",
+                    name = "kz_list_projects",
+                    description = "V12多工程：列出所有已打开的工程（含 ActiveProject/Primary 标记）。不切换当前工程。",
+                    inputSchema = new { type = "object", properties = new { } }
+                },
+                new {
+                    name = "kz_select_project",
+                    description = "V12多工程：选择指定工程为『当前操作上下文』。之后所有基于 @project 的调用自动作用于该工程，且不切换 Kanzi Studio 的 ActiveProject。传入空字符串/省略则切回 ActiveProject。",
                     inputSchema = new {
                         type = "object",
                         properties = new {
-                            target = new { type = "string", description = "调用目标。格式: @studio | @project | @projectItem | @obj1/@obj2 | /节点路径" },
+                            name = new { type = "string", description = "工程名（kz_list_projects 返回的 name）；空/省略=切回 ActiveProject" }
+                        },
+                        required = new[] { "name" }
+                    }
+                },
+                new {
+                    name = "kz_invoke",
+                    description = "通用反射调用：在任意 Kanzi Studio API 对象上调用任意方法。target 额外支持 @proj:<工程名>（指定工程对象）和 @proj:<工程名>/<路径>（指定工程内节点/项目项）",
+                    inputSchema = new {
+                        type = "object",
+                        properties = new {
+                            target = new { type = "string", description = "调用目标。格式: @studio | @project | @projectItem | @obj1/@obj2 | @proj:<工程名>[/路径] | /节点路径" },
                             method = new { type = "string", description = "方法名" },
                             args = new {
                                 type = "array",
@@ -511,6 +527,44 @@ namespace KzMCPChatPlugin
                 case "kz_health":
                     string projectName = _bridge.GetProjectName();
                     return Task.FromResult($"✅ 连接正常\n   工程: {projectName}");
+
+                case "kz_list_projects":
+                    try
+                    {
+                        _bridge.RefreshProjects();
+                        var projs = _bridge.ListProjects();
+                        if (projs == null || projs.Length == 0)
+                            return Task.FromResult($"当前没有已打开的工程。当前 ActiveProject: {_bridge.GetProjectName()}");
+                        var sb = new System.Text.StringBuilder("已打开的工程:\n");
+                        foreach (var p in projs)
+                        {
+                            sb.Append("  · ")
+                              .Append(p.TryGetValue("name", out var nn) ? nn : "?")
+                              .Append("  → @proj:").Append(p.TryGetValue("name", out var n2) ? n2 : "?");
+                            if (p.TryGetValue("isActive", out var ia) && ia is bool bAct && bAct) sb.Append("  [Active]");
+                            if (p.TryGetValue("isPrimary", out var ip) && ip is bool bPri && bPri) sb.Append("  [Primary]");
+                            sb.Append("\n");
+                        }
+                        sb.Append("当前 ActiveProject: ").Append(_bridge.GetProjectName());
+                        return Task.FromResult(sb.ToString());
+                    }
+                    catch (Exception ex)
+                    {
+                        return Task.FromResult($"❌ kz_list_projects 失败: {ex.Message}");
+                    }
+
+                case "kz_select_project":
+                    try
+                    {
+                        string selName = JsonUtils.GetStr(args, "name");
+                        FireLogSync($"  ↳ kz_select_project: '{selName}'");
+                        string msg = _bridge.SelectProject(selName);
+                        return Task.FromResult($"✅ {msg}（之后 @project 相关操作作用于该工程；ActiveProject 不变）");
+                    }
+                    catch (Exception ex)
+                    {
+                        return Task.FromResult($"❌ kz_select_project 失败: {ex.Message}");
+                    }
 
                 case "kz_invoke":
                     string target = JsonUtils.GetStr(args, "target");
