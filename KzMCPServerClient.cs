@@ -472,6 +472,31 @@ namespace KzMCPChatPlugin
                         },
                         required = new string[] { "pid" }
                     }
+                },
+                new {
+                    name = "kz_modify_animation",
+                    description = "给 Animation Data 加/改/删关键帧（驱动 Kanzi ModifyAnimationCommand，带撤销）。action：add(加帧) | modify(改帧，按 time 定位) | remove(删帧，按 time 定位)。keyframes 数组每项 { time(秒), value(动画属性值，数值/布尔/颜色均可), type?(LINEAR/STEP/BEZIER/HERMITE，默认LINEAR) }。animation 传目标动画路径或 @obj 引用。执行后返回中间对象 @obj 引用(parameterRef/modifiedDataRef/commandRecordRef/frames[].frameRef)，可继续用 kz_invoke 操作。",
+                    inputSchema = new {
+                        type = "object",
+                        properties = new {
+                            animation = new { type = "string", description = "目标 Animation Data 路径或 @obj 引用（AnimationPluginWrapper）" },
+                            action = new { type = "string", description = "操作：add(加帧) | modify(改帧) | remove(删帧)" },
+                            keyframes = new {
+                                type = "array",
+                                items = new {
+                                    type = "object",
+                                    properties = new {
+                                        time = new { type = "number", description = "关键帧时间（秒）" },
+                                        value = new { type = "string", description = "关键帧值（数值/布尔/颜色#RRGGBB）" },
+                                        type = new { type = "string", description = "插值类型：LINEAR/STEP/BEZIER/HERMITE（默认LINEAR）" }
+                                    },
+                                    required = new[] { "time", "value" }
+                                },
+                                description = "关键帧数组（[ { time, value, type? } ]）"
+                            }
+                        },
+                        required = new[] { "animation", "action", "keyframes" }
+                    }
                 }
             };
         }
@@ -497,6 +522,22 @@ namespace KzMCPChatPlugin
                     var invokeResult = _bridge.Invoke(target, method, rawArgs.ToArray(), offUi);
                     FireLogSync($"  ↳ 线程策略: {(offUi ? "非UI线程" : "UI线程")}");
                     return Task.FromResult(FormatInvokeResult(invokeResult));
+
+                case "kz_get_return_type":
+                    string rtTarget = JsonUtils.GetStr(args, "target");
+                    string rtMethod = JsonUtils.GetStr(args, "method");
+                    var rtRawArgs = JsonUtils.GetList(args, "args");
+                    FireLogSync($"  ↳ kz_get_return_type: {rtTarget}.{rtMethod}({string.Join(", ", rtRawArgs)})");
+                    var rtResult = _bridge.GetRawReturnType(rtTarget, rtMethod, rtRawArgs.ToArray());
+                    return Task.FromResult($"✅ 返回类型: {rtResult}");
+
+                case "kz_get_raw_ref":
+                    string grTarget = JsonUtils.GetStr(args, "target");
+                    string grMethod = JsonUtils.GetStr(args, "method");
+                    var grRawArgs = JsonUtils.GetList(args, "args");
+                    FireLogSync($"  ↳ kz_get_raw_ref: {grTarget}.{grMethod}({string.Join(", ", grRawArgs)})");
+                    var grResult = _bridge.GetRawRef(grTarget, grMethod, grRawArgs.ToArray());
+                    return Task.FromResult($"✅ 裸对象: {grResult}");
 
                 case "kz_ref_properties":
                     string refTarget = JsonUtils.GetStr(args, "target");
@@ -595,6 +636,14 @@ namespace KzMCPChatPlugin
                     FireLogSync($"  ↳ kz_screenshot_preview: pid={spPid}");
                     var spResult = _bridge.SmartShotBase64(spPid, spMax);
                     return Task.FromResult(FormatInvokeResult(spResult));
+
+                case "kz_modify_animation":
+                    string maAnim = JsonUtils.GetStr(args, "animation");
+                    string maAction = JsonUtils.GetStr(args, "action");
+                    var maKeyframes = JsonUtils.GetList(args, "keyframes");
+                    FireLogSync($"  ↳ kz_modify_animation: 目标={maAnim} action={maAction} 帧数={maKeyframes.Count}");
+                    var maResult = _bridge.ModifyAnimation(maAnim, maAction, maKeyframes.Count > 0 ? maKeyframes : null);
+                    return Task.FromResult(FormatInvokeResult(maResult));
 
                 default:
                     throw new ArgumentException($"未知工具: {toolName}");

@@ -53,6 +53,54 @@ namespace KzMCPChatPlugin
             }
         }
 
+        /// <summary>调用方法并返回裸结果的【确切 CLR 类型全名】（不 WrapResult、不展开 IEnumerable）。
+        /// 用于查明 Get("...") 等返回值的确切类型（如集合是具体 List<T>/Kanzi 集合还是数组），
+        /// 从而知道 Set 该传什么类型的值。</summary>
+        public string GetRawReturnType(string target, string method, object[] args)
+        {
+            object raw;
+            bool old = _suppressWrap;
+            _suppressWrap = true;
+            try
+            {
+                raw = Invoke(target, method, args);
+            }
+            finally
+            {
+                _suppressWrap = old;
+            }
+            if (raw == null) return "<null>";
+            var t = raw.GetType();
+            return t.FullName + " (isEnumerable=" + (raw is System.Collections.IEnumerable) + ", isArray=" + t.IsArray + ", isList=" + (t.IsGenericType && t.GetGenericTypeDefinition() == typeof(List<>)) + ")";
+        }
+
+        /// <summary>调用方法并返回裸结果对象（不 WrapResult、不展开 IEnumerable），若为对象则 RegisterObject 拿到 @obj ref；
+        /// 基础类型/字符串则原样返回。用于拿 DynamicClass 等被展开机制的【集合对象实例】ref，之后可 Set 或调其方法。
+        /// 注意：不能切到非 UI 线程时由调用方决定；此处同 Invoke 默认 UI 线程策略不在本方法内处理。</summary>
+        public object GetRawRef(string target, string method, object[] args)
+        {
+            object raw;
+            bool old = _suppressWrap;
+            _suppressWrap = true;
+            try
+            {
+                raw = Invoke(target, method, args);
+            }
+            finally
+            {
+                _suppressWrap = old;
+            }
+            if (raw == null) return null;
+            var t = raw.GetType();
+            if (raw is string || raw is int || raw is long || raw is float
+                || raw is double || raw is decimal || raw is bool)
+                return raw;
+            if (t.IsEnum)
+                return raw.ToString();
+            // 对象（含 IEnumerable 集合对象本身）→ 注册拿 ref
+            return RegisterObject(raw);
+        }
+
         // ====== 构造函数 ======
         public KzMCPReflectionBridge(KanziStudio studio)
         {
@@ -1178,6 +1226,29 @@ namespace KzMCPChatPlugin
                     return s; // 解析失败保持原样
                 }
 
+                // ---------- 空集合（LINQ Enumerable.Empty<T>()）---------
+                // @empty:类型全名 → Enumerable.Empty<类型>()（返回 IEnumerable<类型> 空序列）
+                //   用于验证 MaterialType.Set("MaterialTypePropertyTypes", IEnumerable<T>) 等只接受枚举、
+                //   不接受 List<>/数组 的属性。空枚举先确认 T，再配合 Add 元素。
+                if (s.StartsWith("@empty:"))
+                {
+                    var emptyObj = TryParseEmptyArg(s.Substring("@empty:".Length).Trim());
+                    if (emptyObj != null)
+                        return emptyObj;
+                    return s; // 解析失败保持原样
+                }
+
+                // ---------- 数组（T[]）---------
+                // @array:类型全名@obj1,@obj2  → T[] 数组（元素为已解析对象，可含多个）
+                // 用于 Set 到只接受数组、不接受 List<>/IEnumerable 的属性。
+                if (s.StartsWith("@array:"))
+                {
+                    var arrObj = TryParseArrayArg(s.Substring("@array:".Length).Trim());
+                    if (arrObj != null)
+                        return arrObj;
+                    return s; // 解析失败保持原样
+                }
+
                 // ---------- 字典 ----------
                 if (s.StartsWith("@dict:"))
                 {
@@ -1441,6 +1512,75 @@ namespace KzMCPChatPlugin
                     try { addM.Invoke(list, new[] { converted }); } catch { }
                 }
                 return list;
+            }
+            catch { return null; }
+        }
+
+        /// <summary>
+        /// 解析 @empty:类型全名 → Enumerable.Empty<类型>()（可枚举空序列）。
+        ///   返回 IEnumerable<类型>，用于 Set 到只接受枚举、不接受 List<>/数组的属性（如 MaterialType 的 MaterialTypePropertyTypes）。
+        ///   类型解析失败则返回 null，由调用方保持原字符串。
+        /// </summary>
+        private object TryParseEmptyArg(string typeName)
+        {
+            if (string.IsNullOrWhiteSpace(typeName)) return null;
+            try
+            {
+                var type = ResolveTypeByName(typeName);
+                if (type == null) return null;
+                var emptyMethod = typeof(Enumerable).GetMethod("Empty").MakeGenericMethod(type);
+                return emptyMethod.Invoke(null, null);
+            }
+            catch { return null; }
+        }
+
+        /// <summary>
+        /// 解析 @array:类型全名@obj1,@obj2 → T[] 数组。
+        ///   元素用 ResolveListElement 解析（@obj 引用还原为实际对象）。返回 T[]；解析失败返回 null。
+        /// </summary>
+        private object TryParseArrayArg(string body)
+        {
+            if (string.IsNullOrWhiteSpace(body)) return null;
+            try
+            {
+                int atIdx = body.IndexOf('@');
+                string typeName = atIdx < 0 ? "" : body.Substring(0, atIdx).Trim();
+                string elemsPart = atIdx < 0 ? body : body.Substring(atIdx);
+                var elems = elemsPart.Split(',');
+                var items = new List<object>();
+                foreach (var e in elems)
+                {
+                    var raw = e.Trim();
+                    if (raw.Length == 0) continue;
+                    object el = ResolveListElement(raw);
+                    if (el != null) items.Add(el);
+                }
+                if (items.Count == 0) return null;
+
+                Type elemType = null;
+                if (!string.IsNullOrEmpty(typeName))
+                    elemType = ResolveTypeByName(typeName);
+                if (elemType == null) elemType = typeof(object);
+
+                var arr = Array.CreateInstance(elemType, items.Count);
+                for (int i = 0; i < items.Count; i++)
+                {
+                    object it = items[i];
+                    object converted = it;
+                    if (elemType != typeof(object) && it != null && !elemType.IsInstanceOfType(it))
+                    {
+                        try
+                        {
+                            if (elemType.IsInterface || elemType.IsAssignableFrom(it.GetType()))
+                                converted = it;
+                            else
+                                converted = Convert.ChangeType(it, elemType);
+                        }
+                        catch { converted = it; }
+                    }
+                    try { arr.SetValue(converted, i); } catch { }
+                }
+                return arr;
             }
             catch { return null; }
         }
@@ -3270,6 +3410,320 @@ namespace KzMCPChatPlugin
 
         #endregion 便捷操作
 
+        #region ModifyAnimation 关键帧编辑（纯反射实现，v10 新增）
+
+        /// <summary>
+        /// [v10] 给 Animation Data 加/改/删关键帧（驱动 Kanzi 命令总线的 ModifyAnimationCommand）。
+        /// 方案乙：原子式——一条命令查动画→建参数→加/改/删帧→建命令记录→Execute 全做完。
+        /// 但内部仍把中间对象（Parameter/ModifiedAnimationData/CommandRecord）注册进对象库并返回 @obj，
+        /// 供后续 kz_invoke 继续操作（返回的 @obj 是真实对象引用，可直接用于后续调用）。
+        ///
+        /// action: add(加帧) | modify(改帧，按 time 定位) | remove(删帧，按 time 定位)
+        /// keyframes: List&lt;object&gt;，每项是 Dictionary：{ time(float), value(必填), type(LINEAR/STEP/BEZIER/HERMITE，默认LINEAR) }
+        /// animation: 目标 Animation Data 的路径 或 @obj 引用（AnimationPluginWrapper）
+        /// </summary>
+        public object ModifyAnimation(string animation, string action, object keyframes = null)
+        {
+            // ★ 全部 Kanzi 对象操作必须在 UI(Dispatcher) 线程，否则报“调用线程无法访问此对象”
+            if (!IsUiThread())
+            {
+                var app = System.Windows.Application.Current;
+                if (app != null && app.Dispatcher != null)
+                {
+                    return app.Dispatcher.Invoke(new Func<object>(() =>
+                        ModifyAnimationCore(animation, action, keyframes)));
+                }
+            }
+            return ModifyAnimationCore(animation, action, keyframes);
+        }
+
+        private object ModifyAnimationCore(string animation, string action, object keyframes)
+        {
+            action = (action ?? "").Trim().ToLowerInvariant();
+            if (action != "add" && action != "modify" && action != "remove")
+                throw new ArgumentException($"action 只能为 add/modify/remove，收到 '{action}'");
+
+            // ---- 1. 解析目标动画 & 拿内部 Animation 对象（关键）----
+            // 目标可能是路径或 @obj 引用（AnimationPluginWrapper）。ResolveObject 拿 wrapper。
+            // 但 AddAnimation 需要的是【内部】Animation（Rightware.Kanzi.Tool.Logic.Project.AnimationItems.Animation）
+            // —— wrapper 的 get_WrappedItem() 返回它。注意：不能用 Invoke（会把 Animation 当 IEnumerable 展开丢 ref），
+            // 必须直接反射调用拿裸对象。
+            if (string.IsNullOrEmpty(animation))
+                throw new ArgumentException("animation 不能为空（传路径或 @obj 引用）");
+
+            object wrapperObj;
+            if (animation == "studio" || animation == "@studio") wrapperObj = _studio;
+            else if (animation == "project" || animation == "@project") wrapperObj = _project;
+            else wrapperObj = ResolveObject(animation);
+
+            // 取内部 Animation：get_WrappedItem()（直扡反射，不经过 WrapResult）
+            object internalAnim = GetWrappedItemRaw(wrapperObj);
+            if (internalAnim == null)
+                throw new InvalidOperationException($"无法从目标拿到内部 Animation 对象: '{animation}'");
+
+            // ---- 2. 解析各类型（全反射，不引用具体类型）----
+            var paramType = ResolveTypeByName("Rightware.Kanzi.Tool.Logic.Project.AnimationItems.Commands.ModifyAnimationCommandParameter");
+            var interpType = ResolveTypeByName("Rightware.Kanzi.Tool.Logic.Project.AnimationItems.InterpolationType");
+            var frameType  = ResolveTypeByName("Rightware.Kanzi.Tool.Logic.Project.AnimationItems.AnimationKeyFrame");
+            var recordType = ResolveTypeByName("Rightware.Kanzi.Tool.Logic.Project.AnimationItems.Commands.ModifyAnimationCommandRecord");
+            if (paramType == null || frameType == null || recordType == null)
+                throw new InvalidOperationException("解析 ModifyAnimation 相关类型失败（LogicProject 未加载？）");
+
+            // ---- 3. 建 ModifyAnimationCommandParameter（无参构造）----
+            var param = Activator.CreateInstance(paramType);
+            string paramRef = RegisterObject(param);
+
+            // ---- 4. AddAnimation(内部Animation) → ModifiedAnimationData（注册 ref 供交互）----
+            // AddAnimation 签名: ModifiedAnimationData AddAnimation(Animation)
+            // ⚠️ 不能直接 GetMethod("AddAnimation")：若存在重载会抛 AmbiguousMatch。按参数类型精确定位 1 参版本。
+            var addAnim = FindMethodByParamTypes(paramType, "AddAnimation", new[] { internalAnim.GetType() })
+                          ?? FindMethodByParamCount(paramType, "AddAnimation", 1);
+            if (addAnim == null) throw new MissingMethodException("ModifyAnimationCommandParameter 上找不到 AddAnimation(Animation)");
+            var modifiedData = addAnim.Invoke(param, new object[] { internalAnim });
+            if (modifiedData == null) throw new InvalidOperationException("AddAnimation 返回 null");
+            string modifiedDataRef = RegisterObject(modifiedData);
+
+            // 用于 remove：需要能按 time 构造一个只读参考帧传给 RemoveKeyframe。
+            // remove 只需要 time（定位已有的帧），Value 可给默认。
+
+            // ---- 5. 处理每个关键帧 ----
+            var framesIn = new List<object>();
+            if (keyframes is IEnumerable kfEnum)
+                foreach (var kf in kfEnum) framesIn.Add(kf);
+            else if (keyframes != null)
+                framesIn.Add(keyframes);
+            if (framesIn.Count == 0)
+                throw new ArgumentException($"{action} 需要至少传一个 keyframes（[{{\"time\":1,\"value\":2, \"type\":\"LINEAR\"}}]）");
+
+            var modifiedDataType = modifiedData.GetType();
+            string methodName = action == "add" ? "AddKeyframe" : (action == "modify" ? "ModifyKeyframe" : "RemoveKeyframe");
+            // ⚠️ 同样避免 GetMethod(name) 歧义（若存在重载）：按参数类型（AnimationKeyFrame）精确定位
+            var kfMethod = FindMethodByParamTypes(modifiedDataType, methodName, new[] { frameType })
+                          ?? FindMethodByParamCount(modifiedDataType, methodName, 1);
+            if (kfMethod == null) throw new MissingMethodException($"ModifiedAnimationData 上找不到 {methodName}");
+
+            var results = new List<object>();
+            foreach (var kf in framesIn)
+            {
+                var dict = kf as Dictionary<string, object>;
+                if (dict == null && kf is IDictionary id2)
+                {
+                    dict = new Dictionary<string, object>();
+                    foreach (System.Collections.DictionaryEntry e in id2)
+                        dict[e.Key?.ToString() ?? ""] = e.Value;
+                }
+                if (dict == null)
+                {
+                    // 允许直接传 { "time":.., "value":.. } 的字典；非字典则报错
+                    throw new ArgumentException("keyframes 每项必须是对象 { time, value, type? }");
+                }
+                object frame = BuildAnimationKeyFrame(dict, frameType, interpType);
+                string frameRef = RegisterObject(frame);
+
+                object kfResult;
+                try
+                {
+                    kfResult = kfMethod.Invoke(modifiedData, new object[] { frame });
+                }
+                catch (System.Reflection.TargetInvocationException tie)
+                {
+                    throw new InvalidOperationException($"{methodName}({DescribeFrame(dict)}) 失败: {tie.InnerException?.Message ?? tie.Message}");
+                }
+                results.Add(new Dictionary<string, object>
+                {
+                    ["frameRef"] = frameRef,
+                    ["time"] = dict.ContainsKey("time") ? Convert.ToString(dict["time"]) : "",
+                    ["value"] = dict.ContainsKey("value") ? Convert.ToString(dict["value"]) : "",
+                    ["resultRef"] = kfResult != null ? RegisterObject(kfResult) : null
+                });
+            }
+
+            // ---- 6. 建 ModifyAnimationCommandRecord(param) 并 Execute（真正执行修改）----
+            // 构造器: .ctor(ModifyAnimationCommandParameter)
+            var recordCtor = recordType.GetConstructor(new[] { paramType });
+            if (recordCtor == null)
+            {
+                // 兜底：按参数可赋值匹配
+                recordCtor = recordType.GetConstructors()
+                    .FirstOrDefault(c => { var p = c.GetParameters(); return p.Length == 1 && p[0].ParameterType.IsAssignableFrom(paramType); });
+            }
+            if (recordCtor == null) throw new MissingMethodException("ModifyAnimationCommandRecord 上找不到接受 ModifyAnimationCommandParameter 的构造器");
+
+            object record;
+            try
+            {
+                record = recordCtor.Invoke(new object[] { param });
+            }
+            catch (System.Reflection.TargetInvocationException tie)
+            {
+                throw new InvalidOperationException($"创建 ModifyAnimationCommandRecord 失败: {tie.InnerException?.Message ?? tie.Message}");
+            }
+            string recordRef = RegisterObject(record);
+
+            // Execute()：真正把改动写进动画（⚠️ 避免 GetMethod(name) 歧义：选无参版本）
+            var execMethod = FindMethodByParamCount(recordType, "Execute", 0)
+                          ?? recordType.GetMethod("Execute", Type.EmptyTypes);
+            if (execMethod == null) throw new MissingMethodException("ModifyAnimationCommandRecord 上找不到 Execute");
+            try
+            {
+                execMethod.Invoke(record, null);
+            }
+            catch (System.Reflection.TargetInvocationException tie)
+            {
+                throw new InvalidOperationException($"ModifyAnimationCommandRecord.Execute 失败: {tie.InnerException?.Message ?? tie.Message}");
+            }
+
+            string animName;
+            try
+            {
+                var np = wrapperObj.GetType().GetProperty("Name");
+                animName = np?.GetValue(wrapperObj)?.ToString() ?? animation;
+            }
+            catch { animName = animation; }
+
+            return new Dictionary<string, object>
+            {
+                ["ok"] = true,
+                ["animation"] = animName,
+                ["action"] = action,
+                ["executed"] = true,
+                ["frameCount"] = results.Count,
+                ["parameterRef"] = paramRef,
+                ["modifiedDataRef"] = modifiedDataRef,
+                ["commandRecordRef"] = recordRef,
+                ["frames"] = results
+            };
+        }
+
+        /// <summary>按参数类型精确定位方法（避免 GetMethod(name) 因重载抛 AmbiguousMatch）。找不到返回 null。</summary>
+        private static MethodInfo FindMethodByParamTypes(Type type, string name, Type[] paramTypes)
+        {
+            if (type == null) return null;
+            MethodInfo best = null;
+            foreach (var m in type.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static))
+            {
+                if (m.Name != name) continue;
+                var ps = m.GetParameters();
+                if (ps.Length != paramTypes.Length) continue;
+                bool ok = true;
+                for (int i = 0; i < ps.Length; i++)
+                    if (!ps[i].ParameterType.IsAssignableFrom(paramTypes[i])) { ok = false; break; }
+                if (ok)
+                {
+                    best = m;
+                    break;
+                }
+            }
+            return best;
+        }
+
+        /// <summary>按参数个数定位方法（多个同参数量时优先取第一个 public 无重名歧义的）。找不到返回 null。</summary>
+        private static MethodInfo FindMethodByParamCount(Type type, string name, int paramCount)
+        {
+            if (type == null) return null;
+            foreach (var m in type.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static))
+            {
+                if (m.Name == name && m.GetParameters().Length == paramCount)
+                    return m;
+            }
+            return null;
+        }
+
+        /// <summary>直扡反射调 get_WrappedItem 拿内部对象（不经过 WrapResult 的 IEnumerable 展开）</summary>
+        private object GetWrappedItemRaw(object wrapperObj)
+        {
+            if (wrapperObj == null) return null;
+            var t = wrapperObj.GetType();
+            MethodInfo m = null;
+            try { m = t.GetMethod("get_WrappedItem"); } catch { }
+            if (m == null)
+            {
+                var prop = t.GetProperty("WrappedItem");
+                m = prop?.GetGetMethod();
+            }
+            if (m == null) return null;
+            try { return m.Invoke(wrapperObj, null); }
+            catch { return null; }
+        }
+
+        /// <summary>构造一个 AnimationKeyFrame。type 默认 LINEAR。value 按目标类型转换（float/int/bool/string）。</summary>
+        private object BuildAnimationKeyFrame(Dictionary<string, object> dict, Type frameType, Type interpType)
+        {
+            // Time: Single (float)
+            float time = 0f;
+            if (dict.ContainsKey("time")) time = Convert.ToSingle(dict["time"]);
+
+            // Value: 按目标动画属性类型转换。Kanzi 动画 target 绝大多数是 Number(float)，
+            // 所以纯数字优先转 float（避免整型被当成 int 导致数值型 target 不匹配）。
+            object value;
+            if (dict.ContainsKey("value") && dict["value"] != null)
+            {
+                string vs = Convert.ToString(dict["value"]);
+                if (bool.TryParse(vs, out var b)) value = b;
+                else if (float.TryParse(vs, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var fv)) value = fv;
+                else if (TryParseColor(vs, out var col)) value = col;
+                else value = vs; // 兜底字符串
+            }
+            else
+            {
+                value = 0f; // remove 等场景未给值，给默认 0
+            }
+
+            // InterpolationType（枚举）：默认 LINEAR
+            object interpVal;
+            string typeName = dict.ContainsKey("type") ? Convert.ToString(dict["type"]) : "LINEAR";
+            try { interpVal = Enum.Parse(interpType, typeName, true); }
+            catch { interpVal = Enum.Parse(interpType, "LINEAR"); }
+
+            // 4参构造器: .ctor(Single, Object, InterpolationType, KeyFrameInterpolationData)
+            // 最后一个 KeyFrameInterpolationData 传 null（默认插值）
+            var ctor = frameType.GetConstructors()
+                .FirstOrDefault(c => c.GetParameters().Length == 4);
+            if (ctor == null) throw new MissingMethodException("AnimationKeyFrame 上找不到 4 参构造器");
+
+            // 需要匹配 (Single, Object, InterpolationType, KeyFrameInterpolationData)
+            // float 与 Single 相同。Enum 值直接放 ref 匹配（反射 Invoke 会拿真实枚举对象匹配）。
+            return ctor.Invoke(new object[] { time, value, interpVal, null });
+        }
+
+        private static string DescribeFrame(Dictionary<string, object> dict)
+        {
+            try
+            {
+                var t = dict.ContainsKey("time") ? Convert.ToString(dict["time"]) : "";
+                var v = dict.ContainsKey("value") ? Convert.ToString(dict["value"]) : "";
+                return $"time={t}, value={v}";
+            }
+            catch { return "?"; }
+        }
+
+        /// <summary>尝试把字符串解析成 System.Windows.Media.Color（#AARRGGBB / #RRGGBB），失败返回 false。</summary>
+        private static bool TryParseColor(string s, out object color)
+        {
+            color = null;
+            if (string.IsNullOrWhiteSpace(s) || !s.StartsWith("#")) return false;
+            try
+            {
+                var ct = ResolveTypeByName("System.Windows.Media.Color");
+                if (ct == null) return false;
+                // System.Windows.Media.ColorConverter.ConvertFromString(s)
+                var cc = ResolveTypeByName("System.Windows.Media.ColorConverter");
+                if (cc == null) return false;
+                var convertMethod = cc.GetMethod("ConvertFromString", new[] { typeof(string) });
+                if (convertMethod == null) return false;
+                var obj = convertMethod.Invoke(null, new object[] { s });
+                if (obj == null) return false;
+                // ConvertFromString 可能返回 Color 或别的；确认赋给 Color
+                if (ct.IsInstanceOfType(obj)) { color = obj; return true; }
+                // 若返回的是别的（如可从 .ToString 转换），兜底
+                color = obj;
+                return true;
+            }
+            catch { return false; }
+        }
+
+        #endregion ModifyAnimation 关键帧编辑
+
         #region CreateNode 辅助方法
 
         /// <summary>
@@ -3989,6 +4443,34 @@ namespace KzMCPChatPlugin
             {
                 m = iface.GetMethod(name, BindingFlags.Public | BindingFlags.Instance, null, paramTypes, null);
                 if (m != null) return m;
+            }
+
+            // [临时诊断增强] 精确类型找不到时，做类型兼容匹配：
+            // 实际参数类型是形参类型（或其子类/接口实现）也视为匹配。
+            // 用于 CreateBinding(Property, EnumTag, String) 传子类 ColorDynamicPropertyType 等场景。
+            // ⚠️ 临时 hack，问题解决后连同 @empty/@array/kz_get_* 一起还原。
+            var candidates = type.GetMethods(BindingFlags.Public | BindingFlags.Instance)
+                .Where(c => c.Name == name && c.GetParameters().Length == paramTypes.Length && !c.IsGenericMethodDefinition)
+                .ToList();
+            foreach (var iface in type.GetInterfaces())
+            {
+                candidates.AddRange(iface.GetMethods(BindingFlags.Public | BindingFlags.Instance)
+                    .Where(c => c.Name == name && c.GetParameters().Length == paramTypes.Length && !c.IsGenericMethodDefinition));
+            }
+            candidates = candidates.GroupBy(c => c.ToString()).Select(g => g.First()).ToList();
+            foreach (var candidate in candidates)
+            {
+                var pars = candidate.GetParameters();
+                bool match = true;
+                for (int i = 0; i < pars.Length; i++)
+                {
+                    var pt = pars[i].ParameterType;
+                    var at = paramTypes[i];
+                    if (pt.IsAssignableFrom(at)) continue;
+                    match = false;
+                    break;
+                }
+                if (match) return candidate;
             }
             return null;
         }
