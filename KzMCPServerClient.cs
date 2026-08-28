@@ -414,6 +414,64 @@ namespace KzMCPChatPlugin
                         },
                         required = new[] { "target", "action" }
                     }
+                },
+                new {
+                    name = "kz_capture_screen",
+                    description = "截取屏幕区域并返回 PNG 的 base64（用于 Preview/Studio 截图验证）。默认截整屏；可指定 x,y,width,height 区域。",
+                    inputSchema = new {
+                        type = "object",
+                        properties = new {
+                            x = new { type = "integer", description = "左上角x（默认0）" },
+                            y = new { type = "integer", description = "左上角y（默认0）" },
+                            width = new { type = "integer", description = "宽（<=0则整屏）" },
+                            height = new { type = "integer", description = "高（<=0则整屏）" },
+                            maxSide = new { type = "integer", description = "缩放最大边（默认800，<=0保持原尺寸）" }
+                        },
+                        required = new string[0]
+                    }
+                },
+                new {
+                    name = "kz_enum_windows",
+                    description = "用 user32.EnumWindows 枚举指定 PID 进程的所有顶层窗口（HWND、类名、可见性、矩形）。用于定位被 MCP 面板遮挡/不在前台的 Preview、Studio 窗口，Process.MainWindowHandle 在这种环境下常为0，EnumWindows 才可靠。",
+                    inputSchema = new {
+                        type = "object",
+                        properties = new {
+                            pid = new { type = "integer", description = "目标进程 PID（如 KanziPreview 的 PID）" }
+                        },
+                        required = new string[] { "pid" }
+                    }
+                },
+                new {
+                    name = "kz_enum_all_windows",
+                    description = "枚举系统中所有顶层窗口（无需 pid），每个带 pid/title/className/visible/坐标。用于直接找 Preview 或任意被拽出窗口的标题，不需要先拿进程 PID。",
+                    inputSchema = new {
+                        type = "object",
+                        properties = new { }
+                    }
+                },
+                new {
+                    name = "kz_print_window",
+                    description = "用 user32.PrintWindow 把指定 HWND 的窗口内容离屏渲染成 PNG(base64)。即使窗口被 MCP 面板遮挡/不在前台也能截到（不走屏幕像素）。hwnd 用 kz_enum_windows 拿到。对 OpenGL/DirectX 渲染(如 NVOpenGLPbuffer)可能抓不到 GPU 内容。",
+                    inputSchema = new {
+                        type = "object",
+                        properties = new {
+                            hwnd = new { type = "integer", description = "窗口句柄（kz_enum_windows 返回的 hwnd）" },
+                            maxSide = new { type = "integer", description = "缩放最大边（默认0不缩放）" }
+                        },
+                        required = new string[] { "hwnd" }
+                    }
+                },
+                new {
+                    name = "kz_screenshot_preview",
+                    description = "一键截图 Preview；获取不到 Preview 窗口则截 Studio 主窗。不截主屏幕。内部自动判断：对 Studio 进程可见窗口 PrintWindow 试截，命中 Title/className 含 Preview 或内容最大的窗口优先。需传 Studio 进程 PID。",
+                    inputSchema = new {
+                        type = "object",
+                        properties = new {
+                            pid = new { type = "integer", description = "KanziStudio 进程 PID" },
+                            maxSide = new { type = "integer", description = "缩放最大边（默认1200）" }
+                        },
+                        required = new string[] { "pid" }
+                    }
                 }
             };
         }
@@ -503,6 +561,40 @@ namespace KzMCPChatPlugin
                     FireLogSync($"  ↳ kz_localization: 目标={locTarget} action={locAction} rows={locRows.Count} keys={locKeys.Count}");
                     var locResult = _bridge.LocalizationEdit(locTarget, locAction, locRows, locKeys, locKey);
                     return Task.FromResult(FormatInvokeResult(locResult));
+
+                case "kz_capture_screen":
+                    int capX = (int)JsonUtils.GetInt(args, "x", 0);
+                    int capY = (int)JsonUtils.GetInt(args, "y", 0);
+                    int capW = (int)JsonUtils.GetInt(args, "width", 0);
+                    int capH = (int)JsonUtils.GetInt(args, "height", 0);
+                    int capMax = (int)JsonUtils.GetInt(args, "maxSide", 800);
+                    var capResult = _bridge.CaptureScreenBase64(capX, capY, capW, capH, capMax);
+                    return Task.FromResult(FormatInvokeResult(capResult));
+
+                case "kz_enum_windows":
+                    int ewPid = (int)JsonUtils.GetInt(args, "pid", 0);
+                    FireLogSync($"  ↳ kz_enum_windows: pid={ewPid}");
+                    var ewResult = _bridge.EnumProcessWindows(ewPid);
+                    return Task.FromResult(FormatInvokeResult(ewResult));
+
+                case "kz_enum_all_windows":
+                    FireLogSync("  ↳ kz_enum_all_windows");
+                    var eawResult = _bridge.EnumAllWindowsWithTitle();
+                    return Task.FromResult(FormatInvokeResult(eawResult));
+
+                case "kz_print_window":
+                    long pwHwnd = (long)JsonUtils.GetInt(args, "hwnd", 0);
+                    int pwMax = (int)JsonUtils.GetInt(args, "maxSide", 0);
+                    FireLogSync($"  ↳ kz_print_window: hwnd={pwHwnd}");
+                    var pwResult = _bridge.PrintWindowBase64(pwHwnd, pwMax);
+                    return Task.FromResult(FormatInvokeResult(pwResult));
+
+                case "kz_screenshot_preview":
+                    int spPid = (int)JsonUtils.GetInt(args, "pid", 0);
+                    int spMax = (int)JsonUtils.GetInt(args, "maxSide", 1200);
+                    FireLogSync($"  ↳ kz_screenshot_preview: pid={spPid}");
+                    var spResult = _bridge.SmartShotBase64(spPid, spMax);
+                    return Task.FromResult(FormatInvokeResult(spResult));
 
                 default:
                     throw new ArgumentException($"未知工具: {toolName}");

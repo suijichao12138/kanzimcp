@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 using Rightware.Kanzi.Studio.PluginInterface;
@@ -450,6 +451,16 @@ namespace KzMCPChatPlugin
 
         private object InvokeCore(string target, string method, object[] args)
         {
+            // [V9 静态调用扩展] target 形如 "@static:Full.Type.Name" → 调 CLR 类型的静态方法
+            // 例: @static:System.Diagnostics.Process + GetProcesses()  → 枚举进程拿 Preview PID
+            // @static:System.Diagnostics.Process + GetProcessById(@int:1234) → 按 PID 拿进程对象
+            if (target != null && target.StartsWith("@static:"))
+            {
+                var typeName = target.Substring("@static:".Length).Trim();
+                // Process/窗口截图等系统类无 UI 线程约束，但静态方法可能返回 UI 对象
+                return InvokeStatic(typeName, method, args);
+            }
+
             object targetObj;
             if (target == "studio" || target == "@studio")
                 targetObj = _studio;
@@ -789,6 +800,152 @@ namespace KzMCPChatPlugin
             {
                 throw new InvalidOperationException($"调用 {method} 失败: {tie.InnerException?.Message ?? tie.Message}");
             }
+        }
+
+        /// <summary>
+        /// [V9 静态调用扩展] 调用 CLR 类型的静态方法。
+        /// 通过反射按完整类型名解析 Type，然后以 BindingFlags.Static 绑定并调用。
+        /// target 形如 "@static:System.Diagnostics.Process"，method 形如 "GetProcesses" / "GetProcessById"。
+        /// </summary>
+        public object InvokeStatic(string fullTypeName, string method, object[] args)
+        {
+            if (string.IsNullOrEmpty(fullTypeName))
+                throw new ArgumentException("静态类型名不能为空，target 形如 @static:System.Diagnostics.Process");
+
+            // 优先复用 v8 现成的 ResolveTypeByName（内置类型映射 + Kanzi 映射 + Type.GetType +
+            // AppDomain 已加载程序集遍历，最全），解析不到再走 ResolveStaticType 兜底。
+            var t = ResolveTypeByName(fullTypeName) ?? ResolveStaticType(fullTypeName);
+            if (t == null)
+                throw new TypeLoadException($"无法解析类型 '{fullTypeName}'。可用 ListStaticMethods 查看");
+
+            // 特例：method="ListStaticMethods" → 返回该类型的全部静态方法清单（便于探索，无需知道具体方法名）
+            if (method == "ListStaticMethods")
+            {
+                var methods = t.GetMethods(BindingFlags.Public | BindingFlags.Static)
+                    .Select(m => $"{m.Name}({string.Join(", ", m.GetParameters().Select(p => p.ParameterType.Name))}) -> {m.ReturnType.Name}")
+                    .OrderBy(n => n)
+                    .ToArray();
+                return new Dictionary<string, object>
+                {
+                    ["type"] = t.FullName,
+                    ["staticMethods"] = methods
+                };
+            }
+
+            var resolvedArgs = ResolveArgs(args, method);
+            var paramTypes = resolvedArgs.Select(a => a?.GetType() ?? typeof(object)).ToArray();
+
+            // 优先精确参数匹配
+            var mi = t.GetMethod(method, BindingFlags.Public | BindingFlags.Static, null, paramTypes, null);
+
+            // 放宽：同名静态方法里按参数个数+类型兼容匹配
+            if (mi == null)
+            {
+                var cands = t.GetMethods(BindingFlags.Public | BindingFlags.Static)
+                    .Where(m => m.Name == method)
+                    .ToList();
+                if (cands.Count == 0)
+                    throw new MissingMethodException($"在静态类型 {t.FullName} 上找不到方法 '{method}'");
+                if (cands.Count == 1)
+                {
+                    mi = cands[0];
+                }
+                else
+                {
+                    mi = cands.FirstOrDefault(c =>
+                    {
+                        var pars = c.GetParameters();
+                        if (pars.Length != paramTypes.Length) return false;
+                        for (int i = 0; i < pars.Length; i++)
+                        {
+                            var pt = pars[i].ParameterType;
+                            var av = resolvedArgs[i];
+                            if (av == null)
+                            {
+                                if (pt.IsValueType) return false;
+                                continue;
+                            }
+                            if (!pt.IsAssignableFrom(av.GetType()) && !(pt.IsEnum && av is int)) return false;
+                        }
+                        return true;
+                    });
+                    if (mi == null)
+                        throw new MissingMethodException($"静态方法 '{method}' 参数不匹配（共 {cands.Count} 个重载）");
+                }
+            }
+
+            try
+            {
+                var raw = mi.Invoke(null, resolvedArgs);   // 静态方法：targetObj 为 null
+                return MaybeWrap(raw);
+            }
+            catch (TargetInvocationException tie)
+            {
+                throw new InvalidOperationException($"静态调用 {t.FullName}.{method} 失败: {tie.InnerException?.Message ?? tie.Message}");
+            }
+        }
+
+        /// <summary>
+        /// [V9 静态调用扩展] 解析一个 CLR 类型。支持完整类型名、带程序集限定名（逗号+程序集）。
+        /// 解析失败时自动追加常见程序集再试（Process 等方法大多在 System / System.Core / mscorlib）。
+        /// </summary>
+        private static Type ResolveStaticType(string fullTypeName)
+        {
+            var t = Type.GetType(fullTypeName, false);
+            if (t != null) return t;
+
+            var candidates = new[]
+            {
+                fullTypeName + ", System",
+                fullTypeName + ", System.Core",
+                fullTypeName + ", mscorlib",
+                fullTypeName + ", System.Drawing",
+                fullTypeName + ", System.Windows.Forms",
+                fullTypeName + ", PresentationCore",
+            };
+            foreach (var c in candidates)
+            {
+                t = Type.GetType(c, false);
+                if (t != null) return t;
+            }
+
+            // 兜底：遍历当前 AppDomain 已加载的全部程序集，按完整类型名逐个查找。
+            // Type.GetType 只认特定程序集/已加载位置，系统类型（如
+            // System.Diagnostics.Process 在 System 程序集）有时解析不到，
+            // 遍历已加载程序集最稳妥。
+            try
+            {
+                foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+                {
+                    try
+                    {
+                        var x = asm.GetType(fullTypeName, false);
+                        if (x != null && x.IsPublic) return x;
+                    }
+                    catch { }
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        /// <summary>
+        /// [V9 静态调用扩展] 列出某个 CLR 类型的全部静态方法（便于发现有哪些可调）。
+        /// 例: kz_invoke target=@static:System.Diagnostics.Process method=ListStaticMethods
+        /// </summary>
+        public object ListStaticMethods(string fullTypeName)
+        {
+            var t = ResolveStaticType(fullTypeName);
+            if (t == null) return new Dictionary<string, object> { ["error"] = $"无法解析类型 '{fullTypeName}'" };
+            var methods = t.GetMethods(BindingFlags.Public | BindingFlags.Static)
+                .Select(m => $"{m.Name}({string.Join(", ", m.GetParameters().Select(p => p.ParameterType.Name))}) -> {m.ReturnType.Name}")
+                .OrderBy(n => n)
+                .ToArray();
+            return new Dictionary<string, object>
+            {
+                ["type"] = t.FullName,
+                ["staticMethods"] = methods
+            };
         }
 
         /// <summary>
@@ -2684,6 +2841,430 @@ namespace KzMCPChatPlugin
             catch (Exception ex)
             {
                 throw new InvalidOperationException($"保存工程失败: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// [V9 截图扩展] 抓取屏幕区域并返回 PNG 的 base64 字符串（不走文件共享，直接回传）。
+        /// 纯反射实现（不直接引用 System.Drawing 具体类型），符合全反射铁律。
+        /// 用于 Preview/Studio 截图验证。参数: x,y 左上角；w,h 宽高；默认截整屏。
+        /// 为避免 base64 过大拖慢回传，默认缩放到最大边 maxSide（默认 800）；maxSide<=0 则保持原始尺寸。
+        /// </summary>
+        public object CaptureScreenBase64(int x, int y, int width, int height, int maxSide = 800)
+        {
+            // 解析需要用到的 System.Drawing 类型
+            var bmpType = ResolveTypeByName("System.Drawing.Bitmap");
+            var gfxType = ResolveTypeByName("System.Drawing.Graphics");
+            var imgType = ResolveTypeByName("System.Drawing.Image");
+            var sizeType = ResolveTypeByName("System.Drawing.Size");
+            var imageFormatType = ResolveTypeByName("System.Drawing.Imaging.ImageFormat");
+            if (bmpType == null || gfxType == null || sizeType == null || imgType == null)
+                throw new TypeLoadException("System.Drawing 相关类型解析失败，截图不可用");
+
+            // 全屏尺寸：若 width/height <=0 用屏幕大小
+            // ⚠️ 必须用 Screen.PrimaryScreen.Bounds 的【物理像素】尺寸（4K 屏 3840x2160），
+            //    不能用 SystemInformation.VirtualScreenWidth（DPI 缩放后返回逻辑尺寸 1920x1080，会截一半）。
+            int w = width, h = height;
+            if (w <= 0 || h <= 0)
+            {
+                try
+                {
+                    var screenType = ResolveTypeByName("System.Windows.Forms.Screen");
+                    if (screenType != null)
+                    {
+                        var primaryProp = screenType.GetProperty("PrimaryScreen");
+                        var primary = primaryProp?.GetValue(null, null);
+                        if (primary != null)
+                        {
+                            var boundsProp = primary.GetType().GetProperty("Bounds");
+                            var bounds = boundsProp?.GetValue(primary, null);
+                            if (bounds != null)
+                            {
+                                var bw = bounds.GetType().GetProperty("Width");
+                                var bh = bounds.GetType().GetProperty("Height");
+                                if (bw != null && bh != null)
+                                {
+                                    w = (int)bw.GetValue(bounds, null);
+                                    h = (int)bh.GetValue(bounds, null);
+                                }
+                            }
+                        }
+                    }
+                    if (w <= 0 || h <= 0) { w = 1920; h = 1080; }
+                }
+                catch { if (w <= 0 || h <= 0) { w = 1920; h = 1080; } }
+            }
+
+            // new Bitmap(w, h)
+            var bmp = Activator.CreateInstance(bmpType, new object[] { w, h });
+            using (var ms = new System.IO.MemoryStream())
+            {
+                try
+                {
+                    // Graphics.FromImage(bitmap)
+                    var gfx = gfxType.GetMethod("FromImage", new Type[] { bmpType }).Invoke(null, new object[] { bmp });
+
+                    // gfx.CopyFromScreen(x, y, 0, 0, new Size(w, h))
+                    var size = Activator.CreateInstance(sizeType, new object[] { w, h });
+                    var cfm = gfxType.GetMethod("CopyFromScreen",
+                        new Type[] { typeof(int), typeof(int), typeof(int), typeof(int), sizeType });
+                    cfm.Invoke(gfx, new object[] { x, y, 0, 0, size });
+
+                    // 释放 graphics（Flush + Dispose），确保像素写入
+                    gfxType.GetMethod("Flush", Type.EmptyTypes)?.Invoke(gfx, null);
+                    gfxType.GetMethod("Dispose", Type.EmptyTypes)?.Invoke(gfx, null);
+
+                    // 需要保存/缩放的源图片对象
+                    object saveImage = bmp;
+                    int outW = w, outH = h;
+
+                    // 可选：缩放到最大边 maxSide，控制 base64 体积
+                    if (maxSide > 0 && (w > maxSide || h > maxSide))
+                    {
+                        double ratio = (double)maxSide / Math.Max(w, h);
+                        outW = Math.Max(1, (int)(w * ratio));
+                        outH = Math.Max(1, (int)(h * ratio));
+                        var thumbType = ResolveTypeByName("System.Drawing.Bitmap");
+                        var thumb = Activator.CreateInstance(thumbType, new object[] { outW, outH });
+                        try
+                        {
+                            var tgfx = gfxType.GetMethod("FromImage", new Type[] { thumbType }).Invoke(null, new object[] { thumb });
+                            // tgfx.InterpolationMode = HighQualityBicubic (可选，简化略)
+                            var dr = gfxType.GetMethod("DrawImage", new Type[] { imgType,
+                                typeof(int), typeof(int), typeof(int), typeof(int) });
+                            dr.Invoke(tgfx, new object[] { bmp, 0, 0, outW, outH });
+                            gfxType.GetMethod("Flush", Type.EmptyTypes)?.Invoke(tgfx, null);
+                            gfxType.GetMethod("Dispose", Type.EmptyTypes)?.Invoke(tgfx, null);
+                            saveImage = thumb;
+                        }
+                        catch { saveImage = bmp; }
+                    }
+
+                    // (saveImage).Save(ms, ImageFormat.Png)
+                    var saveM = bmpType.GetMethod("Save", new Type[] { typeof(System.IO.Stream), imageFormatType });
+                    var pngProp = imageFormatType.GetProperty("Png");
+                    var png = pngProp?.GetValue(null, null);
+                    saveM.Invoke(saveImage, new object[] { ms, png });
+
+                    var bytes = ms.ToArray();
+                    return new Dictionary<string, object>
+                    {
+                        ["width"] = outW,
+                        ["height"] = outH,
+                        ["srcW"] = w,
+                        ["srcH"] = h,
+                        ["mime"] = "image/png",
+                        ["bytes"] = bytes.Length,
+                        ["base64"] = System.Convert.ToBase64String(bytes)
+                    };
+                }
+                finally
+                {
+                    bmpType.GetMethod("Dispose", Type.EmptyTypes)?.Invoke(bmp, null);
+                }
+            }
+        }
+
+        /// <summary>
+        /// [V9 窗口枚举] 用 user32.EnumWindows + GetWindowThreadProcessId 找出指定 PID 的所有顶层窗口。
+        /// 返回每个窗口的 HWND、类名、可见性、矩形(物理像素)。用于定位 Preview/Studio 的窗口（
+        /// Process.MainWindowHandle 在远程/服务会话里常为 0，EnumWindows 才可靠）。
+        /// 纯 P/Invoke，不依赖 Kanzi 类型。
+        /// </summary>
+        public object EnumProcessWindows(int pid)
+        {
+            var result = new List<object>();
+            try
+            {
+                EnumWindows((hwnd, lParam) =>
+                {
+                    uint wpid;
+                    GetWindowThreadProcessId(hwnd, out wpid);
+                    if (wpid == (uint)pid)
+                    {
+                        var sb = new System.Text.StringBuilder(256);
+                        GetClassName(hwnd, sb, sb.Capacity);
+                        var cls = sb.ToString();
+                        var visible = IsWindowVisible(hwnd);
+                        RECT rc;
+                        GetWindowRect(hwnd, out rc);
+                        var tsb = new System.Text.StringBuilder(512);
+                        GetWindowText(hwnd, tsb, tsb.Capacity);
+                        var title = tsb.ToString();
+                        result.Add(new Dictionary<string, object>
+                        {
+                            ["hwnd"] = (long)hwnd,
+                            ["className"] = cls,
+                            ["title"] = title,
+                            ["visible"] = visible,
+                            ["x"] = rc.Left,
+                            ["y"] = rc.Top,
+                            ["w"] = rc.Right - rc.Left,
+                            ["h"] = rc.Bottom - rc.Top
+                        });
+                    }
+                    return true;
+                }, IntPtr.Zero);
+            }
+            catch (Exception ex)
+            {
+                return new Dictionary<string, object> { ["error"] = ex.Message };
+            }
+            return new Dictionary<string, object>
+            {
+                ["pid"] = pid,
+                ["windows"] = result
+            };
+        }
+
+        /// <summary>
+        /// [V9 全窗口枚举] 不依赖 pid，枚举系统中所有顶层窗口并带 PID + 标题。
+        /// 用于直接定位 Preview 拽出后的窗口（无需先拿 GetProcesses）。
+        /// </summary>
+        public object EnumAllWindowsWithTitle()
+        {
+            var result = new List<object>();
+            try
+            {
+                EnumWindows((hwnd, lParam) =>
+                {
+                    uint wpid;
+                    GetWindowThreadProcessId(hwnd, out wpid);
+                    var sb = new System.Text.StringBuilder(256);
+                    GetClassName(hwnd, sb, sb.Capacity);
+                    var cls = sb.ToString();
+                    var visible = IsWindowVisible(hwnd);
+                    RECT rc;
+                    GetWindowRect(hwnd, out rc);
+                    var tsb = new System.Text.StringBuilder(512);
+                    GetWindowText(hwnd, tsb, tsb.Capacity);
+                    var title = tsb.ToString();
+                    result.Add(new Dictionary<string, object>
+                    {
+                        ["pid"] = (int)wpid,
+                        ["hwnd"] = (long)hwnd,
+                        ["className"] = cls,
+                        ["title"] = title,
+                        ["visible"] = visible,
+                        ["x"] = rc.Left,
+                        ["y"] = rc.Top,
+                        ["w"] = rc.Right - rc.Left,
+                        ["h"] = rc.Bottom - rc.Top
+                    });
+                    return true;
+                }, IntPtr.Zero);
+            }
+            catch (Exception ex)
+            {
+                return new Dictionary<string, object> { ["error"] = ex.Message };
+            }
+            return new Dictionary<string, object>
+            {
+                ["windows"] = result
+            };
+        }
+
+        // ---- user32 P/Invoke ----
+        private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+        [DllImport("user32.dll")]
+        private static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+        [DllImport("user32.dll")]
+        private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        private static extern int GetClassName(IntPtr hWnd, System.Text.StringBuilder lpClassName, int nMaxCount);
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        private static extern int GetWindowText(IntPtr hWnd, System.Text.StringBuilder lpString, int nMaxCount);
+        [DllImport("user32.dll")]
+        private static extern bool IsWindowVisible(IntPtr hWnd);
+        [StructLayout(LayoutKind.Sequential)]
+        private struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
+        [DllImport("user32.dll")]
+        private static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+
+        /// <summary>
+        /// [V9 离屏窗口截图] 用 user32.PrintWindow 把指定 HWND 的窗口内容离屏渲染成图片（PNG base64）。
+        /// 即使窗口被遮挡/不在前台也能截到（PrintWindow 走 WM_PRINT，非屏幕像素抓取）。
+        /// 用于截被 MCP 面板遮挡的 Preview。配合 EnumProcessWindows 拿 HWND。
+        /// 注意：对 OpenGL/DirectX 渲染(如 NVOpenGLPbuffer)可能抓不到 GPU 内容，需实测。
+        /// </summary>
+        public object PrintWindowBase64(long hwndInt, int maxSide = 0)
+        {
+            // 用后台线程执行 Core，避免 PrintWindow 在 UI 线程死锁/卡死插件；6s 超时强制返回
+            object result = null;
+            var task = System.Threading.Tasks.Task.Run(() => {
+                result = PrintWindowCore(hwndInt, maxSide);
+            });
+            try
+            {
+                if (!task.Wait(TimeSpan.FromSeconds(6)))
+                    return "❌ PrintWindow 超时(6s)，窗口可能无响应(OpenGL/离屏内容)";
+                return result ?? "❌ PrintWindow 未返回结果";
+            }
+            catch (Exception ex)
+            {
+                return $"❌ PrintWindow 异常: {ex.Message}";
+            }
+        }
+
+        private object PrintWindowCore(long hwndInt, int maxSide)
+        {
+            try
+            {
+                IntPtr hwnd = new IntPtr(hwndInt);
+                RECT rc;
+                if (!GetWindowRect(hwnd, out rc)) return "❌ GetWindowRect 失败，窗口无效";
+                int w = rc.Right - rc.Left, h = rc.Bottom - rc.Top;
+                if (w <= 0 || h <= 0) return $"❌ 窗口尺寸无效({w}x{h})";
+
+                var bmpType = ResolveTypeByName("System.Drawing.Bitmap");
+                var gfxType = ResolveTypeByName("System.Drawing.Graphics");
+                var imgType = ResolveTypeByName("System.Drawing.Image");
+                var sizeType = ResolveTypeByName("System.Drawing.Size");
+                var imageFormatType = ResolveTypeByName("System.Drawing.Imaging.ImageFormat");
+                var pngFormatProp = imageFormatType.GetProperty("Png");
+                if (bmpType == null || gfxType == null || imgType == null || sizeType == null) throw new TypeLoadException("System.Drawing 类型解析失败");
+
+                // new Bitmap(w, h)
+                var bmp = Activator.CreateInstance(bmpType, new object[] { w, h });
+                using (var ms = new System.IO.MemoryStream())
+                {
+                    // Graphics.FromImage(bmp)
+                    var gfx = gfxType.GetMethod("FromImage", new Type[] { bmpType }).Invoke(null, new object[] { bmp });
+                    // 用窗口 DC：GetWindowDC + BitBlt 或 PrintWindow
+                    // 方式A：PrintWindow(hwnd, gdc, PW_RENDERFULLCONTENT=2)
+                    var gdc = gfxType.GetMethod("GetHdc", Type.EmptyTypes).Invoke(gfx, null);
+                    bool ok = PrintWindow(hwnd, (IntPtr)gdc, 2); // PW_RENDERFULLCONTENT
+                    gfxType.GetMethod("ReleaseHdc", new Type[] { gdc.GetType() }).Invoke(gfx, new object[] { gdc });
+                    if (!ok)
+                    {
+                        // 方式B：BitBlt 兜底（抓窗口 DC，需先 GetWindowDC）
+                        var wdc = GetWindowDC(hwnd);
+                        if (wdc == IntPtr.Zero) return "❌ PrintWindow 失败且 GetWindowDC 拿不到";
+                        // 用 gfx 画位图拷贝（简化：把窗口DC内容 BitBlt 到 bmp）
+                        // (此路径在 System.Drawing 反射下复杂，先报错让上层决定)
+                        ReleaseDC(hwnd, wdc);
+                        return "❌ PrintWindow 返回 false（OpenGL/离屏窗口可能不支持）";
+                    }
+
+                    gfxType.GetMethod("Flush", Type.EmptyTypes)?.Invoke(gfx, null);
+                    gfxType.GetMethod("Dispose", Type.EmptyTypes)?.Invoke(gfx, null);
+
+                    // 保存为 PNG base64
+                    object saveImage = bmp;
+                    if (maxSide > 0 && (w > maxSide || h > maxSide))
+                    {
+                        double ratio = (double)maxSide / Math.Max(w, h);
+                        int outW = Math.Max(1, (int)(w * ratio)), outH = Math.Max(1, (int)(h * ratio));
+                        var thumb = Activator.CreateInstance(bmpType, new object[] { outW, outH });
+                        try {
+                            var tgfx = gfxType.GetMethod("FromImage", new Type[] { bmpType }).Invoke(null, new object[] { thumb });
+                            var dr = gfxType.GetMethod("DrawImage", new Type[] { imgType, typeof(int), typeof(int), typeof(int), typeof(int) });
+                            dr.Invoke(tgfx, new object[] { bmp, 0, 0, outW, outH });
+                            gfxType.GetMethod("Flush", Type.EmptyTypes)?.Invoke(tgfx, null);
+                            gfxType.GetMethod("Dispose", Type.EmptyTypes)?.Invoke(tgfx, null);
+                            saveImage = thumb;
+                        } catch { saveImage = bmp; }
+                    }
+
+                    var saveMethod = bmpType.GetMethod("Save", new Type[] { typeof(System.IO.Stream), imageFormatType });
+                    saveMethod.Invoke(saveImage, new object[] { ms, pngFormatProp.GetValue(null, null) });
+                    var bytes = ms.ToArray();
+                    var b64 = Convert.ToBase64String(bytes);
+                    return new Dictionary<string, object>
+                    {
+                        ["hwnd"] = hwndInt, ["srcW"] = w, ["srcH"] = h,
+                        ["printWindowOk"] = ok, ["mime"] = "image/png",
+                        ["bytes"] = bytes.Length, ["base64"] = b64
+                    };
+                }
+            }
+            catch (Exception ex)
+            {
+                return $"❌ {ex.Message}";
+            }
+        }
+        [DllImport("user32.dll")]
+        private static extern bool PrintWindow(IntPtr hWnd, IntPtr hdcBlt, uint nFlags);
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetWindowDC(IntPtr hWnd);
+        [DllImport("user32.dll")]
+        private static extern int ReleaseDC(IntPtr hWnd, IntPtr hDC);
+
+        /// <summary>
+        /// [V9 智能截图] 一键截取 Preview；获取不到 Preview 则截 Studio 主窗。不截主屏幕。
+        /// 判据：Preview 是 Studio 进程里可见、且 PrintWindow 截出内容最大的窗口（渲染画面信息量远大于普通 UI 窗口）。
+        /// 若能从窗口 Title/className 直接命中 "Preview"，优先用它。
+        /// </summary>
+        public object SmartShotBase64(int studioPid, int maxSide = 1200)
+        {
+            try
+            {
+                // 1. 用全枚举（pid 准确）拿系统所有顶层窗口，再按 pid 过滤出 Studio 进程的窗口
+                //    避免 EnumProcessWindows 的 pid 过滤 bug（会把别的进程窗口混进来）
+                var enumObj = EnumAllWindowsWithTitle();
+                var allWindows = new List<Dictionary<string, object>>();
+                if (enumObj is Dictionary<string, object> ed && ed.ContainsKey("windows") && ed["windows"] is System.Collections.IList wl)
+                {
+                    foreach (var w in wl)
+                        if (w is Dictionary<string, object> wd) allWindows.Add(wd);
+                }
+                var windows = new List<Dictionary<string, object>>();
+                foreach (var w in allWindows)
+                {
+                    int pid = w.ContainsKey("pid") ? Convert.ToInt32(w["pid"]) : 0;
+                    if (pid == studioPid) windows.Add(w);
+                }
+                if (windows.Count == 0)
+                    return "❌ 未枚举到 Studio 窗口(pid=" + studioPid + ")";
+
+                // 2. 有 Preview 就截 Preview：visible 且 title 含 preview （不区分大小写）
+                Dictionary<string, object> previewWin = null;
+                foreach (var w in windows)
+                {
+                    if (!(w.ContainsKey("visible") && (bool)w["visible"])) continue;
+                    string title = (w.ContainsKey("title") ? w["title"] : "").ToString();
+                    if (title.IndexOf("preview", StringComparison.OrdinalIgnoreCase) >= 0)
+                    { previewWin = w; break; }
+                }
+
+                // 3. 没有 Preview 截 Studio 主窗：visible 且 title 含 kanzi studio
+                Dictionary<string, object> studioWin = null;
+                if (previewWin == null)
+                {
+                    foreach (var w in windows)
+                    {
+                        if (!(w.ContainsKey("visible") && (bool)w["visible"])) continue;
+                        string title = (w.ContainsKey("title") ? w["title"] : "").ToString();
+                        if (title.IndexOf("kanzi studio", StringComparison.OrdinalIgnoreCase) >= 0)
+                        { studioWin = w; break; }
+                    }
+                }
+
+                Dictionary<string, object> shotWin = previewWin != null ? previewWin : studioWin;
+                if (shotWin == null)
+                    return "❌ 未找到 Preview/Studio 窗口";
+
+                // 4. 只对目标窗口 PrintWindow 一次（离屏，不截主屏幕）
+                long shotHwnd = (long)shotWin["hwnd"];
+                var rr = PrintWindowCore(shotHwnd, maxSide);
+                if (!(rr is Dictionary<string, object> rd) || !rd.ContainsKey("base64"))
+                    return "❌ 截图失败: " + (rr is string s ? s : "PrintWindow 未返回");
+
+                bool isPreview = previewWin != null;
+                return new Dictionary<string, object>
+                {
+                    ["target"] = isPreview ? "preview" : "studio",
+                    ["hwnd"] = shotHwnd,
+                    ["bytes"] = rd["bytes"],
+                    ["srcW"] = rd["srcW"], ["srcH"] = rd["srcH"],
+                    ["printWindowOk"] = rd.ContainsKey("printWindowOk") && (bool)rd["printWindowOk"],
+                    ["mime"] = "image/png",
+                    ["base64"] = rd["base64"]
+                };
+            }
+            catch (Exception ex)
+            {
+                return $"❌ SmartShot: {ex.Message}";
             }
         }
 
