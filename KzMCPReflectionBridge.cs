@@ -983,6 +983,17 @@ namespace KzMCPChatPlugin
                     catch { return s; }
                 }
 
+                // ---------- 列表/集合 ----------
+                // @list:类型名@obj1,@obj2  → List<T>（元素为已解析对象，用于 FontFiles 等 List 集合属性）
+                // @list:@obj1,@obj2          → List<object>
+                if (s.StartsWith("@list:"))
+                {
+                    var listObj = TryParseListArg(s.Substring("@list:".Length).Trim());
+                    if (listObj != null)
+                        return listObj;
+                    return s; // 解析失败保持原样
+                }
+
                 // ---------- 字典 ----------
                 if (s.StartsWith("@dict:"))
                 {
@@ -1189,6 +1200,87 @@ namespace KzMCPChatPlugin
                 return true;
             }
             catch { return false; }
+        }
+
+        /// <summary>
+        /// 解析 @list: 前缀后的内容 → List&lt;T&gt;。<br/>
+        /// 格式：<c>@list:类型名@obj1,@obj2</c>（元素为对象引用）或
+        /// <c>@list:@obj1,@obj2</c>（无类型名 → List&lt;object&gt;）。<br/>
+        /// 类型名是“第一个 @ 之前”的部分（可为空），元素以逗号分隔。
+        /// 用于给 FontFiles 这类 List 集合属性赋值（文档：Set(FontFiles, List&lt;FontFile&gt;)）。
+        /// 解析失败返回 null（调用方保留原字符串）。
+        /// </summary>
+        private object TryParseListArg(string body)
+        {
+            if (string.IsNullOrWhiteSpace(body)) return null;
+            try
+            {
+                // 分离“类型名”与“元素列表”：类型名 = 第一个 @ 之前的部分（可为空）
+                int atIdx = body.IndexOf('@');
+                string typeName = atIdx < 0 ? "" : body.Substring(0, atIdx).Trim();
+                string elemsPart = atIdx < 0 ? body : body.Substring(atIdx);
+                var elems = elemsPart.Split(',');
+
+                var items = new List<object>();
+                foreach (var e in elems)
+                {
+                    var raw = e.Trim();
+                    if (raw.Length == 0) continue;
+                    object el = ResolveListElement(raw);
+                    if (el != null) items.Add(el);
+                }
+                if (items.Count == 0 && elems.Length == 1) return null; // 无任何有效元素
+
+                Type elemType = null;
+                if (!string.IsNullOrEmpty(typeName))
+                    elemType = ResolveTypeByName(typeName);
+                if (elemType == null) elemType = typeof(object);
+
+                var listType = typeof(List<>).MakeGenericType(elemType);
+                var list = Activator.CreateInstance(listType);
+                var addM = listType.GetMethod("Add");
+                foreach (var it in items)
+                {
+                    object converted = it;
+                    if (elemType != typeof(object) && it != null && !elemType.IsInstanceOfType(it))
+                    {
+                        try
+                        {
+                            // 元素引用是已登记对象（非原始类型）时，尝试按接口/实现类型转换
+                            if (elemType.IsInterface || elemType.IsAssignableFrom(it.GetType()))
+                                converted = it; // 实现类型可直接赋给接口
+                            else
+                                converted = Convert.ChangeType(it, elemType);
+                        }
+                        catch { converted = it; }
+                    }
+                    try { addM.Invoke(list, new[] { converted }); } catch { }
+                }
+                return list;
+            }
+            catch { return null; }
+        }
+
+        /// <summary>
+        /// 解析 @list: 里的单个元素。支持：
+        ///   - @objNNN（已登记对象引用）→ 还原为实际对象
+        ///   - @string:xxx → 字符串
+        ///   - 数值/布尔 → 基础类型
+        ///   其余按字符串原样返回。
+        /// </summary>
+        private object ResolveListElement(string raw)
+        {
+            if (raw.StartsWith("@obj") && _objectStore.ContainsKey(raw))
+            {
+                var r = _objectStore[raw];
+                // 对 Type 对象保持字符串引用（与 ResolveSingleArg 一致）
+                return (r is Type) ? raw : r;
+            }
+            if (raw.StartsWith("@string:")) return raw.Substring("@string:".Length);
+            if (int.TryParse(raw, out int ii)) return ii;
+            if (bool.TryParse(raw, out bool bb)) return bb;
+            if (float.TryParse(raw, out float ff)) return ff;
+            return raw;
         }
 
         /// <summary>
