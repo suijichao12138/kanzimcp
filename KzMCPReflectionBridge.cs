@@ -3,6 +3,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using System.Threading;
 using Rightware.Kanzi.Studio.PluginInterface;
 
 namespace KzMCPChatPlugin
@@ -297,9 +298,31 @@ namespace KzMCPChatPlugin
         /// <summary>
         /// 通用反射调用：在任意目标上调用任意方法。
         /// target 支持: "@refId", "@studio", "@project", "@projectItem", "/path/to/node"
+        /// 默认走 UI 线程（保持旧行为），兼容旧调用方。
         /// </summary>
         public object Invoke(string target, string method, object[] args)
         {
+            return Invoke(target, method, args, false);
+        }
+
+        /// <summary>
+        /// 通用反射调用（带线程策略）。
+        /// runOffUiThread=false：保持默认行为，统一切到 UI 线程执行（Kanzi Studio 是 WPF 应用,
+        ///   大量对象(尤其 BindingHost/DSO) 只能在创建它的 UI(Dispatcher)线程访问）。
+        /// runOffUiThread=true：**直接在当前线程（已是线程池线程）上同步执行 InvokeCore**，
+        ///   不做任何新线程/Dispatcher 调度，与旧版"不强制UI线程"的行为一致。
+        /// </summary>
+        public object Invoke(string target, string method, object[] args, bool runOffUiThread)
+        {
+            if (runOffUiThread)
+            {
+                // ★★ 关键：KzMCPServerClient 已在 Task.Run(async ...) 里调用到这里，
+                // 当前线程就已经是 .NET 线程池的托管线程（和旧版 HTTP 不强制UI线程时一致）。
+                // 所以直接在当前线程上同步执行 InvokeCore 即可，绝不 new Thread / StartNew
+                //（那两种都会绕开线程池托管上下文 → 原生层访问违例崩溃）。
+                return InvokeCore(target, method, args);
+            }
+
             // ★ 统一调度到 UI 线程: Kanzi Studio 是 WPF 应用, 大量对象(尤其 BindingHost/DSO)
             //   只能在创建它的 UI(Dispatcher)线程访问。为避免各类"调用线程无法访问此对象",
             //   **所有**反射调用统一切到 UI 线程执行。
@@ -314,6 +337,76 @@ namespace KzMCPChatPlugin
             }
             // 已在 UI 线程(含 Dispatcher.Invoke 进去之后内部再调用) → 直接执行
             return InvokeCore(target, method, args);
+        }
+
+        /// <summary>
+        /// 判断某次 kz_invoke 是否应跑在非UI线程（线程策略）。
+        /// 规则：状态机相关的创建/设置类调用走非UI线程提速；其余反射仍走UI线程。
+        /// 会实际解析 target 指向的运行时对象类型，从而把 State/StateObject 上的
+        /// set_Item/get_Item 等调用也判为可离线。由 KzMCPServerClient 分派 kz_invoke 时调用。
+        /// </summary>
+        public bool ShouldRunOffUiThread(string target, string method, object[] args)
+        {
+            if (string.IsNullOrEmpty(method)) return false;
+
+            // 批量事务包裹：状态机创建通常包在 Begin/Commit 批里
+            if (method == "BeginBatchModification" || method == "CommitBatchModification")
+                return true;
+
+            // 创建状态机/状态组/状态/状态对象
+            if (method == "CreateProjectItem")
+            {
+                if (args != null && args.Length >= 1 && args[0] is string typeStr)
+                {
+                    var t = typeStr.Replace("@type:", "").Trim();
+                    if (t == "StateManager" || t == "StateGroup" ||
+                        t == "State" || t == "StateObject" ||
+                        t.EndsWith("StateManager") || t.EndsWith("StateGroup") ||
+                        t.EndsWith("State") || t.EndsWith("StateObject"))
+                        return true;
+                }
+                return false;
+            }
+
+            // 状态/状态对象的属性与控制值设置
+            if (method == "set_TargetObjectPath" || method == "get_TargetObjectPath")
+                return true;
+
+            if (method == "set_Item" || method == "get_Item")
+            {
+                // 解析目标对象的运行时类型：若是 State/StateObject 包装器则判为可离线(提速)；
+                // 其余 set_Item/get_Item（如普通节点属性）保守保持 UI 线程。
+                if (IsStateTarget(target))
+                    return true;
+                return false;
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// 判断 target 指向的运行时对象是否为状态机相关包装器
+        /// （StateManager/StateGroup/State/StateObject）。
+        /// </summary>
+        private bool IsStateTarget(string target)
+        {
+            try
+            {
+                object obj = ResolveObject(target);
+                if (obj == null) return false;
+                var name = obj.GetType().Name;
+                if (string.IsNullOrEmpty(name)) return false;
+                return name.IndexOf("StateManager", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                       name.IndexOf("StateGroup", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                       name.IndexOf("StateObject", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                       // 注意：State 是 StateObject 的子串，需排除误判；这里单独精确判断
+                       name.Equals("StatePluginWrapper", StringComparison.OrdinalIgnoreCase) ||
+                       name.Equals("State", StringComparison.OrdinalIgnoreCase);
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         private static bool IsUiThread()

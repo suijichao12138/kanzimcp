@@ -403,7 +403,10 @@ namespace KzMCPChatPlugin
                     string method = JsonUtils.GetStr(args, "method");
                     var rawArgs = JsonUtils.GetList(args, "args");
                     FireLogSync($"  ↳ kz_invoke: {target}.{method}({string.Join(", ", rawArgs)})");
-                    var invokeResult = _bridge.Invoke(target, method, rawArgs.ToArray());
+                    // 线程策略：状态机相关的创建/设置调用走非UI线程提速，其余反射仍走UI线程
+                    bool offUi = _bridge.ShouldRunOffUiThread(target, method, rawArgs.ToArray());
+                    var invokeResult = _bridge.Invoke(target, method, rawArgs.ToArray(), offUi);
+                    FireLogSync($"  ↳ 线程策略: {(offUi ? "非UI线程" : "UI线程")}");
                     return Task.FromResult(FormatInvokeResult(invokeResult));
 
                 case "kz_ref_properties":
@@ -511,17 +514,22 @@ namespace KzMCPChatPlugin
             var lines = new List<string>();
             if (props.TryGetValue("type", out var type))
                 lines.Add($"类型: {type}");
-            if (props.TryGetValue("properties", out var raw) && raw is List<object> list)
+            if (props.TryGetValue("properties", out var raw))
             {
                 lines.Add("属性:");
-                foreach (var item in list)
+                // ★ 兼容 List<Dictionary<string,object>>（泛型不变性，as List<object> 会失败）
+                var list = raw as System.Collections.IEnumerable;
+                if (list != null)
                 {
-                    if (item is Dictionary<string, object> p)
+                    foreach (var item in list)
                     {
-                        string name = JsonUtils.GetStr(p, "name");
-                        string ptype = JsonUtils.GetStr(p, "type");
-                        string value = JsonUtils.GetStr(p, "value");
-                        lines.Add($"  ▪ {name} ({ptype}) = {value}");
+                        if (item is Dictionary<string, object> p)
+                        {
+                            string name = JsonUtils.GetStr(p, "name");
+                            string ptype = JsonUtils.GetStr(p, "type");
+                            string value = JsonUtils.GetStr(p, "value");
+                            lines.Add($"  ▪ {name} ({ptype}) = {value}");
+                        }
                     }
                 }
             }
@@ -534,13 +542,13 @@ namespace KzMCPChatPlugin
             var lines = new List<string>();
             if (methods.TryGetValue("type", out var type))
                 lines.Add($"类型: {type}");
-            if (methods.TryGetValue("methods", out var raw) && raw is List<object> list)
+            if (methods.TryGetValue("methods", out var raw) && raw is System.Collections.IEnumerable mlist)
             {
                 lines.Add("方法:");
-                foreach (var item in list)
+                foreach (var item in mlist)
                     lines.Add($"  ▪ {item}");
             }
-            if (methods.TryGetValue("interfaceMethods", out var rawIface) && rawIface is List<object> ifaceList)
+            if (methods.TryGetValue("interfaceMethods", out var rawIface) && rawIface is System.Collections.IEnumerable ifaceList)
             {
                 lines.Add("接口方法:");
                 foreach (var item in ifaceList)
