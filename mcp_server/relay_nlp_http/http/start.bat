@@ -1,0 +1,1 @@
+kz_mcp_http.exe --relay-base ws://127.0.0.1:58080 --users users.json --listen 0.0.0.0:9001

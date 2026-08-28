@@ -1,0 +1,1 @@
+python feishu_bridge.py --config feishu_config.json
