@@ -5,7 +5,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace KzNLPChatPlugin
+namespace KzMCPChatPlugin
 {
     /// <summary>
     /// WebSocket 客户端，连接中继的 nlp_client 角色
@@ -41,6 +41,7 @@ namespace KzNLPChatPlugin
             }
 
             _ws = new ClientWebSocket();
+            _ws.Options.KeepAliveInterval = TimeSpan.FromSeconds(30);
             _cts = new CancellationTokenSource();
 
             try

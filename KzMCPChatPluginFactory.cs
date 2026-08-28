@@ -2,26 +2,25 @@ using System;
 using System.ComponentModel.Composition;
 using Rightware.Kanzi.Studio.PluginInterface;
 
-namespace KzNLPChatPlugin
+namespace KzMCPChatPlugin
 {
     /// <summary>
-    /// Kanzi Studio NLP 聊天助手插件工厂
-    /// 通过自然语言让 AI 操作 Kanzi Studio
+    /// Kanzi Studio MCP + 聊天助手整合插件工厂
     /// </summary>
     [Export(typeof(PluginContent))]
-    public class KzNLPChatPluginFactory : PluginWindowFactory
+    public class KzMCPChatPluginFactory : PluginWindowFactory
     {
         private KanziStudio _studio;
 
-        public string Name => "KzNLPChatPlugin";
-        public string DisplayName => "AI 聊天助手";
-        public string Description => "通过自然语言让 AI 自动创建和编辑 Kanzi Studio UI 节点、绑定和交互";
+        public string Name => "KzMCPChatPlugin";
+        public string DisplayName => "AI MCP 助手";
+        public string Description => "MCP Server 控制台 + AI 聊天助手";
 
         public CommandPlacement CommandPlacement
         {
             get
             {
-                return new CommandPlacement("aiChatMenu", ContextMenuPlacement.NONE, false, null);
+                return new CommandPlacement("aiMCPMenu", ContextMenuPlacement.NONE, false, null);
             }
         }
 
@@ -40,7 +39,7 @@ namespace KzNLPChatPlugin
 
         public PluginWindow CreateWindow(PluginWindowState state)
         {
-            return new KzNLPChatWindow(_studio, state.WindowNotifier);
+            return new KzMainWindow(_studio);
         }
     }
 }

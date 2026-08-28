@@ -1,11 +1,11 @@
 using System.Reflection;
 using System.Runtime.InteropServices;
 
-[assembly: AssemblyTitle("KzNLPChatPlugin")]
-[assembly: AssemblyDescription("Kanzi Studio NLP 聊天助手插件")]
+[assembly: AssemblyTitle("KzMCPChatPlugin")]
+[assembly: AssemblyDescription("Kanzi Studio MCP + 聊天助手整合插件")]
 [assembly: AssemblyConfiguration("")]
 [assembly: AssemblyCompany("")]
-[assembly: AssemblyProduct("KzNLPChatPlugin")]
+[assembly: AssemblyProduct("KzMCPChatPlugin")]
 [assembly: AssemblyCopyright("")]
 [assembly: AssemblyTrademark("")]
 [assembly: AssemblyCulture("")]

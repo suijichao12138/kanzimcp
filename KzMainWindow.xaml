@@ -1,0 +1,127 @@
+<UserControl x:Class="KzMCPChatPlugin.KzMainWindow"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             mc:Ignorable="d"
+             d:DesignHeight="520" d:DesignWidth="560">
+    <Grid Margin="6">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- 第1行：MCP Server 连接栏 -->
+        <Border Grid.Row="0" Background="#1A1A1A" BorderBrush="#444" BorderThickness="1" Margin="0,0,0,4" Padding="6">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" Text="MCP" VerticalAlignment="Center"
+                           FontSize="12" Foreground="#888" FontWeight="Bold" Margin="0,0,4,0"/>
+                <TextBox Grid.Column="1" x:Name="MCPUrlBox"
+                         Text="ws://10.10.118.152:58080/suijichao"
+                         FontSize="11" VerticalAlignment="Center"/>
+                <Button Grid.Column="2" x:Name="ConnectMCPBtn" Content="连接" 
+                        Width="46" Height="22" FontSize="11" Margin="4,0,2,0"
+                        Click="ConnectMCP_Click"/>
+                <Button Grid.Column="3" x:Name="DisconnectMCPBtn" Content="断开" 
+                        Width="46" Height="22" FontSize="11"
+                        IsEnabled="False" Click="DisconnectMCP_Click"/>
+                <TextBlock Grid.Column="4" x:Name="MCPStatus" Text="⚫" 
+                           FontSize="14" VerticalAlignment="Center" Margin="4,0,0,0"/>
+            </Grid>
+        </Border>
+
+        <!-- 第2行：聊天助手连接栏 -->
+        <Border Grid.Row="1" Background="#1A1A1A" BorderBrush="#444" BorderThickness="1" Margin="0,0,0,4" Padding="6">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" Text="聊天" VerticalAlignment="Center"
+                           FontSize="12" Foreground="#888" FontWeight="Bold" Margin="0,0,4,0"/>
+                <TextBox Grid.Column="1" x:Name="ChatUrlBox"
+                         Text="ws://10.10.118.152:58080/suijichao"
+                         FontSize="11" VerticalAlignment="Center"/>
+                <Button Grid.Column="2" x:Name="ConnectChatBtn" Content="连接" 
+                        Width="46" Height="22" FontSize="11" Margin="4,0,2,0"
+                        Click="ConnectChat_Click"/>
+                <Button Grid.Column="3" x:Name="DisconnectChatBtn" Content="断开" 
+                        Width="46" Height="22" FontSize="11"
+                        IsEnabled="False" Click="DisconnectChat_Click"/>
+                <TextBlock Grid.Column="4" x:Name="ChatStatus" Text="⚫" 
+                           FontSize="14" VerticalAlignment="Center" Margin="4,0,0,0"/>
+            </Grid>
+        </Border>
+
+        <!-- 第3行：MCP 日志窗口 -->
+        <Grid Grid.Row="2" Margin="0,0,0,4">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+            <Grid Grid.Row="0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" Text="MCP 日志" FontSize="11" Foreground="#888"/>
+                <Button Grid.Column="1" x:Name="ClearLogBtn" Content="清空" 
+                        Width="40" Height="18" FontSize="10" Margin="0,0,0,2"
+                        Click="ClearLog_Click"/>
+            </Grid>
+            <TextBox Grid.Row="1" x:Name="MCPLogBox" 
+                     IsReadOnly="True"
+                     Background="#1E1E1E" Foreground="#AAA"
+                     FontSize="11" FontFamily="Consolas"
+                     BorderBrush="#555" BorderThickness="1"
+                     Padding="4"
+                     VerticalScrollBarVisibility="Auto"
+                     TextWrapping="Wrap"/>
+        </Grid>
+
+        <!-- 第4行：聊天消息窗口 -->
+        <Grid Grid.Row="3" Margin="0,0,0,4">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+            <TextBlock Grid.Row="0" Text="聊天消息" FontSize="11" Foreground="#888" Margin="0,0,0,2"/>
+            <ScrollViewer Grid.Row="1" x:Name="MessageScroller"
+                          VerticalScrollBarVisibility="Auto"
+                          Background="#1E1E1E" BorderBrush="#555" BorderThickness="1"
+                          Padding="6">
+                <StackPanel x:Name="MessagePanel" />
+            </ScrollViewer>
+        </Grid>
+
+        <!-- 第5行：输入框 + 发送 -->
+        <Grid Grid.Row="4">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <TextBox Grid.Column="0" x:Name="InputBox"
+                     Height="28" FontSize="13"
+                     Padding="4,3"
+                     AcceptsReturn="False"
+                     IsEnabled="False"
+                     KeyDown="InputBox_KeyDown"/>
+            <Button Grid.Column="1" x:Name="SendButton" Content="发送" 
+                    Width="56" Height="28" Margin="6,0,0,0"
+                    IsEnabled="False" Click="SendButton_Click"/>
+        </Grid>
+    </Grid>
+</UserControl>

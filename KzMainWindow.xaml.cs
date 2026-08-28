@@ -7,63 +7,131 @@ using System.Windows.Input;
 using Media = System.Windows.Media;
 using Rightware.Kanzi.Studio.PluginInterface;
 
-namespace KzNLPChatPlugin
+namespace KzMCPChatPlugin
 {
-    public partial class KzNLPChatWindow : UserControl, PluginWindow, IDisposable
+    /// <summary>
+    /// 主窗口：上下结构 — 连接栏 / MCP 日志 / 聊天消息 / 输入框
+    /// </summary>
+    public partial class KzMainWindow : UserControl, PluginWindow, IDisposable
     {
-#pragma warning disable CS0067
+        #pragma warning disable CS0067
         public event EventHandler TitleChanged;
-#pragma warning restore CS0067
+        #pragma warning restore CS0067
 
         public string Icon => null;
-        public string Title => "AI 聊天助手";
+        public string Title => "AI MCP 助手";
         public PluginWindowState SerializeState() => null;
 
-        public void Dispose() => _wsClient?.Dispose();
-
         private readonly KanziStudio _studio;
+        private readonly KzMCPReflectionBridge _bridge;
+        private readonly KzMCPServerClient _mcpClient;
+#pragma warning disable CS0649
         private KzWSClient _wsClient;
-        private bool _connected;
+#pragma warning restore CS0649
+        private bool _chatConnected;
 
-        // 颜色常量
+        // 颜色常量（聊天气泡用）
         private static readonly Media.SolidColorBrush
             CUser = new Media.SolidColorBrush(Media.Color.FromRgb(0x3A, 0x3A, 0x3A)),
             CAi = new Media.SolidColorBrush(Media.Color.FromRgb(0x2A, 0x2A, 0x2A)),
             CSys = new Media.SolidColorBrush(Media.Color.FromRgb(0x1E, 0x3A, 0x5F)),
             CThink = new Media.SolidColorBrush(Media.Color.FromRgb(0x33, 0x33, 0x33)),
             CError = new Media.SolidColorBrush(Media.Color.FromRgb(0x5C, 0x1A, 0x1A)),
-            CChoice = new Media.SolidColorBrush(Media.Color.FromRgb(0x1A, 0x3C, 0x2E)),
-            ColorBtn = new Media.SolidColorBrush(Media.Color.FromRgb(0x4C, 0xAF, 0x50)),
             W = Media.Brushes.White,
             G = new Media.SolidColorBrush(Media.Color.FromRgb(0xCC, 0xCC, 0xCC));
 
-
-
-        public KzNLPChatWindow(KanziStudio studio, object windowNotifier)
+        public KzMainWindow(KanziStudio studio)
         {
             InitializeComponent();
+
             _studio = studio;
-            AddSysMsg("输入中继地址，点击「连接」后即可发送自然语言指令。");
+            _bridge = new KzMCPReflectionBridge(studio);
+            _mcpClient = new KzMCPServerClient(_bridge);
+
+            _mcpClient.ConnectionChanged += OnMCPConnectionChanged;
+            _mcpClient.LogReceived += OnMCPLog;
+
+            // 工程信息
+            try
+            {
+                _bridge.Refresh();
+                MCPLog("工程: " + _bridge.GetProjectName());
+            }
+            catch { }
+
+            MCPLog("AI MCP 助手已加载");
         }
 
-        #region 连接
+        #region MCP Server 连接
 
-        private async void ConnectButton_Click(object sender, RoutedEventArgs e)
+        private void OnMCPConnectionChanged(bool connected)
         {
-            string url = UrlBox.Text.Trim();
+            Dispatcher.Invoke(() =>
+            {
+                ConnectMCPBtn.IsEnabled = !connected;
+                DisconnectMCPBtn.IsEnabled = connected;
+                MCPUrlBox.IsEnabled = !connected;
+                MCPStatus.Text = connected ? "●" : "○";
+                MCPStatus.Foreground = connected ? new Media.SolidColorBrush(Media.Colors.Lime) : new Media.SolidColorBrush(Media.Colors.Gray);
+                MCPLog($"MCP Server {(connected ? "已连接" : "已断开")}");
+                if (connected) RefreshProjectInfo();
+            });
+        }
+
+        private void OnMCPLog(string msg)
+        {
+            Dispatcher.Invoke(() => MCPLog(msg));
+        }
+
+        private void MCPLog(string msg)
+        {
+            MCPLogBox.AppendText($"[{DateTime.Now:HH:mm:ss}] {msg}\n");
+            MCPLogBox.ScrollToEnd();
+        }
+
+        private void RefreshProjectInfo()
+        {
+            try
+            {
+                _bridge.Refresh();
+                MCPLog("工程: " + _bridge.GetProjectName());
+            }
+            catch { }
+        }
+
+        private async void ConnectMCP_Click(object sender, RoutedEventArgs e)
+        {
+            string url = MCPUrlBox.Text.Trim();
+            if (string.IsNullOrEmpty(url)) return;
+            ConnectMCPBtn.IsEnabled = false;
+            MCPLog($"正在连接 MCP Server: {url}");
+            await _mcpClient.ConnectAsync(url);
+        }
+
+        private async void DisconnectMCP_Click(object sender, RoutedEventArgs e)
+        {
+            await _mcpClient.DisconnectAsync();
+        }
+
+        #endregion
+
+        #region 聊天助手
+
+        private async void ConnectChat_Click(object sender, RoutedEventArgs e)
+        {
+            string url = ChatUrlBox.Text.Trim();
             if (string.IsNullOrEmpty(url))
             {
                 AddSysMsg("请输入中继地址");
                 return;
             }
-
             if (!url.StartsWith("ws://") && !url.StartsWith("wss://"))
             {
                 AddSysMsg("地址格式：ws://host:port/用户名");
                 return;
             }
 
-            // 从 URL 解析 host, port, channel
+            // 解析 host, port, channel
             string remain = url.StartsWith("ws://") ? url.Substring(5) : url.Substring(6);
             string channel = "default";
             int slashIdx = remain.IndexOf('/');
@@ -81,39 +149,41 @@ namespace KzNLPChatPlugin
                 int.TryParse(remain.Substring(colonIdx + 1), out port);
             }
 
-            UrlBox.IsEnabled = false;
-            ConnectButton.IsEnabled = false;
+            ChatUrlBox.IsEnabled = false;
+            ConnectChatBtn.IsEnabled = false;
 
             AddSysMsg($"正在连接 {host}:{port}/{channel} ...");
 
             _wsClient = new KzWSClient(host, port, channel);
-            _wsClient.ConnectionChanged += OnConnChanged;
-            _wsClient.MessageReceived += OnMsg;
-            _wsClient.ErrorOccurred += OnErr;
+            _wsClient.ConnectionChanged += OnChatConnectionChanged;
+            _wsClient.MessageReceived += OnChatMessage;
+            _wsClient.ErrorOccurred += OnChatError;
             await _wsClient.ConnectAsync();
         }
 
-        private async void DisconnectButton_Click(object sender, RoutedEventArgs e)
+        private async void DisconnectChat_Click(object sender, RoutedEventArgs e)
         {
             if (_wsClient != null)
                 await _wsClient.DisconnectAsync();
         }
 
-        private void OnConnChanged(bool connected)
+        private void OnChatConnectionChanged(bool connected)
         {
             Dispatcher.Invoke(() =>
             {
-                _connected = connected;
-                ConnectButton.IsEnabled = !connected;
-                DisconnectButton.IsEnabled = connected;
+                _chatConnected = connected;
+                ConnectChatBtn.IsEnabled = !connected;
+                DisconnectChatBtn.IsEnabled = connected;
                 SendButton.IsEnabled = connected;
                 InputBox.IsEnabled = connected;
-                UrlBox.IsEnabled = !connected;
+                ChatUrlBox.IsEnabled = !connected;
+                ChatStatus.Text = connected ? "●" : "○";
+                ChatStatus.Foreground = connected ? new Media.SolidColorBrush(Media.Colors.Lime) : new Media.SolidColorBrush(Media.Colors.Gray);
                 AddSysMsg(connected ? "已连接" : "已断开");
             });
         }
 
-        private void OnMsg(string raw)
+        private void OnChatMessage(string raw)
         {
             Dispatcher.Invoke(() =>
             {
@@ -132,23 +202,11 @@ namespace KzNLPChatPlugin
                         case "thinking":
                             AddThinkMsg(text);
                             break;
-                        case "executing":
+                        case "claude_output":
                             AddAiMsg(text);
-                            break;
-                        case "mcp_result":
-                            AddAiMsg($"✅ {text}");
-                            break;
-                        case "need_choice":
-                            AddChoiceMsg(text, msg);
-                            break;
-                        case "done":
-                            AddAiMsg($"🎉 {text}");
                             break;
                         case "error":
                             AddErrMsg(text);
-                            break;
-                        case "claude_output":
-                            AddAiMsg(text);
                             break;
                         case "server_disconnected":
                             AddSysMsg($"MCP 连接断开: {text}");
@@ -165,35 +223,25 @@ namespace KzNLPChatPlugin
             });
         }
 
-        private void OnErr(string err) =>
+        private void OnChatError(string err)
+        {
             Dispatcher.Invoke(() => AddErrMsg(err));
-
-        #endregion
-
-        #region 发送
+        }
 
         private void InputBox_KeyDown(object sender, KeyEventArgs e)
         {
-            if (e.Key == Key.Enter) { Send(); e.Handled = true; }
+            if (e.Key == Key.Enter) { SendChat(); e.Handled = true; }
         }
 
-        private void SendButton_Click(object sender, RoutedEventArgs e) => Send();
+        private void SendButton_Click(object sender, RoutedEventArgs e) => SendChat();
 
-        private async void Send()
+        private async void SendChat()
         {
             string text = InputBox.Text.Trim();
-            if (string.IsNullOrEmpty(text) || !_connected) return;
+            if (string.IsNullOrEmpty(text) || !_chatConnected) return;
             InputBox.Clear();
             AddUserMsg(text);
             try { await _wsClient.SendMessageAsync(text); }
-            catch (Exception ex) { AddErrMsg($"发送失败: {ex.Message}"); }
-        }
-
-        private async void OnChoice(string choice)
-        {
-            if (!_connected) return;
-            AddUserMsg($"选择: {choice}");
-            try { await _wsClient.SendChoiceAsync(choice); }
             catch (Exception ex) { AddErrMsg($"发送失败: {ex.Message}"); }
         }
 
@@ -201,61 +249,26 @@ namespace KzNLPChatPlugin
 
         #region 消息渲染
 
-        private void AddUserMsg(string text) => AddBubble(CUser, "👤", text, W, false);
-        private void AddAiMsg(string text) => AddBubble(CAi, "🤖", text, W, false);
-        private void AddThinkMsg(string text) => AddBubble(CThink, "⏳", text, G, true);
-        private void AddErrMsg(string text) => AddBubble(CError, "❌", text, new Media.SolidColorBrush(Media.Color.FromRgb(0xFF, 0x99, 0x99)), false);
-        private void AddSysMsg(string text) => AddBubble(CSys, "ℹ️", text, new Media.SolidColorBrush(Media.Color.FromRgb(0xBB, 0xBB, 0xFF)), false);
+        private void AddUserMsg(string text) => AddBubble(CUser, "👤", text, W);
+        private void AddAiMsg(string text) => AddBubble(CAi, "🤖", text, W);
+        private void AddThinkMsg(string text) => AddBubble(CThink, "⏳", text, G);
+        private void AddErrMsg(string text) => AddBubble(CError, "❌", text, new Media.SolidColorBrush(Media.Color.FromRgb(0xFF, 0x99, 0x99)));
+        private void AddSysMsg(string text) => AddBubble(CSys, "ℹ️", text, new Media.SolidColorBrush(Media.Color.FromRgb(0xBB, 0xBB, 0xFF)));
 
-        private void AddChoiceMsg(string text, Dictionary<string, object> msg)
+        private void AddBubble(Media.SolidColorBrush bg, string prefix, string text, Media.Brush fg)
         {
-            var border = MakeBorder(CChoice);
-            var stack = new StackPanel { Margin = new Thickness(4) };
-            stack.Children.Add(new TextBlock
+            var border = new Border
             {
-                Text = $"🤖 {text}",
-                TextWrapping = TextWrapping.Wrap,
-                FontSize = 13,
-                Foreground = W,
-                
-            });
-            if (msg.TryGetValue("choices", out var rc) && rc is string cs)
-            {
-                var opts = ParseArray(cs);
-                if (opts.Count > 0)
-                {
-                    var wp = new WrapPanel { Margin = new Thickness(0, 6, 0, 0) };
-                    foreach (string c in opts)
-                    {
-                        var btn = new Button
-                        {
-                            Content = c, Height = 26, Margin = new Thickness(0, 0, 6, 4),
-                            Padding = new Thickness(10, 0, 10, 0), FontSize = 12,
-                            Cursor = Cursors.Hand, Background = ColorBtn,
-                            Foreground = W, BorderThickness = new Thickness(0),
-                            
-                        };
-                        string cc = c;
-                        btn.Click += (s, e) => OnChoice(cc);
-                        wp.Children.Add(btn);
-                    }
-                    stack.Children.Add(wp);
-                }
-            }
-            border.Child = stack;
-            MessagePanel.Children.Add(border);
-            Scroll();
-        }
-
-        private void AddBubble(Media.SolidColorBrush bg, string prefix, string text, Media.Brush fg, bool italic)
-        {
-            var border = MakeBorder(bg);
+                Background = bg,
+                CornerRadius = new CornerRadius(5),
+                Margin = new Thickness(0, 2, 0, 2),
+                BorderThickness = new Thickness(0)
+            };
             var tb = new TextBox
             {
                 Text = $"{prefix} {text}",
                 TextWrapping = TextWrapping.Wrap,
-                FontSize = (italic ? 12 : 13),                
-                FontStyle = italic ? FontStyles.Italic : FontStyles.Normal,
+                FontSize = 13,
                 Foreground = fg,
                 Background = Media.Brushes.Transparent,
                 BorderThickness = new Thickness(0),
@@ -266,20 +279,22 @@ namespace KzNLPChatPlugin
             };
             border.Child = tb;
             MessagePanel.Children.Add(border);
-            Scroll();
+            MessageScroller.ScrollToBottom();
         }
-
-        private Border MakeBorder(Media.SolidColorBrush bg) => new Border
-        {
-            Background = bg, CornerRadius = new CornerRadius(5),
-            Margin = new Thickness(0, 2, 0, 2), BorderThickness = new Thickness(0)
-        };
-
-        private void Scroll() => MessageScroller.ScrollToBottom();
 
         #endregion
 
-        #region 简易 JSON
+        #region 清空日志
+
+        private void ClearLog_Click(object sender, RoutedEventArgs e)
+        {
+            MCPLogBox.Clear();
+            MCPLog("日志已清空");
+        }
+
+        #endregion
+
+        #region 简易 JSON 解析
 
         private static Dictionary<string, object> ParseJson(string json)
         {
@@ -293,7 +308,7 @@ namespace KzNLPChatPlugin
                 while (i < json.Length && char.IsWhiteSpace(json[i])) i++;
                 if (i >= json.Length || json[i] != '"') break;
                 int ks = i + 1;
-                i = json.IndexOf('"', ks); if (i < 0) break;
+                i = FindJsonStringEnd(json, ks); if (i < 0) break;
                 string k = Unescape(json.Substring(ks, i - ks)); i++;
                 while (i < json.Length && json[i] != ':') i++; i++;
                 while (i < json.Length && char.IsWhiteSpace(json[i])) i++;
@@ -301,7 +316,7 @@ namespace KzNLPChatPlugin
                 object v = null;
                 if (json[i] == '"')
                 {
-                    int vs = i + 1; i = json.IndexOf('"', vs); if (i < 0) break;
+                    int vs = i + 1; i = FindJsonStringEnd(json, vs); if (i < 0) break;
                     v = Unescape(json.Substring(vs, i - vs)); i++;
                 }
                 else if (json[i] == '{' || json[i] == '[')
@@ -331,49 +346,35 @@ namespace KzNLPChatPlugin
             return r;
         }
 
-        private static List<string> ParseArray(string json)
-        {
-            var r = new List<string>();
-            json = json.Trim();
-            if (!json.StartsWith("[") || !json.EndsWith("]")) return r;
-            json = json.Substring(1, json.Length - 2);
-            int i = 0;
-            while (i < json.Length)
-            {
-                while (i < json.Length && char.IsWhiteSpace(json[i])) i++;
-                if (i >= json.Length || json[i] != '"') break;
-                int vs = i + 1;
-                i = json.IndexOf('"', vs); if (i < 0) break;
-                r.Add(Unescape(json.Substring(vs, i - vs))); i++;
-                while (i < json.Length && (char.IsWhiteSpace(json[i]) || json[i] == ',')) i++;
-            }
-            return r;
-        }
-
         private static string GetStr(Dictionary<string, object> d, string k) =>
             d.TryGetValue(k, out var v) ? v?.ToString() ?? "" : "";
+
+        // ★ 转义感知的 JSON 字符串结束引号查找:
+        //   从 start(开引号之后的索引) 开始跳过 \x 转义序列,
+        //   返回真正的结束引号索引。绝不把 \" 里的引号误当字符串结束。
+        //   (修复: 手写 IndexOf('"') 会在含 \" 的长回答处截断 text,
+        //    导致显示不全、末尾停在反斜杠 \ 上。)
+        private static int FindJsonStringEnd(string json, int start)
+        {
+            int i = start;
+            while (i < json.Length)
+            {
+                if (json[i] == '\\') { i += 2; continue; } // 跳过转义序列 \x
+                if (json[i] == '"') return i;               // 真正的结束引号
+                i++;
+            }
+            return -1;
+        }
 
         private static bool GetBool(Dictionary<string, object> d, string k) =>
             d.TryGetValue(k, out var v) && v is true;
 
         private static string Unescape(string s)
         {
-            if (string.IsNullOrEmpty(s)) return s;
+            if (string.IsNullOrEmpty(s) || !s.Contains("\\")) return s;
             var sb = new StringBuilder(s.Length);
             for (int i = 0; i < s.Length; i++)
             {
-                if (s[i] == '\\' && i + 5 < s.Length && s[i + 1] == 'u')
-                {
-                    if (int.TryParse(s.Substring(i + 2, 4),
-                        System.Globalization.NumberStyles.HexNumber, null, out int c))
-                    { sb.Append((char)c); i += 5; continue; }
-                }
-                if (s[i] == '\\' && i + 6 < s.Length && s[i + 1] == '\\' && s[i + 2] == 'u')
-                {
-                    if (int.TryParse(s.Substring(i + 3, 4),
-                        System.Globalization.NumberStyles.HexNumber, null, out int c))
-                    { sb.Append((char)c); i += 6; continue; }
-                }
                 if (s[i] == '\\' && i + 1 < s.Length)
                 {
                     var n = s[i + 1];
@@ -391,5 +392,11 @@ namespace KzNLPChatPlugin
         }
 
         #endregion
+
+        public void Dispose()
+        {
+            _wsClient?.Dispose();
+            _mcpClient?.Dispose();
+        }
     }
 }
