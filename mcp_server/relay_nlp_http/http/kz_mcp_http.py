@@ -34,6 +34,8 @@ import json
 import logging
 import os
 import sys
+import time
+import uuid
 
 # 官方 Kanzi MCP 客户端(api/doc) —— 供本进程聚合网关做三端点代理
 from official_mcp import (
@@ -356,12 +358,25 @@ class HttpMcpServer:
     # HTTP header 里用户名取值(小写)
     USER_HEADER = "x-kanzi-user"
 
+    # 大批量结果外置配置（默认值，可被命令行参数覆盖后经 set_result_offload 注入）
+    RESULT_TMP_DIR = None          # 落盘目录（绝对/相对路径）；None = 用 cwd/tmp_results
+    RESULT_THRESHOLD_ENTRIES = 50  # 记录数 > 此值才外置
+    RESULT_THRESHOLD_BYTES = 4096  # 文本大小 > 此值(字节)才外置
+    RESULT_TTL_SECONDS = 1800      # 临时文件存活秒数(30分钟)
+    RESULT_SWEEP_SECONDS = 1800    # 清理任务扫描间隔
+    RESULT_SUMMARY_COUNT = 8       # 摘要(前 N 项)条数
+    RESULT_SUMMARY_CHARS = 120     # 摘要单条截断字符数
+
     def __init__(self, user_manager: UserManager, host="127.0.0.1", port=9001, url_path="/mcp"):
         self.users = user_manager
         self.host = host
         self.port = port
         self.url_path = url_path
         self.server = None
+        self._tmp_dir = None
+        self._result_url_base = None
+        self._sweep_task = None
+        self.set_result_offload(None, None)
         # ★ 官方 Kanzi MCP 客户端(api/doc): 作为三端点聚合代理的后端, 失效自动重连
         self.kanzi_api = OfficialMcpHttpClient("kanzi-api-mcp", KANZI_API_MCP_URL)
         # ★ doc 官方端点 session 极短/校验极严(实测比 api 易失效), 每次调用前强制
@@ -372,6 +387,138 @@ class HttpMcpServer:
             "/kanzi_api_mcp": (self.kanzi_api, "kanzi-api"),
             "/kanzi_doc_mcp": (self.kanzi_doc, "kanzi-doc"),
         }
+
+    # ═══════════ 大批量结果外置（2026-09-02 老隋定稿）═══════════
+    def set_result_offload(self, tmp_dir=None, ttl=None, public_host=None):
+        """注入外置配置（main() 从命令行参数调用）。
+        tmp_dir: 落盘目录（None=用 <cwd>/tmp_results）；ttl: 存活秒数；
+        public_host: 文件 URL 里对 AI 可达的中继机 IP（None=用 self.host，
+        注意若监听用 0.0.0.0 则 AI 连不回，跨机时须显式配真实 IP，参考 feishu_bridge http_bind_ip）。"""
+        _tmp = tmp_dir or self.RESULT_TMP_DIR or os.path.join(os.getcwd(), "tmp_results")
+        self._tmp_dir = os.path.abspath(_tmp)
+        os.makedirs(self._tmp_dir, exist_ok=True)
+        self._result_ttl = ttl if ttl is not None else self.RESULT_TTL_SECONDS
+        _host = public_host if public_host else self.host
+        self._result_url_base = f"http://{_host}:{self.port}/data"
+        if _host in ("0.0.0.0", "127.0.0.1", "::", "localhost"):
+            log.warning(f"⚠️ 结果外置 URL 用的 host={_host!r} 可能不能被远端 AI 访问；"
+                        f"若 AI 与中继不在同一机器，请用 --result-public-host 指定真实中继机 IP")
+        log.info(f"📦 大批量结果外置已启用: 目录={self._tmp_dir} TTL={self._result_ttl}s "
+                 f"阈值={self.RESULT_THRESHOLD_ENTRIES}条/{self.RESULT_THRESHOLD_BYTES}B 摘要前{self.RESULT_SUMMARY_COUNT}项")
+
+    def _resolve_tmp_path(self, res_id: str):
+        """临时文件路径。文件名只用 res_id 的散列，防止超长/非法字符。"""
+        import hashlib
+        h = hashlib.sha256(res_id.encode("utf-8")).hexdigest()[:16]
+        return os.path.join(self._tmp_dir, f"{h}.json")
+
+    @staticmethod
+    def _count_entries(text: str) -> int:
+        """从 MCP 返回文本里粗估记录数（估算，用于阈值判断与摘要展示）。
+        行数与 '▪'/'·' 或列出项数取近似。"""
+        lines = [l for l in text.split("\n") if l.strip()]
+        if not lines:
+            return 0
+        # 计算缩进层级为顶层的行（无前导空格/制表符的）作条目数近似
+        top = sum(1 for l in lines if not l[:1].isspace())
+        return max(top, 0)
+
+    def _make_summary(self, text: str, count: int) -> str:
+        """从文本摘取前 N 条供返回摘要。"""
+        lines = [l for l in text.split("\n") if l.strip()]
+        keep = []
+        for l in lines:
+            # 略过纯装饰行（▪ / · / 分隔 / 等）只保留实质内容
+            s = l.strip().lstrip("▪·-• ")
+            if not s or s.startswith("共") or s.startswith("..."):
+                continue
+            keep.append(s[:self.RESULT_SUMMARY_CHARS])
+            if len(keep) >= self.RESULT_SUMMARY_COUNT:
+                break
+        return ", ".join(keep) if keep else "(无法摘要)"
+
+    def _offload_result(self, res_id: str, mcp_text: str) -> dict:
+        """把大结果落盘成 UTF-8 JSON 文件，返回外置信息（不含文件内容本身）。
+        文件内容 = MCP 响应的 text（UTF-8 JSON 字符串）。"""
+        path = self._resolve_tmp_path(res_id)
+        # 落盘：UTF-8 JSON
+        payload = {
+            "id": res_id,
+            "created": int(time.time()),
+            "entries": self._count_entries(mcp_text),
+            "text": mcp_text,
+        }
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False)
+        except Exception as e:
+            log.error(f"📦 落盘失败: {e}")
+            return None
+        size = os.path.getsize(path)
+        return {
+            "url": f"{self._result_url_base}/{os.path.basename(path)}",
+            "size": size,
+            "entries": payload["entries"],
+            "summary": self._make_summary(mcp_text, payload["entries"]),
+        }
+
+    def _should_offload(self, mcp_text: str) -> bool:
+        """判断是否超过阈值该外置。>N条 或 >B字节。"""
+        if not mcp_text:
+            return False
+        if len(mcp_text.encode("utf-8")) > self.RESULT_THRESHOLD_BYTES:
+            return True
+        return self._count_entries(mcp_text) > self.RESULT_THRESHOLD_ENTRIES
+
+    async def _sweep_old(self):
+        """定时清理过期临时文件。"""
+        while True:
+            try:
+                now = time.time()
+                if self._tmp_dir and os.path.isdir(self._tmp_dir):
+                    removed = 0
+                    for fn in os.listdir(self._tmp_dir):
+                        if not fn.endswith(".json"):
+                            continue
+                        fp = os.path.join(self._tmp_dir, fn)
+                        try:
+                            if now - os.path.getmtime(fp) > self._result_ttl:
+                                os.remove(fp)
+                                removed += 1
+                        except OSError:
+                            continue
+                    if removed:
+                        log.info(f"🗑️ 清理批量结果临时文件 {removed} 个")
+            except Exception as e:
+                log.warning(f"🗑️ 清理任务异常: {e}")
+            await asyncio.sleep(self.RESULT_SWEEP_SECONDS)
+
+    async def start_sweep(self):
+        if self._sweep_task is None:
+            self._sweep_task = asyncio.ensure_future(self._sweep_old())
+
+    async def _handle_data_get(self, path_norm: str, writer):
+        """GET /data/<filename>：下发外置结果文件（UTF-8 JSON）。"""
+        prefix = "/data/"
+        if not path_norm.startswith(prefix):
+            return False
+        fn = path_norm[len(prefix):]
+        # 只允许 .json 且不带路径分隔，防止目录穿越
+        if not fn or not fn.endswith(".json") or "/" in fn or "\\" in fn or ".." in fn:
+            await self._send_http(writer, 400, "text/plain", "Bad filename")
+            return True
+        fp = os.path.join(self._tmp_dir, fn) if self._tmp_dir else None
+        if fp and os.path.isfile(fp):
+            try:
+                with open(fp, "r", encoding="utf-8") as f:
+                    body = f.read()
+                await self._send_http(writer, 200, "application/json; charset=utf-8", body)
+            except Exception as e:
+                log.error(f"📄 读取结果文件失败 {fn}: {e}")
+                await self._send_http(writer, 500, "text/plain", "read fail")
+        else:
+            await self._send_http(writer, 404, "text/plain", "not found/expired")
+        return True
 
     async def start(self):
         self.server = await asyncio.start_server(self._handle_conn, self.host, self.port)
@@ -403,8 +550,15 @@ class HttpMcpServer:
                     k, v = text.split(":", 1)
                     headers[k.strip().lower()] = v.strip()
 
-            # 路径路由: 官方端点(/kanzi_api_mcp / /kanzi_doc_mcp)或其他(studio: /mcp / / /kanzistudio_mcp)
+            # 路径路由: ①大批量结果文件 GET /data/<fn> → 文件下发(不校验用户，只认文件名) 
+            #            ②官方端点(/kanzi_api_mcp / /kanzi_doc_mcp) ③studio(/mcp / / /kanzistudio_mcp)
             path_norm = path.rstrip("/")
+            if path_norm.startswith("/data/"):
+                if method != "GET":
+                    await self._send_http(writer, 405, "text/plain", "Only GET")
+                    return
+                await self._handle_data_get(path_norm, writer)
+                return
             is_official = path_norm in self.OFFICIAL_ENDPOINTS
             is_studio = (not is_official) and (
                 path_norm == self.url_path.rstrip("/")
@@ -579,9 +733,58 @@ class HttpMcpServer:
             forward_req = {"jsonrpc": "2.0", "id": req_id, "method": "tools/call",
                            "params": {"name": params.get("name", ""),
                                       "arguments": params.get("arguments", {})}}
-            return await handler.relay_request(forward_req)
+            resp = await handler.relay_request(forward_req)
+            return self._maybe_offload_resp(resp, req_id)
 
         return {"jsonrpc": "2.0", "id": req_id, "result": {}}
+
+    def _maybe_offload_resp(self, resp: dict, req_id) -> dict:
+        """检测 Kanzi 返回是否为大结果(超阈值)，若是则外置成文件并替换返回摘要。
+        中小结果照旧原样返回(现状不变)。"""
+        try:
+            if not (isinstance(resp, dict) and "result" in resp):
+                return resp
+            result = resp["result"]
+            if not (isinstance(result, dict) and isinstance(result.get("content"), list)):
+                return resp
+            texts = [
+                c.get("text", "")
+                for c in result["content"]
+                if isinstance(c, dict) and c.get("type") == "text" and c.get("text") is not None
+            ]
+            if not texts:
+                return resp
+            full = "\n".join(texts)
+            if not self._tmp_dir or not self._should_offload(full):
+                return resp
+            res_id = uuid.uuid4().hex
+            info = self._offload_result(res_id, full)
+            if info is None:
+                return resp
+            log.info(f"📦 tools/call id={req_id} 结果外置: {info['url']} "
+                     f"entries={info['entries']} size={info['size']}B")
+            summary = (
+                f"✅ 结果较大，已外置到文件(共 {info['entries']} 条):\n"
+                f"URL: {info['url']}\n"
+                f"大小: {self._fmt_size(info['size'])}\n"
+                f"记录数: {info['entries']}\n"
+                f"摘要: {info['summary']}\n"
+                f"需要全部数据请 GET 上述 URL（UTF-8 JSON，文件内 text 字段为完整内容，TTL {int(self._result_ttl // 60)} 分钟自动清理）；需要单条用其 ref_id 继续 kz_invoke。"
+            )
+            return {"jsonrpc": "2.0", "id": req_id, "result": {
+                "content": [{"type": "text", "text": summary}]
+            }}
+        except Exception as e:
+            log.warning(f"📦 结果外置处理异常(回退原样返回): {e}")
+            return resp
+
+    @staticmethod
+    def _fmt_size(nbytes: int) -> str:
+        if nbytes < 1024:
+            return f"{nbytes} B"
+        if nbytes < 1024 * 1024:
+            return f"{nbytes / 1024:.1f} KB"
+        return f"{nbytes / 1024 / 1024:.2f} MB"
 
     async def _send_http(self, writer, status, ctype, body: str):
         reason = {200: "OK", 202: "Accepted", 400: "Bad Request",
@@ -617,6 +820,16 @@ async def main():
                        help="HTTP MCP server 监听 主机:端口 (默认 0.0.0.0:9001; 需远程 copilot 访问时用 0.0.0.0, 仅本机调试才用 127.0.0.1)")
     parser.add_argument("--mcp-timeout", type=int, default=300,
                        help="MCP 转发到 Kanzi 的单次请求超时秒数 (默认 300; Kanzi 创建慢时可调大)")
+    parser.add_argument("--result-tmp-dir", default=None,
+                       help="大批量结果落盘目录 (默认 <cwd>/tmp_results; 中继机本地, AI 通过 /data/<id> GET 取)")
+    parser.add_argument("--result-ttl", type=int, default=None,
+                       help="临时结果文件存活秒数 (默认 1800=30分钟, 到期自动清理)")
+    parser.add_argument("--result-public-host", default=None,
+                       help="结果文件 URL 里对 AI 可达的中继机 IP（默认用 --listen 的 host；若监听 0.0.0.0 而 AI 跨机，必须配真实 IP，参考 feishu_bridge http_bind_ip）")
+    parser.add_argument("--result-threshold-entries", type=int, default=None,
+                       help="记录数超过此值才外置 (默认 50)")
+    parser.add_argument("--result-threshold-bytes", type=int, default=None,
+                       help="文本超过此字节才外置 (默认 4096=4KB)")
     parser.add_argument("--debug", action="store_true", help="开启调试日志")
     args = parser.parse_args()
 
@@ -634,7 +847,15 @@ async def main():
     manager = UserManager(args.relay_base, allowed, request_timeout=args.mcp_timeout,
                           config_path=args.users)
     http_mcp = HttpMcpServer(manager, host, port)
+    # 大批量结果外置配置 (阈值/TTL/TMP 目录)
+    if args.result_threshold_entries is not None:
+        http_mcp.RESULT_THRESHOLD_ENTRIES = args.result_threshold_entries
+    if args.result_threshold_bytes is not None:
+        http_mcp.RESULT_THRESHOLD_BYTES = args.result_threshold_bytes
+    http_mcp.set_result_offload(args.result_tmp_dir, args.result_ttl,
+                                public_host=args.result_public_host)
     await http_mcp.start()
+    await http_mcp.start_sweep()
 
     log.info(f"🚀 kz_mcp_http.py 已就绪 (单进程多用户)")
     log.info(f"   relay 基座: {args.relay_base}")
