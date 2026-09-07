@@ -112,6 +112,11 @@ def thinking_message(text: str) -> dict[str, str]:
     return {"type": "thinking", "text": text}
 
 
+def progress_message(text: str) -> dict[str, str]:
+    """多阶段活动反馈消息(不触发 feishu_bridge 的 _done_event, 不作为一轮结束)。"""
+    return {"type": "progress", "text": text}
+
+
 class RelayClient:
     def __init__(
         self,

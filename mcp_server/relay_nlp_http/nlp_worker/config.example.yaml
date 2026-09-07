@@ -151,6 +151,12 @@ artifacts:
 
 compatibility:
   thinking_text: "🤖 Copilot 思考中..."
+  # 多阶段活动反馈(progress): 默认开, 设为 false 即恢复旧行为(仅 thinking+最终回复)
+  progress_feedback: true
+  # 相邻两条 progress 最小间隔(秒), 防刷屏; 建议 2~3, 太小会密集刷屏
+  progress_min_interval_seconds: 2.0
+  # 工具事件累积超过该阈值后改为汇总式提示(如 "已执行 5/12 个工具")
+  progress_max_tool_events_before_summary: 8
   output_type: claude_output
   support_file_download_marker: true
   bridge_http: http://10.10.118.152:8081/suijichao

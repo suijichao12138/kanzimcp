@@ -26,8 +26,14 @@ from copilot import CopilotClient, ModelInfo, RuntimeConnection, ToolInvocation,
 from copilot._jsonrpc import JsonRpcError, ProcessExitedError
 from copilot.generated.session_events import (
     AssistantMessageData,
+    AssistantMessageStartData,
+    AssistantReasoningDeltaData,
+    AssistantStreamingDeltaData,
     SessionErrorData,
     SessionIdleData,
+    ToolExecutionStartData,
+    ToolExecutionCompleteData,
+    ToolExecutionProgressData,
 )
 from copilot.rpc import (
     PermissionDecisionApproveOnce,
@@ -272,6 +278,12 @@ MCPServerConfig = Annotated[MCPStdioConfig | MCPRemoteConfig, Field(discriminato
 
 class CompatibilityConfig(StrictModel):
     thinking_text: str = "🤖 Copilot 思考中..."
+    # 多阶段活动反馈开关(默认开, 关闭即恢复旧行为)
+    progress_feedback: bool = True
+    # 相邻两条 progress 最小间隔(秒), 防刷屏
+    progress_min_interval_seconds: Annotated[float, Field(ge=0.5, le=60)] = 2.0
+    # 工具事件累积超过该阈值后改为汇总式提示(避免刷屏)
+    progress_max_tool_events_before_summary: Annotated[int, Field(ge=1)] = 8
     output_type: Literal["claude_output"] = "claude_output"
     support_file_download_marker: bool = True
     bridge_http: str | None = None
@@ -1589,7 +1601,12 @@ class CopilotRuntime:
             )
         return await self._resume(key, mapping.session_id) if mapping else await self._create(key)
 
-    async def send(self, key: str, prompt: str) -> str:
+    async def send(
+        self,
+        key: str,
+        prompt: str,
+        on_progress: Callable[[str], Awaitable[None]] | None = None,
+    ) -> str:
         """同步发送 prompt 到 Copilot 会话并等待完成。
 
         使用活动刷新式超时(移植自旧 nlp_worker_acp.py):
@@ -1609,6 +1626,45 @@ class CopilotRuntime:
             error: Exception | None = None
             last_assistant: Any = None
 
+            # ---- 多阶段活动反馈: 绝对串行节流 + 发送闭包 ----
+            # on_event 是同步回调, 不能 await, 用 create_task 调度异步发送。
+            # 节流用"绝对串行": 任何消息只有 time>=_next_allowed_ts 才发,
+            # 发后 _next_allowed_ts=time+min_interval, 间隔内来的候选直接丢弃,
+            # 避免工具密集到达时每条都排队、各自判断造成的刷屏(之前汇总连发的根因)。
+            _next_allowed_ts: float = 0.0
+            _tool_count: int = 0
+            _reasoning_shown: bool = False
+            _streaming_shown: bool = False
+            _progress_on = (
+                on_progress is not None
+                and self.config.compatibility.progress_feedback
+            )
+            _min_interval = float(
+                self.config.compatibility.progress_min_interval_seconds
+            )
+            _max_tools = int(
+                self.config.compatibility.progress_max_tool_events_before_summary
+            )
+
+            def _emit(text: str) -> None:
+                """节流发送: 到时间才发, 间隔内丢弃。同步回调里 fire-and-forget。"""
+                if not _progress_on:
+                    return
+                nonlocal _next_allowed_ts
+                now = time.time()
+                if now < _next_allowed_ts:
+                    return  # 间隔内, 丢弃
+                _next_allowed_ts = now + _min_interval
+                async def _do() -> None:
+                    try:
+                        await on_progress(text)
+                    except Exception:
+                        pass  # 进度发送失败不影响主流程
+                try:
+                    asyncio.get_running_loop().create_task(_do())
+                except RuntimeError:
+                    pass
+
             def on_event(event: Any) -> None:
                 # 任意事件都代表 copilot 仍在活动, 刷新活动时间戳
                 self._last_activity = time.time()
@@ -1616,6 +1672,26 @@ class CopilotRuntime:
                     case AssistantMessageData():  # noqa: F841
                         nonlocal last_assistant
                         last_assistant = event
+                    case AssistantReasoningDeltaData():  # noqa: F841
+                        # AI 推理/思考过程: 首条反馈一次"正在推理"(节流防刷)
+                        nonlocal _reasoning_shown
+                        if not _reasoning_shown:
+                            _reasoning_shown = True
+                            _emit("🧠 AI 正在推理/理解问题...")
+                    case AssistantMessageStartData():  # noqa: F841
+                        # 开始撰写正式回复
+                        _emit("📝 开始撰写回复")
+                    case AssistantStreamingDeltaData():  # noqa: F841
+                        # AI 正在生成回复: 里程碑反馈一次(节流)
+                        nonlocal _streaming_shown
+                        if not _streaming_shown:
+                            _streaming_shown = True
+                            _emit("✍️ 正在生成回复...")
+                    case ToolExecutionProgressData() as d:  # noqa: F841
+                        # 工具进行中文案反馈(节流)
+                        _p = getattr(d, "progress_message", "") or ""
+                        if _p.strip():
+                            _emit(f"↪️ {_p.strip()}")
                     case SessionIdleData():  # noqa: F841
                         done.set()
                     case SessionErrorData() as data:  # noqa: F841
@@ -1624,6 +1700,29 @@ class CopilotRuntime:
                             data.message if data else "Copilot session error"
                         )
                         done.set()
+                    case ToolExecutionStartData() as d:  # noqa: F841
+                        # 工具提示收敛: 第1个必发, 之后改为按间距汇总(不是每条都发)
+                        nonlocal _tool_count
+                        _tool_count += 1
+                        if _tool_count == 1:
+                            _emit(f"🔧 正在执行 {d.tool_name}...")
+                        elif _tool_count % _max_tools == 0:
+                            _emit(
+                                f"🔧 已调用 {_tool_count} 个工具, 持续操作中..."
+                            )
+                    case ToolExecutionCompleteData() as d:  # noqa: F841
+                        # 完成不逐条发, 否则太碎; 只发失败的(异常值得用户知道),
+                        # 成功留给汇总/里程碑, 避免"✅完成"和"执行"一样刷屏。
+                        if not d.success:
+                            _desc = getattr(d, "tool_description", None)
+                            _tn = (
+                                getattr(_desc, "name", None)
+                                if _desc is not None else None
+                            )
+                            _label = _tn or getattr(
+                                d, "tool_call_id", "tool") or "tool"
+                            _emit(f"⚠️ {_label} 失败")
+
 
             max_idle = float(self.config.copilot.max_idle_seconds)
             unsubscribe = session.on(on_event)

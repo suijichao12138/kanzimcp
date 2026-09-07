@@ -194,7 +194,16 @@ class Bridge:
         msg_type = msg.get("type", "")
         if msg_type == "claude_output":
             text = msg.get("text", "") or "(无输出)"
-            await self._reply_feishu(text)
+            # 完成标志: claude_output 是"一轮结束"的唯一判定, 让用户知道何时完成。
+            # 分块输出格式 "(1/N)...(N/N)": 只在末帧(第N==总数)或未分块的单条加"✅完成";
+            # 中间帧不加, 避免用户误以为已结束。
+            m = re.match(r"^\((\d+)/(\d+)\)", text)
+            if m and m.group(1) == m.group(2):
+                await self._reply_feishu(f"✅ 完成\n\n{text}")
+            elif not m:
+                await self._reply_feishu(f"✅ 完成\n\n{text}")
+            else:
+                await self._reply_feishu(text)
             self._thinking_sent = False
             self._done_event.set()
         elif msg_type == "thinking":
@@ -209,6 +218,13 @@ class Bridge:
             log.info(f"[{self.bot_name}] copilot worker 在线")
         elif msg_type == "worker_disconnected":
             log.info(f"[{self.bot_name}] copilot worker 断开")
+        elif msg_type == "progress":
+            # 多阶段活动反馈：原文转发给用户，绝不触发 _done_event，
+            # 因此不作为"一轮结束"、不会提前放行第二条指令；也不进 thinking 分支。
+            t = str(msg.get("text", ""))
+            if t.strip():
+                log.info(f"[{self.bot_name}] copilot progress: {t[:120]}")
+                await self._reply_feishu(t)
 
     async def _reply_feishu(self, text: str):
         open_id = self.last_sender

@@ -36,6 +36,7 @@ from relay_client import (
     output_message,
     parse_relay_message,
     thinking_message,
+    progress_message,
 )
 from session_store import SessionStore
 
@@ -369,7 +370,20 @@ class NLPWorker:
             )
             return
         await self.relay.send(thinking_message(self.config.compatibility.thinking_text))
-        response = await self.copilot.send(key, request.text)
+
+        # 多阶段活动反馈: 把 copilot 的工具事件进度转发(progress_message)给 relay,
+        # 节流由 CopilotRuntime.send 内部处理; progress 不触发桥的 _done_event。
+        async def _on_progress(text: str) -> None:
+            try:
+                await self.relay.send(progress_message(text))
+            except Exception:  # noqa: BLE001
+                log.debug(f"progress 转发失败(忽略): {text[:60]}")
+
+        response = await self.copilot.send(
+            key,
+            request.text,
+            on_progress=_on_progress,
+        )
         response = await self.files.upload_marked_file(
             response,
             self.copilot.session_id(key),
