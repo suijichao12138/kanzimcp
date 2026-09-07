@@ -1,0 +1,180 @@
+relay:
+  url: ws://10.10.118.152:58080/suijichao
+  channel: suijichao
+  role: nlp_worker
+  reconnect_delay_seconds: 3
+  ping_interval_seconds: 30
+  ping_timeout_seconds: 10
+  max_message_bytes: 16777216
+  allowed_channels:
+    - suijichao
+  identity:
+    # The old bridge strips all sender/chat IDs. Strict compatibility therefore
+    # requires one dedicated bot/relay channel per principal.
+    mode: dedicated_channel
+    dedicated_principal_id: suijichao
+    include_thread_scope: true
+
+copilot:
+  # Default portable flow: run login_copilot.cmd once.
+  github_token: null
+  use_logged_in_user: true
+  # Token alternative:
+  # github_token: ${GITHUB_TOKEN}
+  # use_logged_in_user: false
+  # Relative paths are resolved from this config file. Set this to an existing
+  # Kanzi/project directory on the target machine; "." keeps the example portable.
+  working_directory: .
+  base_directory: ./.copilot-data
+  response_timeout_seconds: 600
+  # 活动刷新式超时阈值: 只要 copilot 还在持续输出/调 MCP 就续期,
+  # 超过此秒数无任何事件才判定死寂并超时(长任务不误报)。
+  max_idle_seconds: 300
+  resume_failure: error
+  configuration_change: error
+  enable_session_store: true
+  large_output:
+    enabled: true
+    max_size_bytes: 51200
+    # {session_id} is required: every SDK session writes to its own safe files folder.
+    output_directory: ./.copilot-data/session-state/{session_id}/files
+  model:
+    name: gpt-5.4
+    reasoning_effort: medium
+    provider:
+      type: github
+      # BYOK example:
+      # type: openai
+      # base_url: https://oneapi.example.com/v1
+      # api_key: ${OPENAI_API_KEY}
+      # wire_api: responses
+      # Optional SDK 1.0.11 fields: transport, headers, model_id, wire_model,
+      # max_prompt_tokens, max_output_tokens. Azure supports azure_api_version.
+  agent:
+    system_prompt: |
+      你是通过飞书提供服务的 GitHub Copilot 助手。需要操作 Kanzi 时使用已配置的 MCP。
+      若回复中需要让旧飞书桥上传文件，请继续使用：
+      [FILE]
+      path=<文件绝对路径>
+      截图工具返回附件时，确保将资源落盘并按上述格式返回文件路径。
+      Kanzi MCP 返回 JSON 下载 URL 时，先调用 artifact_download；不要把下载正文直接放入回复。
+      使用 artifact_read、artifact_search 或 artifact_json_query 只读取完成任务所需的小片段。
+      图片 URL 或 JSON 中的 base64/data URL 图片使用 artifact_materialize_image；随后把该工具返回的
+      [FILE] path 标记原样放入最终回复。
+    system_prompt_mode: append
+    available_tools: []
+    excluded_tools: []
+  permissions:
+    # ask 在无安全交互审批 UI 的飞书链路中会按 deny 处理。
+    default: deny
+    allow:
+      # Runtime 实际的只读权限 kind。
+      - read
+      - read_file
+      - grep
+      - glob
+      - kanzi-*-kz_get_*
+      - kanzi-*-kz_list_*
+      - kanzi-*-kz_health
+    deny:
+      - shell
+      - write_file
+      - edit_file
+      - kanzi-*-kz_delete_*
+    ask: []
+
+skills:
+  max_file_bytes: 131072
+  max_total_bytes: 524288
+  entries:
+    # A parent without its own SKILL.md automatically discovers child skills.
+    - path: ./skills
+      enabled: false
+    # - path: D:\your-project\.github\skills
+    #   enabled: true
+    # If a directory has its own SKILL.md, set recursive: true to include children too.
+    #   recursive: true
+
+mcp_servers:
+  # These three endpoints preserve the existing HTTP → relay → Kanzi route.
+  kanzi-studio-mcp:
+    enabled: true
+    type: http
+    url: http://10.10.118.152:9001/kanzistudio_mcp
+    headers:
+      X-Kanzi-User: suijichao
+    tools: ["*"]
+    timeout_seconds: 300
+  kanzi-api-mcp:
+    enabled: true
+    type: http
+    url: http://10.10.118.152:9001/kanzi_api_mcp
+    headers:
+      X-Kanzi-User: suijichao
+    tools: ["*"]
+    timeout_seconds: 300
+  kanzi-doc-mcp:
+    enabled: true
+    type: http
+    url: http://10.10.118.152:9001/kanzi_doc_mcp
+    headers:
+      X-Kanzi-User: suijichao
+    tools: ["*"]
+    timeout_seconds: 300
+  # local-example:
+  #   enabled: false
+  #   type: stdio
+  #   command: python
+  #   args: ["./server.py"]
+  #   env: {TOKEN: "${LOCAL_MCP_TOKEN}"}
+  #   cwd: .
+  #   tools: ["*"]
+  #   timeout_seconds: 30
+
+artifacts:
+  enabled: true
+  # Exact scheme + host + port only. Redirects and all other origins are rejected.
+  allowed_origins:
+    - http://10.10.118.152:9001
+    - http://10.10.118.152:8081
+  timeout_seconds: 60
+  max_download_bytes: 67108864
+  max_tool_output_chars: 8000
+  max_search_results: 50
+  allowed_mime_types:
+    - application/json
+    - text/plain
+    - image/png
+    - image/jpeg
+    - image/svg+xml
+    - application/octet-stream
+
+compatibility:
+  thinking_text: "🤖 Copilot 思考中..."
+  output_type: claude_output
+  support_file_download_marker: true
+  bridge_http: http://10.10.118.152:8081/suijichao
+  bridge_target_open_id: null
+  # Legacy Feishu [FILE_DOWNLOAD] timeout. Downloads must match bridge_http origin.
+  download_timeout_seconds: 120
+  max_upload_bytes: 20971520
+  # Extra trusted roots. Relative paths are resolved from config.yaml.
+  # working_directory and .copilot-data/session-state/<session-id>/files are
+  # allowed automatically; never add the entire .copilot-data directory here.
+  upload_allowed_roots: []
+
+messages:
+  max_input_chars: 12000
+  max_output_chars: 3500
+  queue_size: 256
+  worker_count: 1
+  dedup_ttl_seconds: 86400
+
+storage:
+  database_path: ./data/bridge.db
+
+logging:
+  level: INFO
+  file: ./logs/bridge.log
+  max_bytes: 10485760
+  backup_count: 5
