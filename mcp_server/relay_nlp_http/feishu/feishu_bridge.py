@@ -170,6 +170,12 @@ class Bridge:
         self._busy = False
         self._done_event = asyncio.Event()     # 单会话互斥
         self._thinking_sent = False
+        # ---- 单条进度消息 · 五行滚动编辑 ----
+        # nlp 发来的每条 progress 都编辑进同一条飞书消息, 内容保留最近 5 行, 不刷屏。
+        self._progress_msg_id = None      # 当前进度消息的 message_id(为空则需新发)
+        self._progress_open_id = None     # 进度消息所属用户 open_id
+        self._progress_lines: list[str] = []  # 五行环形(最多 5 行)
+        self._PROGRESS_MAX_LINES = 5
         self._stopping = False
 
     def register_file_service(self, upload_queue: queue.Queue):
@@ -205,6 +211,10 @@ class Bridge:
             else:
                 await self._reply_feishu(text)
             self._thinking_sent = False
+            # 一轮结束: 清空进度消息(下条任务重新新发一条)
+            self._progress_msg_id = None
+            self._progress_open_id = None
+            self._progress_lines = []
             self._done_event.set()
         elif msg_type == "thinking":
             t = str(msg.get("text", ""))
@@ -219,12 +229,12 @@ class Bridge:
         elif msg_type == "worker_disconnected":
             log.info(f"[{self.bot_name}] copilot worker 断开")
         elif msg_type == "progress":
-            # 多阶段活动反馈：原文转发给用户，绝不触发 _done_event，
-            # 因此不作为"一轮结束"、不会提前放行第二条指令；也不进 thinking 分支。
+            # 多阶段活动反馈：绝不触发 _done_event(不作为一轮结束、不提前放行第二条)。
+            # 单条 ·五行滚动编辑: 维持一条进度消息, 内容保留最近五行, 不刷屏。
             t = str(msg.get("text", ""))
             if t.strip():
                 log.info(f"[{self.bot_name}] copilot progress: {t[:120]}")
-                await self._reply_feishu(t)
+                await self._reply_progress(t)
 
     async def _reply_feishu(self, text: str):
         open_id = self.last_sender
@@ -232,6 +242,40 @@ class Bridge:
             log.warning(self._tag("⚠️ 无 last_sender, 回复无法路由(丢弃)"))
             return
         await self.feishu.send_text(open_id, text)
+
+    async def _reply_progress(self, line: str):
+        """单条进度消息 · 五行滚动编辑。
+
+        把 nlp 发来的每条进度编辑进同一条飞书消息, 消息内容保留最近五行:
+        - 无当前进度消息 → 新发一条并记录 message_id;
+        - 已有 → 用飞书 update 编辑该条(内容=最近五行)。
+        条数始终 1 条, 内容滚动更新; nlp 已做事件节流, 这里不再加频率限制。
+        """
+        open_id = self._progress_open_id or self.last_sender
+        if not open_id:
+            log.warning(self._tag("⚠️ 无 open_id, progress 无法路由(丢弃)"))
+            return
+        # 五行环形: 追加, 超 5 行顶掉最旧
+        self._progress_lines.append(line)
+        if len(self._progress_lines) > self._PROGRESS_MAX_LINES:
+            self._progress_lines = self._progress_lines[-self._PROGRESS_MAX_LINES:]
+        body = "\n".join(self._progress_lines)
+        if not self._progress_msg_id:
+            # 新发一条
+            ok, mid = await self.feishu.send_text_with_id(open_id, body)
+            if ok and mid:
+                self._progress_msg_id = mid
+                self._progress_open_id = open_id
+        else:
+            # 编辑同一条
+            ok = await self.feishu.edit_text(open_id, self._progress_msg_id, body)
+            if not ok:
+                # 编辑失败(可能已失效) → 重新新发一条
+                log.warning(self._tag("进度编辑失败, 重新新发一条"))
+                ok, mid = await self.feishu.send_text_with_id(open_id, body)
+                if ok and mid:
+                    self._progress_msg_id = mid
+                    self._progress_open_id = open_id
 
     # ---- 主循环: 排空飞书指令队列, 转发给 copilot ----
     async def run(self):
@@ -450,10 +494,22 @@ class FeishuClient:
     def send_text(self, open_id: str, text: str):
         return asyncio.get_running_loop().run_in_executor(None, self._send_text_sync, open_id, text)
 
+    # 新发一条文本消息, 返回 (ok, message_id)
+    def send_text_with_id(self, open_id: str, text: str):
+        return asyncio.get_running_loop().run_in_executor(None, self._send_text_with_id_sync, open_id, text)
+
+    # 编辑已发消息内容(飞书 update), 返回 ok
+    def edit_text(self, open_id: str, message_id: str, text: str):
+        return asyncio.get_running_loop().run_in_executor(None, self._edit_text_sync, open_id, message_id, text)
+
     def _send_text_sync(self, open_id: str, text: str):
+        ok, _mid = self._send_text_with_id_sync(open_id, text)
+        return ok
+
+    def _send_text_with_id_sync(self, open_id: str, text: str) -> tuple:
         if not self.client:
             log.error(f"[{self.bot_name}] 飞书客户端未初始化")
-            return False
+            return (False, None)
         try:
             _ReqCls = getattr(self, "_CreateMessageRequest", None)
             _BodyCls = getattr(self, "_CreateMessageRequestBody", None)
@@ -472,11 +528,46 @@ class FeishuClient:
             resp = self.client.im.v1.message.create(request)
             if not resp.success():
                 log.error(f"[{self.bot_name}] 飞书发送失败: code={resp.code} msg={resp.msg}")
-                return False
-            log.info(f"[{self.bot_name}] 已回复飞书: {text[:40]}")
-            return True
+                return (False, None)
+            mid = ""
+            try:
+                data = resp.data
+                if data is not None:
+                    mid = str(getattr(data, "message_id", "") or "")
+            except Exception:
+                pass
+            log.info(f"[{self.bot_name}] 已回复飞书({mid}): {text[:40]}")
+            return (True, mid)
         except Exception as e:
             log.error(f"[{self.bot_name}] 飞书发送异常: {e}")
+            return (False, None)
+
+    def _edit_text_sync(self, open_id: str, message_id: str, text: str) -> bool:
+        if not self.client or not message_id:
+            log.error(f"[{self.bot_name}] 飞书客户端未初始化或缺 message_id")
+            return False
+        try:
+            _ReqCls = getattr(self, "_UpdateMessageRequest", None)
+            _BodyCls = getattr(self, "_UpdateMessageRequestBody", None)
+            if _ReqCls is None or _BodyCls is None:
+                _ReqCls = self._lark.api.im.v1.UpdateMessageRequest
+                _BodyCls = self._lark.api.im.v1.UpdateMessageRequestBody
+            body = _BodyCls.builder() \
+                .msg_type("text") \
+                .content(json.dumps({"text": text}, ensure_ascii=False)) \
+                .build()
+            request = _ReqCls.builder() \
+                .message_id(message_id) \
+                .request_body(body) \
+                .build()
+            resp = self.client.im.v1.message.update(request)
+            if not resp.success():
+                log.error(f"[{self.bot_name}] 飞书编辑失败: code={resp.code} msg={resp.msg}")
+                return False
+            log.info(f"[{self.bot_name}] 已编辑飞书进度({message_id}): {text[:40]}")
+            return True
+        except Exception as e:
+            log.error(f"[{self.bot_name}] 飞书编辑异常: {e}")
             return False
 
     # ---- v2: 飞书文件 API ----
