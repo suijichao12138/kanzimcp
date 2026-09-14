@@ -85,6 +85,8 @@ class RelayClient:
         self.ws = None
         self.running = False
         self.on_message = None  # 回调: func(raw_msg_str)
+        self.on_link_down = None  # 回调: func() —— 连接断开/被替换时调用(用于 fail all pending)
+        self.on_link_up = None    # 回调: func() —— 连接成功建立时调用
 
     async def start(self):
         self.running = True
@@ -119,10 +121,22 @@ class RelayClient:
                         "name": self.username
                     }))
                     log.info(f"✅ [{self.username}] 已连接中继(client): {self.relay_url}")
+                    if self.on_link_up:
+                        try:
+                            await self.on_link_up()
+                        except Exception as e:
+                            log.warning(f"[{self.username}] on_link_up 回调异常: {e}")
 
                     async for raw in ws:
                         if self.on_message:
                             await self.on_message(raw)
+
+                # async for 循环正常退出(连接关闭) → 通知链路断开
+                if self.on_link_down:
+                    try:
+                        await self.on_link_down()
+                    except Exception as e:
+                        log.warning(f"[{self.username}] on_link_down 回调异常: {e}")
 
             except websockets.ConnectionClosed as e:
                 if e.code == 4001:
@@ -131,6 +145,11 @@ class RelayClient:
                     log.warning(f"🔌 [{self.username}] 中继连接断开, 3秒后重连...")
             except Exception as e:
                 log.error(f"❌ [{self.username}] 连接错误: {e}")
+                if self.on_link_down:
+                    try:
+                        await self.on_link_down()
+                    except Exception as e2:
+                        log.warning(f"[{self.username}] on_link_down 回调异常: {e2}")
 
             if self.running:
                 await asyncio.sleep(3 if self.ws else 5)
@@ -160,14 +179,121 @@ class RelayClient:
 
 
 class McpProxyHandler:
-    """单用户的 MCP 请求代理: 裸 JSON-RPC 经 client 槽转发到 Kanzi server。"""
+    """单用户的 MCP 请求代理: 裸 JSON-RPC 经 client 槽转发到 Kanzi server。
+    ★ 喂狗机制(http 侧发起): 后台定期并行探测 kz_health, 插件返回执行状态
+      {ok, busy, active_request_id}; 据此动态判定每个 pending 该等还是秒级 fail。
+      * 插件 active_request_id==我 → 在执行 → 继续等(不误杀长动作)
+      * 插件 active_request_id==别的 → 我在排队 → 继续等
+      * 插件空闲(null) 且我没收到响应 → 请求丢了 → fail(秒级, copilot 重试)
+      * 喂狗连续 N 次无响应(链路坏) → fail 所有 pending + 自动重连
+    """
 
-    def __init__(self, relay: RelayClient, username: str, request_timeout=300.0):
+    # 喂狗/动态判定配置
+    HB_INTERVAL = 5       # 喂狗(kz_health)间隔 秒
+    HB_MAX_FAILS = 3      # 连续 N 次无响应 ⇒ 判链路坏
+    REQ_CHECK_INTERVAL = 2  # 单个 pending 周期检查间隔 秒
+
+    def __init__(self, relay: RelayClient, username: str, request_timeout=300.0,
+                 hb_interval=None, hb_max_fails=None, req_check=None):
         self.relay = relay
         self.username = username
         self.request_timeout = request_timeout
+        # 喂狗参数: 实例级优先, 缺省用类常量
+        self.HB_INTERVAL = hb_interval if hb_interval else self.HB_INTERVAL
+        self.HB_MAX_FAILS = hb_max_fails if hb_max_fails else self.HB_MAX_FAILS
+        self.REQ_CHECK_INTERVAL = req_check if req_check else self.REQ_CHECK_INTERVAL
         self.pending = {}
         self._lock = asyncio.Lock()
+        # 喂狗状态(每用户独立)
+        self._hb_task = None
+        self._hb_fail_count = 0      # 连续无响应计数(0=最近一次探活成功)
+        self._active_req = None      # 插件当前执行中的请求 id(kz_health 回填)
+        self._hb_locked = False      # 喂狗自身占信道的锁(避免和业务请求抢)
+        # 链路断开回调 → fail 所有 pending(自愈关键)
+        self.relay.on_link_down = self._on_link_down
+        self.relay.on_link_up = self._on_link_up
+
+    # ── 喂狗任务启停 ──
+    def start_heartbeat(self):
+        if self._hb_task is None or self._hb_task.done():
+            self._hb_task = asyncio.get_event_loop().create_task(self._heartbeat_loop())
+
+    def stop_heartbeat(self):
+        if self._hb_task:
+            self._hb_task.cancel()
+            self._hb_task = None
+
+    async def _heartbeat_loop(self):
+        """后台喂狗: 定期发 kz_health 探活, 更新 active_req/链路状态。
+        注意: kz_health 必须并行独立响应、不排业务请求队列(插件侧保证),
+        否则长动作会卡住探活、误判链路坏。"""
+        while True:
+            try:
+                await asyncio.sleep(self.HB_INTERVAL)
+                # 探活请求(短超时)
+                hb_id = f"hb-{uuid.uuid4().hex}"
+                resp = await self.relay_request(
+                    {"jsonrpc": "2.0", "id": hb_id, "method": "tools/call",
+                     "params": {"name": "kz_health", "arguments": {}}},
+                    timeout=min(self.HB_INTERVAL, 4.0))
+                # 解析插件返回的执行状态
+                self._parse_health(resp)
+                # 探活成功 → 清零连续失败
+                self._hb_fail_count = 0
+            except Exception as e:
+                # 探活自身失败(超时/无响应) → 连续失败计数+1
+                self._hb_fail_count += 1
+                log.warning(f"💗 [{self.username}] 喂狗无响应 ({self._hb_fail_count}/{self.HB_MAX_FAILS}): {e}")
+                if self._hb_fail_count >= self.HB_MAX_FAILS:
+                    # 链路坏 → fail 所有 pending(不干等), 触发 relay 重连
+                    log.error(f"🚨 [{self.username}] 喂狗连续 {self.HB_MAX_FAILS} 次无响应 → 判链路坏, fail 所有 pending")
+                    await self.fail_all_pending("链路断(喂狗连续无响应)")
+
+    def _parse_health(self, resp):
+        """从 kz_health 返回里提取 busy / active_request_id。"""
+        try:
+            if not isinstance(resp, dict):
+                return
+            # 可能直接 result.busy / result.active_request_id, 或 result.content[].text 里
+            r = resp.get("result")
+            if isinstance(r, dict):
+                if "activeRequestId" in r:
+                    self._active_req = r.get("activeRequestId")
+                elif "active_request_id" in r:
+                    self._active_req = r.get("active_request_id")
+                # busy 若存在而 no active id → 插件在跑未知请求, 保守不 fail
+            elif isinstance(r, dict) and isinstance(r.get("content"), list):
+                txt = " ".join(c.get("text", "") for c in r["content"] if isinstance(c, dict))
+                # 简单解析文本里的 active_request_id:  xxx
+                import re as _re
+                m = _re.search(r"active[_\-]?request[_\-]?id[\s:=\s]*([A-Za-z0-9\-_]+)", txt)
+                if m:
+                    self._active_req = m.group(1)
+        except Exception:
+            pass
+
+    # ── 链路状态回调 ──
+    async def _on_link_down(self):
+        """连接断开/被替换 → fail 所有 pending(立刻报错, 不干等 300s)。
+        copilot 收到错误后重试, 此时连接已重建、重试必成。"""
+        log.warning(f"🔌 [{self.username}] 链路断开 → fail 所有 pending")
+        await self.fail_all_pending("链路断开(连接被替换/掉落)")
+
+    async def _on_link_up(self):
+        """连接重新建立 → 喂狗计数清零, 等待新链路接管。"""
+        log.info(f"🔗 [{self.username}] 链路已重建")
+        self._hb_fail_count = 0
+
+    async def fail_all_pending(self, reason: str):
+        """fail 该用户所有 pending(立刻返回错误)。"""
+        async with self._lock:
+            items = list(self.pending.items())
+            for req_id, fut in items:
+                if not fut.done():
+                    fut.set_result({
+                        "jsonrpc": "2.0", "id": req_id,
+                        "error": {"code": -32000, "message": f"MCP 请求失败: {reason}"}
+                    })
 
     async def relay_request(self, req: dict, timeout=None) -> dict:
         if timeout is None:
@@ -176,20 +302,76 @@ class McpProxyHandler:
         fut = asyncio.get_event_loop().create_future()
         async with self._lock:
             self.pending[req_id] = fut
+        # 是否探活请求(短超时, 不进动态判定的业务判定)
+        is_health = req.get("params", {}).get("name") == "kz_health"
         try:
             if not self.relay.ws:
                 return {"jsonrpc": "2.0", "id": req_id,
                         "error": {"code": -32000,
                                   "message": f"用户 {self.username} 的 Kanzi 未连接(server 可能未启动)"}}
             await self.relay.send(req)
+
+            if is_health:
+                # 探活: 固定短超时, 不参与动态判定
+                try:
+                    return await asyncio.wait_for(fut, timeout=timeout)
+                except asyncio.TimeoutError:
+                    return None
+            # 业务请求: 固定兜底超时 + 周期动态判定
             try:
-                return await asyncio.wait_for(fut, timeout=timeout)
+                done, _ = await asyncio.wait(
+                    [fut, asyncio.get_event_loop().create_task(self._watch_req(req_id))],
+                    timeout=timeout, return_when=asyncio.FIRST_COMPLETED)
             except asyncio.TimeoutError:
+                done = None
+            if not done:
                 return {"jsonrpc": "2.0", "id": req_id,
-                        "error": {"code": -32000, "message": "MCP 请求超时"}}
+                        "error": {"code": -32000, "message": "MCP 请求超时(兜底)"}}
+            # fut 完成
+            for t in done:
+                if t is fut and not fut.done():
+                    fut.set_result({"jsonrpc":"2.0","id":req_id,
+                                    "error":{"code":-32000,"message":"MCP 请求超时"}})
+                if getattr(t, "cancel", None):
+                    t.cancel()
+            if fut.done():
+                return fut.result()
+            return {"jsonrpc": "2.0", "id": req_id,
+                    "error": {"code": -32000, "message": "MCP 请求超时"}}
         finally:
             async with self._lock:
                 self.pending.pop(req_id, None)
+
+    async def _watch_req(self, req_id: str):
+        """单个 pending 的周期检查: 判定它该等还是秒级 fail。
+        规则(插件串行, 全局 active_req 即可判):
+          - active_req == 我        → 插件在执行 → 等(不误杀)
+          - active_req == 别的      → 我在排队   → 等
+          - active_req == None 且未收到响应 → 请求丢了/插件空闲 → 秒级 fail(让 copilot 重试)
+        """
+        while True:
+            await asyncio.sleep(self.REQ_CHECK_INTERVAL)
+            async with self._lock:
+                fut = self.pending.get(req_id)
+                if fut is None or fut.done():
+                    return  # 已收响应/已 fail, 结束
+            # 链路断(喂狗判定) → 该请求已被 fail_all, 这里只需等 fut 完成
+            ar = self._active_req
+            if ar is None:
+                # 插件空闲且还没收到该请求的响应 → 请求丢了(竞态/被吞), 秒级 fail
+                # 注意: 只有收到过 kz_health(链路活着) 才这么判; 链路坏由喂狗处理
+                if self._hb_fail_count < self.HB_MAX_FAILS:
+                    async with self._lock:
+                        fut2 = self.pending.get(req_id)
+                        if fut2 and not fut2.done():
+                            log.warning(f"⚠️ [{self.username}] 请求 {req_id} 插件空闲未响应 → 秒级 fail(重试)")
+                            fut2.set_result({
+                                "jsonrpc": "2.0", "id": req_id,
+                                "error": {"code": -32000,
+                                           "message": "MCP 请求丢失(插件空闲未收到), 请重试"}
+                            })
+                            return
+            # 否则(active_req==我 或 ==别的) → 插件忙, 继续等; 下一轮再看
 
     async def handle_mcp_response(self, raw: str):
         try:
@@ -225,9 +407,12 @@ class UserManager:
     """
 
     def __init__(self, relay_base: str, allowed_users: set, request_timeout=300.0,
-                 config_path: str = None):
+                 config_path: str = None, hb_interval=5, hb_max_fails=3, req_check=2):
         self.relay_base = relay_base.rstrip("/")
         self.request_timeout = request_timeout
+        self.hb_interval = hb_interval       # 喂狗(kz_health)间隔
+        self.hb_max_fails = hb_max_fails     # 连续无响应判坏阈值
+        self.req_check = req_check           # 单请求周期检查间隔
         self._config_path = config_path
         self._last_mtime = None
         self.allowed = allowed_users
@@ -292,8 +477,13 @@ class UserManager:
         if username not in self.connections:
             url = f"{self.relay_base}/{username}"
             relay = RelayClient(url, username)
-            handler = McpProxyHandler(relay, username, self.request_timeout)
+            handler = McpProxyHandler(relay, username, self.request_timeout,
+                                      hb_interval=self.hb_interval,
+                                      hb_max_fails=self.hb_max_fails,
+                                      req_check=self.req_check)
             relay.on_message = handler.handle_mcp_response
+            # http 侧喂狗: 每用户一个喂狗任务(探 kz_health, 动态判定 pending)
+            handler.start_heartbeat()
             self.connections[username] = (relay, handler)
         return self.connections[username]
 
@@ -307,7 +497,11 @@ class UserManager:
         return self._ensure(username)[1]
 
     async def stop_all(self):
-        for relay, _ in self.connections.values():
+        for relay, handler in self.connections.values():
+            try:
+                handler.stop_heartbeat()
+            except Exception:
+                pass
             await relay.stop()
 
 
@@ -808,59 +1002,166 @@ class HttpMcpServer:
 
 
 # ═══════════════════════════════════════════════════════════════════
+#  配置文件加载（把全部启动参数收敛到一个 config.json，白名单单独 users.json 保持热更新）
+# ═══════════════════════════════════════════════════════════════════
+DEFAULT_CONFIG_PATH = "config.json"
+
+def _cfg(path, key, defv):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        v = data.get(key, defv)
+        return v
+    except Exception:
+        return defv
+
+def _cfg_int(cfg, key, defv):
+    v = cfg.get(key)
+    if v is None:
+        return defv
+    try:
+        return int(v)
+    except Exception:
+        return defv
+
+def _cfg_str(cfg, key, defv):
+    v = cfg.get(key)
+    return v if v is not None and str(v) != "" else defv
+
+def _cfg_bool(cfg, key, defv):
+    v = cfg.get(key)
+    if v is None:
+        return defv
+    if isinstance(v, bool):
+        return v
+    return str(v).lower() in ("1", "true", "yes", "on")
+
+def load_config(path):
+    """读取 config.json（若存在）。不存在/损坏返回空 dict，全部走命令行默认值，不崩。
+    白名单不在这个文件里 —— users 永远走独立 users.json 并热更新（改了不重启）。"""
+    cfg = {}
+    if not path:
+        return cfg
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+    except FileNotFoundError:
+        log.info("info: config not found, use commandline defaults " + str(path))
+    except Exception as e:
+        log.warning("warn: config read fail, use commandline defaults: %s" % e)
+    return cfg if isinstance(cfg, dict) else {}
+
+def write_config_example(path):
+    """生成一份带全部字段的示例配置（不覆盖已有文件）。"""
+    if os.path.exists(path):
+        return
+    example = {
+        "relay_base": "ws://127.0.0.1:58080",
+        "users": "users.json",
+        "listen": "0.0.0.0:9001",
+        "mcp_timeout": 300,
+        "heartbeat_interval": 5,
+        "heartbeat_max_fails": 3,
+        "req_check_interval": 2,
+        "result_tmp_dir": "tmp_results",
+        "result_ttl": 1800,
+        "result_public_host": None,
+        "result_threshold_entries": 50,
+        "result_threshold_bytes": 4096,
+        "debug": False,
+    }
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(example, f, ensure_ascii=False, indent=2)
+    log.info("sample config written: " + str(path))
+
+# ═══════════════════════════════════════════════════════════════════
 #  入口
 # ═══════════════════════════════════════════════════════════════════
 async def main():
     parser = argparse.ArgumentParser(description="单进程多用户 Kanzi MCP over HTTP server")
-    parser.add_argument("--relay-base", required=True,
+    parser.add_argument("--config", default=None,
+                       help="配置文件路径 (默认 config.json; 所有启动参数都在这改)。命令行参数仍可覆盖对应项。白名单永远在 users 字段指定的 users.json, 改它不重启热更新)")
+    parser.add_argument("--relay-base", default=None,
                        help="中继地址基座(不含用户名), 如 ws://127.0.0.1:58080 —— 每个用户连接 <base>/<用户名>")
-    parser.add_argument("--users", required=True,
-                       help="白名单配置文件(JSON, 含 users 数组), 如 users.json")
-    parser.add_argument("--listen", default="0.0.0.0:9001",
-                       help="HTTP MCP server 监听 主机:端口 (默认 0.0.0.0:9001; 需远程 copilot 访问时用 0.0.0.0, 仅本机调试才用 127.0.0.1)")
-    parser.add_argument("--mcp-timeout", type=int, default=300,
-                       help="MCP 转发到 Kanzi 的单次请求超时秒数 (默认 300; Kanzi 创建慢时可调大)")
+    parser.add_argument("--users", default=None,
+                       help="白名单配置文件(JSON, 含 users 数组), 如 users.json (改它不重启, 热更新)")
+    parser.add_argument("--listen", default=None,
+                       help="HTTP MCP server 监听 主机:端口 (默认 0.0.0.0:9001)")
+    parser.add_argument("--mcp-timeout", type=int, default=None,
+                       help="MCP 转发到 Kanzi 的单次请求超时秒数 (默认 300)")
+    parser.add_argument("--heartbeat-interval", type=int, default=None,
+                       help="喂狗(kz_health)间隔秒数 (默认 5)")
+    parser.add_argument("--heartbeat-max-fails", type=int, default=None,
+                       help="喂狗连续 N 次无响应即判链路坏 (默认 3)")
+    parser.add_argument("--req-check-interval", type=int, default=None,
+                       help="单个请求周期检查间隔秒数 (默认 2)")
     parser.add_argument("--result-tmp-dir", default=None,
-                       help="大批量结果落盘目录 (默认 <cwd>/tmp_results; 中继机本地, AI 通过 /data/<id> GET 取)")
+                       help="大批量结果落盘目录 (默认 tmp_results)")
     parser.add_argument("--result-ttl", type=int, default=None,
-                       help="临时结果文件存活秒数 (默认 1800=30分钟, 到期自动清理)")
+                       help="临时结果文件存活秒数 (默认 1800)")
     parser.add_argument("--result-public-host", default=None,
-                       help="结果文件 URL 里对 AI 可达的中继机 IP（默认用 --listen 的 host；若监听 0.0.0.0 而 AI 跨机，必须配真实 IP，参考 feishu_bridge http_bind_ip）")
+                       help="结果文件 URL 里对 AI 可达的中继机 IP (跨机必配)")
     parser.add_argument("--result-threshold-entries", type=int, default=None,
                        help="记录数超过此值才外置 (默认 50)")
     parser.add_argument("--result-threshold-bytes", type=int, default=None,
-                       help="文本超过此字节才外置 (默认 4096=4KB)")
-    parser.add_argument("--debug", action="store_true", help="开启调试日志")
+                       help="文本超过此字节才外置 (默认 4096)")
+    parser.add_argument("--debug", const=True, nargs="?", default=None,
+                       help="开启调试日志")
     args = parser.parse_args()
 
-    if args.debug:
+    # 加载配置文件（不存在则生成示例）
+    cfg_path = args.config or DEFAULT_CONFIG_PATH
+    write_config_example(cfg_path)
+    cfg = load_config(cfg_path)
+
+    # 参数解析: 命令行优先, 缺省走配置, 再缺省走内置默认
+    relay_base   = args.relay_base or _cfg_str(cfg, "relay_base", None)
+    users_file   = args.users or _cfg_str(cfg, "users", None)
+    listen       = args.listen or _cfg_str(cfg, "listen", "0.0.0.0:9001")
+    mcp_timeout  = args.mcp_timeout if args.mcp_timeout is not None else _cfg_int(cfg, "mcp_timeout", 300)
+    hb_interval  = args.heartbeat_interval if args.heartbeat_interval is not None else _cfg_int(cfg, "heartbeat_interval", 5)
+    hb_max_fails = args.heartbeat_max_fails if args.heartbeat_max_fails is not None else _cfg_int(cfg, "heartbeat_max_fails", 3)
+    req_check    = args.req_check_interval if args.req_check_interval is not None else _cfg_int(cfg, "req_check_interval", 2)
+    debg         = args.debug if args.debug is not None else _cfg_bool(cfg, "debug", False)
+
+    if debg:
         logging.getLogger().setLevel(logging.DEBUG)
 
-    host, _, port_str = args.listen.partition(":")
+    if not relay_base or not users_file:
+        log.error("缺少 relay_base 或 users 配置（请写入 %s 或命令行传入）" % cfg_path)
+        sys.exit(1)
+
+    host, _, port_str = listen.partition(":")
     port = int(port_str or "9001")
 
-    allowed = load_users(args.users)
+    allowed = load_users(users_file)
     if not allowed:
         log.error("白名单为空, 拒绝启动")
         sys.exit(1)
 
-    manager = UserManager(args.relay_base, allowed, request_timeout=args.mcp_timeout,
-                          config_path=args.users)
+    manager = UserManager(relay_base, allowed, request_timeout=mcp_timeout,
+                          config_path=users_file,
+                          hb_interval=hb_interval, hb_max_fails=hb_max_fails,
+                          req_check=req_check)
     http_mcp = HttpMcpServer(manager, host, port)
     # 大批量结果外置配置 (阈值/TTL/TMP 目录)
-    if args.result_threshold_entries is not None:
-        http_mcp.RESULT_THRESHOLD_ENTRIES = args.result_threshold_entries
-    if args.result_threshold_bytes is not None:
-        http_mcp.RESULT_THRESHOLD_BYTES = args.result_threshold_bytes
-    http_mcp.set_result_offload(args.result_tmp_dir, args.result_ttl,
-                                public_host=args.result_public_host)
+    _e = args.result_threshold_entries
+    http_mcp.RESULT_THRESHOLD_ENTRIES = _e if _e is not None else _cfg_int(cfg, "result_threshold_entries", 50)
+    _b = args.result_threshold_bytes
+    http_mcp.RESULT_THRESHOLD_BYTES = _b if _b is not None else _cfg_int(cfg, "result_threshold_bytes", 4096)
+    _rt = args.result_tmp_dir or _cfg_str(cfg, "result_tmp_dir", None)
+    _ttl = args.result_ttl if args.result_ttl is not None else _cfg_int(cfg, "result_ttl", 1800)
+    _ph = args.result_public_host or _cfg_str(cfg, "result_public_host", None)
+    http_mcp.set_result_offload(_rt, _ttl, public_host=_ph)
     await http_mcp.start()
     await http_mcp.start_sweep()
 
     log.info(f"🚀 kz_mcp_http.py 已就绪 (单进程多用户)")
-    log.info(f"   relay 基座: {args.relay_base}")
+    log.info(f"   relay 基座: {relay_base}")
     log.info(f"   白名单: {sorted(allowed)}")
-    log.info(f"   ★ 白名单热更新: 编辑 {args.users} 保存后即时生效, 无需重启 kz_mcp_http.py / nlp_worker")
+    log.info(f"   配置文件: {cfg_path}")
+    log.info(f"   喂狗: interval={hb_interval}s max_fails={hb_max_fails} req_check={req_check}s")
+    log.info(f"   ★ 白名单热更新: 编辑 {users_file} 保存后即时生效, 无需重启 kz_mcp_http.py / nlp_worker")
     log.info(f"   HTTP 端点: http://{host}:{port}/mcp")
     log.info(f"   copilot 配置示例:")
     log.info(f"     --additional-mcp-config '{{\"kanzi\":{{\"type\":\"http\",\"url\":\"http://{host}:{port}/mcp\",\"headers\":{{\"X-Kanzi-User\":\"suijichao\"}}}}}}'")

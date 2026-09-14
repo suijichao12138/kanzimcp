@@ -1,0 +1,15 @@
+{
+  "relay_base": "ws://127.0.0.1:58080",
+  "users": "users.json",
+  "listen": "0.0.0.0:9001",
+  "mcp_timeout": 300,
+  "heartbeat_interval": 5,
+  "heartbeat_max_fails": 3,
+  "req_check_interval": 2,
+  "result_tmp_dir": "tmp_results",
+  "result_ttl": 1800,
+  "result_public_host": null,
+  "result_threshold_entries": 50,
+  "result_threshold_bytes": 4096,
+  "debug": false
+}

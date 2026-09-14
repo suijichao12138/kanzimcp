@@ -16,6 +16,14 @@ namespace KzMCPChatPlugin
     public class KzMCPServerClient : IDisposable
     {
         private readonly KzMCPReflectionBridge _bridge;
+
+        // ★ 执行互斥 + 当前执行状态（http 侧喂狗 kz_health 所需）
+        // 插件反射执行本质串行；这里用互斥保证"一个时刻只跑一个请求"，并记录
+        // 正在执行的请求 id，让 kz_health 可返回 busy / active_request_id，
+        // 供 http 侧动态判定"该等还是秒级 fail"。
+        private readonly object _execLock = new object();
+        private readonly System.Threading.SemaphoreSlim _execSem = new System.Threading.SemaphoreSlim(1, 1);  // 串行互斥(可await)
+        private volatile string _activeRequestId = null;   // 当前正在执行的请求 id(null=空闲)
         private ClientWebSocket _ws;
         private CancellationTokenSource _cts;
 
@@ -225,8 +233,16 @@ namespace KzMCPChatPlugin
                     var ctRef = ct;
                     _ = Task.Run(async () =>
                     {
+                        // ★ 探活(kz_health)不排队：直接并行独立执行并返回 busy/active_request_id，
+                        //   不占互斥——否则长动作会卡住喂狗、http 侧误判链路坏。
+                        //   这就是方案要求的"探测必须并行"。
+                        bool isHealth = (toolName == "kz_health");
+                        if (!isHealth)
+                            await _execSem.WaitAsync();
                         try
                         {
+                            if (!isHealth)
+                                _activeRequestId = msgId.ToString();   // 标记当前执行中的请求
                             string resultText = ExecuteToolAsync(toolName, arguments).GetAwaiter().GetResult();
                             var resp = JsonUtils.Serialize(new
                             {
@@ -254,6 +270,14 @@ namespace KzMCPChatPlugin
                             });
                             try { await SendAsync(wsRef, errResp, ctRef); } catch { }
                             await FireLog($"❌ {toolName} 失败: {ex.Message}");
+                        }
+                        finally
+                        {
+                            // 清执行状态：仅当自己仍是当前执行者时归零(防覆盖新请求)
+                            if (!isHealth && _activeRequestId == msgId.ToString())
+                                _activeRequestId = null;
+                            if (!isHealth)
+                                _execSem.Release();
                         }
                     });
                     return; // 不阻塞接收循环
@@ -665,8 +689,17 @@ namespace KzMCPChatPlugin
             switch (toolName)
             {
                 case "kz_health":
-                    string projectName = _bridge.GetProjectName();
-                    return Task.FromResult($"✅ 连接正常\n   工程: {projectName}");
+                    string projectName;
+                    try { projectName = _bridge.GetProjectName(); }
+                    catch { projectName = "(取工程名被长任务暂占)"; }
+                    string cur = _activeRequestId;
+                    bool busy = cur != null;
+                    return Task.FromResult(
+                        $"✅ 连接正常\n" +
+                        $"  ok: true\n" +
+                        $"  busy: {busy}\n" +
+                        $"  active_request_id: {(cur ?? "null")}\n" +
+                        $"  工程: {projectName}");
 
                 case "kz_list_projects":
                     try
