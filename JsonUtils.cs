@@ -261,6 +261,14 @@ namespace KzMCPChatPlugin
             return def;
         }
 
+        /// <summary>取原始值(不做类型强转): 用于 JSON-RPC id 这类"整数/字符串都合法"的字段,
+        /// 保证原样透传, 避免字符串 id 被按整数解析失败而落成默认值。</summary>
+        public static object GetRaw(Dictionary<string, object> d, string key, object def = null)
+        {
+            if (d == null) return def;
+            return d.TryGetValue(key, out var v) ? v : def;
+        }
+
         public static Dictionary<string, object> GetDict(Dictionary<string, object> d, string key, bool create = true)
         {
             if (d == null) return create ? new Dictionary<string, object>() : null;

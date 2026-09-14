@@ -174,7 +174,11 @@ namespace KzMCPChatPlugin
                 if (req == null) return;
 
                 string method = JsonUtils.GetStr(req, "method");
-                var msgId = JsonUtils.GetInt(req, "id");
+                // ★ 修复: id 必须原样透传(JSON-RPC 允许 id 为整数或字符串)。
+                //   原实现用 GetInt 取 id, 字符串 id(如 "one1"/"hb-xxx")解析失败 → 返回默认 -1,
+                //   回包 id 恒为 -1 → 按 id 配对的上游(http/多脚本定向回传)永远配不上 → 请求被判丢失。
+                object msgIdRaw = JsonUtils.GetRaw(req, "id");
+                string msgIdStr = msgIdRaw?.ToString() ?? "";
 
                 await FireLog($"📩 收到请求: {method}");
 
@@ -185,7 +189,7 @@ namespace KzMCPChatPlugin
                     responseJson = JsonUtils.Serialize(new
                     {
                         jsonrpc = "2.0",
-                        id = msgId,
+                        id = msgIdRaw,
                         result = new
                         {
                             protocolVersion = "2024-11-05",
@@ -204,7 +208,7 @@ namespace KzMCPChatPlugin
                     responseJson = JsonUtils.Serialize(new
                     {
                         jsonrpc = "2.0",
-                        id = msgId,
+                        id = msgIdRaw,
                         result = "pong"
                     });
                     await SendAsync(ws, responseJson, ct);
@@ -215,7 +219,7 @@ namespace KzMCPChatPlugin
                     responseJson = JsonUtils.Serialize(new
                     {
                         jsonrpc = "2.0",
-                        id = msgId,
+                        id = msgIdRaw,
                         result = new { tools = GetMcpTools() }
                     });
                     await SendAsync(ws, responseJson, ct);
@@ -242,12 +246,12 @@ namespace KzMCPChatPlugin
                         try
                         {
                             if (!isHealth)
-                                _activeRequestId = msgId.ToString();   // 标记当前执行中的请求
+                                _activeRequestId = msgIdStr;   // 标记当前执行中的请求
                             string resultText = ExecuteToolAsync(toolName, arguments).GetAwaiter().GetResult();
                             var resp = JsonUtils.Serialize(new
                             {
                                 jsonrpc = "2.0",
-                                id = msgId,
+                                id = msgIdRaw,
                                 result = new
                                 {
                                     content = new[] { new { type = "text", text = resultText } }
@@ -261,7 +265,7 @@ namespace KzMCPChatPlugin
                             var errResp = JsonUtils.Serialize(new
                             {
                                 jsonrpc = "2.0",
-                                id = msgId,
+                                id = msgIdRaw,
                                 result = new
                                 {
                                     isError = true,
@@ -274,7 +278,7 @@ namespace KzMCPChatPlugin
                         finally
                         {
                             // 清执行状态：仅当自己仍是当前执行者时归零(防覆盖新请求)
-                            if (!isHealth && _activeRequestId == msgId.ToString())
+                            if (!isHealth && _activeRequestId == msgIdStr)
                                 _activeRequestId = null;
                             if (!isHealth)
                                 _execSem.Release();

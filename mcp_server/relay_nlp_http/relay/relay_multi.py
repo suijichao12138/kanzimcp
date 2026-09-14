@@ -1,14 +1,19 @@
 """
-Kanzi Studio MCP WebSocket 中继服务 — 多用户 + NLP Worker 版
+Kanzi Studio MCP WebSocket 中继服务 — 多用户 + NLP Worker + 多连接共存版
 
-处理三种客户端角色：
+处理四种客户端角色：
 - server: Kanzi MCP server_ws
 - client: 外部 MCP 客户端
 - nlp_client: Kanzi Studio 聊天插件（用户输入自然语言）
 - nlp_worker: Claude Worker（执行 Claude Code）
 
+V2026-09-14 多连接共存改造（脚本批量执行不抢占）：
+- 槽位并存：同槽位不互踢，主会话 + N 个脚本连接同时存在
+- 定向回传：Kanzi 返回按请求 id 只回给发请求的那条连接（不广播）
+- 三层回收：断开即收 + 空闲超时兜底 + 整通道闲置移除（连接不堆积）
+
 每个通道内，nlp_client ↔ nlp_worker 双向转发，
-server ↔ client 双向转发（原有功能不变）。
+server ↔ client 双向转发（client 槽支持多连接定向回传）。
 
 用法：
     python relay_multi.py
@@ -21,6 +26,7 @@ import asyncio
 import json
 import logging
 import sys
+import time
 import websockets
 
 logging.basicConfig(
@@ -29,14 +35,52 @@ logging.basicConfig(
 )
 log = logging.getLogger("kz-relay-multi")
 
+# ── 回收配置（可按需调整）──
+SWEEP_INTERVAL        = 30    # 回收扫描间隔 秒
+CONN_IDLE_TIMEOUT     = 120   # 单连接空闲回收 秒（有收发消息就刷新 last_active，不误伤执行中）
+CHANNEL_IDLE_TIMEOUT  = 600   # 整通道闲置回收 秒（全部槽位空后）
+
+
+def parse_req_id(text: str):
+    """尽力从一条消息里取出请求 id（用于定向回传）。无 id 返回 None。"""
+    if not text:
+        return None
+    try:
+        data = json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if isinstance(data, dict):
+        # 直接 JSON-RPC: {"id": ...}
+        if "id" in data and data["id"] is not None:
+            return str(data["id"])
+        # 可能包装在 text 里: {"type":"mcp_request","text":"{...}"}
+        t = data.get("text")
+        if isinstance(t, str) and t.strip().startswith("{"):
+            try:
+                inner = json.loads(t)
+            except (json.JSONDecodeError, ValueError):
+                return None
+            if isinstance(inner, dict) and "id" in inner and inner["id"] is not None:
+                return str(inner["id"])
+    return None
+
 
 def make_channel():
     return {
-        "server": None,
-        "client": None,
-        "nlp": None,       # nlp_client（聊天插件）
-        "nlp_worker": None, # nlp_worker（Claude 执行器）
+        "server":     None,   # 主连接（指向 conns 里最后一条，兼容现有 http/nlp 读取）
+        "client":     None,
+        "nlp":        None,
+        "nlp_worker": None,
+        "conns": {            # 并存连接列表（主会话 + N 个脚本全在这）
+            "server":     [],   # 每项 = {"ws": ws, "last_active": ts}
+            "client":     [],
+            "nlp":        [],
+            "nlp_worker": [],
+        },
+        "route": {},          # { 请求id(str): client_conn } —— 定向回传归属
         "nlp_pending": [],
+        "is_primary": False,  # 主通道标记：曾有 server 连接即标 true → 永不整通道清理
+        "last_active": time.time(),   # 通道级活跃时间（整通道闲置回收用）
     }
 
 
@@ -44,13 +88,21 @@ class MultiRelay:
     def __init__(self):
         self.channels: dict[str, dict] = {}
 
+    # ── 工具 ──
+
+    def _touch(self, ch):
+        ch["last_active"] = time.time()
+
+    def _touch_conn(self, conn):
+        conn["last_active"] = time.time()
+
     async def _send_safe(self, ws, msg):
         if ws is None:
             return False
         try:
             await ws.send(msg)
             return True
-        except:
+        except Exception:
             return False
 
     def _ensure(self, name: str) -> dict:
@@ -123,21 +175,63 @@ class MultiRelay:
         else:
             await self._handle_client(websocket, name, first_raw)
 
+    # ── 连接注册/注销通用辅助 ──
+
+    def _attach(self, ch, slot: str, ws):
+        """连接加入并存列表，主字段指向最后一条（兼容现有读取）。返回 conn。"""
+        conn = {"ws": ws, "last_active": time.time()}
+        ch["conns"][slot].append(conn)
+        ch[slot] = ws          # 主字段 = 最后加入
+        # 主通道标记：server（Kanzi）连接 = 该通道是主会话通道 → 永不整通道清理
+        if slot == "server":
+            ch["is_primary"] = True
+        self._touch(ch)
+        return conn
+
+    def _detach(self, ch, slot: str, conn):
+        """连接从列表移除；若它是主连接，主字段指向剩余最后一条。
+        加 removed 标记防与 _sweep_loop 并发重复移除（list.remove 竞态）。"""
+        if conn.get("removed"):
+            return
+        conns = ch["conns"][slot]
+        if conn in conns:
+            conns.remove(conn)
+            conn["removed"] = True
+        if conns:
+            ch[slot] = conns[-1]["ws"]
+        else:
+            ch[slot] = None
+        self._touch(ch)
+
     # ── Server ──
 
     async def _handle_server(self, ws, name: str):
         ch = self._ensure(name)
-        old = ch["server"]
-        ch["server"] = ws
-        if old:
-            try: await old.close()
-            except: pass
+        conn = self._attach(ch, "server", ws)
 
         await self._send_safe(ws, json.dumps({"type": "connected", "role": "server"}))
-        log.info(f"✅ [{name}] Server 已连接")
+        log.info(f"✅ [{name}] Server 已连接（并存 #{len(ch['conns']['server'])}）")
+
+        # 方向一：server 上线 → flush 挂起的 client 请求（此前无 server 时暂存的脚本请求转发出去）
+        pending = ch.get("client_pending")
+        if pending:
+            log.info(f"▶ [{name}] Server 上线，flush {len(pending)} 条挂起 Client 请求")
+            for pmsg in pending:
+                await self._send_safe(ws, pmsg)
+            ch["client_pending"] = []
 
         try:
             async for msg in ws:
+                self._touch(ch)
+                self._touch_conn(conn)
+                req_id = parse_req_id(msg)
+                # 定向回传：Kanzi 返回按请求 id 只回给发起这条请求的 client 连接
+                if req_id and req_id in ch["route"]:
+                    target = ch["route"].pop(req_id, None)
+                    if target is not None:
+                        await self._send_safe(target["ws"], msg)
+                        continue
+                # 无 id 或未知 id（连接级消息）→ 回给主 client（兜底）
                 client = ch.get("client")
                 if client:
                     await self._send_safe(client, msg)
@@ -152,7 +246,7 @@ class MultiRelay:
             pass
         finally:
             log.warning(f"🔌 [{name}] Server 断开")
-            ch["server"] = None
+            self._detach(ch, "server", conn)
             await self._push_to_nlp(name, {
                 "type": "server_disconnected", "text": "Kanzi MCP 连接已断开"
             })
@@ -162,44 +256,66 @@ class MultiRelay:
 
     async def _handle_client(self, ws, name: str, first_msg: str):
         ch = self._ensure(name)
-        if ch["server"] is None:
-            log.warning(f"[{name}] Server 不在线，拒绝 Client")
-            await ws.close(4001, f"Server [{name}] not connected")
+        conn = self._attach(ch, "client", ws)
+
+        log.info(f"✅ [{name}] Client 已连接（并存 #{len(ch['conns']['client'])}）")
+
+        # 方向一：无 server 时挂起等待（不再拒绝/close，避免脚本被踢→疯狂重连→握手风暴）
+        # 消息暂存到 client_pending 队列，等 server 上线后由 _handle_server 统一 flush 转发。
+        server = ch.get("server")
+        if server is None:
+            log.info(f"⏸ [{name}] Client 已连接但 Server 未上线，先挂起（消息暂存待 server 上线转发）")
+            try:
+                async for msg in ws:
+                    self._touch(ch)
+                    self._touch_conn(conn)
+                    req_id = parse_req_id(msg)
+                    if req_id:
+                        ch["route"][req_id] = conn  # 归属先记好，server 上线后定向回传
+                        ch.setdefault("client_pending", []).append(msg)
+            except websockets.ConnectionClosed:
+                pass
+            finally:
+                log.info(f"🔌 [{name}] Client 挂起期间断开")
+                self._detach(ch, "client", conn)
+                self._cleanup(name)
             return
 
-        old = ch["client"]
-        ch["client"] = ws
-        if old:
-            try: await old.close()
-            except: pass
-
-        log.info(f"✅ [{name}] Client 已连接")
-        await self._send_safe(ch["server"], first_msg)
+        # server 已上线：转发首条（含归属）
+        first_id = parse_req_id(first_msg)
+        if first_id:
+            ch["route"][first_id] = conn
+        await self._send_safe(server, first_msg)
 
         try:
             async for msg in ws:
+                self._touch(ch)
+                self._touch_conn(conn)
                 server = ch.get("server")
                 if server:
+                    req_id = parse_req_id(msg)
+                    if req_id:
+                        ch["route"][req_id] = conn
                     await self._send_safe(server, msg)
+                    continue
                 else:
-                    await ws.close()
-                    return
+                    # server 中途掉线 → 转挂起暂存，等重新上线
+                    req_id = parse_req_id(msg)
+                    if req_id:
+                        ch["route"][req_id] = conn
+                        ch.setdefault("client_pending", []).append(msg)
         except websockets.ConnectionClosed:
             pass
         finally:
-            log.warning(f"🔌 [{name}] Client 断开")
-            ch["client"] = None
+            log.info(f"🔌 [{name}] Client 断开")
+            self._detach(ch, "client", conn)
             self._cleanup(name)
 
     # ── NLP Client（聊天插件） ──
 
     async def _handle_nlp_client(self, ws, name: str):
         ch = self._ensure(name)
-        old = ch["nlp"]
-        ch["nlp"] = ws
-        if old:
-            try: await old.close()
-            except: pass
+        conn = self._attach(ch, "nlp", ws)
 
         await self._send_safe(ws, json.dumps({
             "type": "connected",
@@ -214,6 +330,8 @@ class MultiRelay:
 
         try:
             async for raw in ws:
+                self._touch(ch)
+                self._touch_conn(conn)
                 try:
                     data = json.loads(raw)
                 except json.JSONDecodeError:
@@ -238,23 +356,18 @@ class MultiRelay:
                     await self._send_safe(ws, json.dumps({
                         "type": "error", "text": f"未知消息类型: {msg_type}"
                     }))
-
         except websockets.ConnectionClosed:
             pass
         finally:
             log.warning(f"🔌 [{name}] NLP Client 断开")
-            ch["nlp"] = None
+            self._detach(ch, "nlp", conn)
             self._cleanup(name)
 
     # ── NLP Worker（Claude 执行器） ──
 
     async def _handle_nlp_worker(self, ws, name: str):
         ch = self._ensure(name)
-        old = ch["nlp_worker"]
-        ch["nlp_worker"] = ws
-        if old:
-            try: await old.close()
-            except: pass
+        conn = self._attach(ch, "nlp_worker", ws)
 
         await self._send_safe(ws, json.dumps({
             "type": "connected", "role": "nlp_worker",
@@ -269,6 +382,8 @@ class MultiRelay:
 
         try:
             async for raw in ws:
+                self._touch(ch)
+                self._touch_conn(conn)
                 try:
                     data = json.loads(raw)
                     msg_type = data.get("type", "")
@@ -276,6 +391,10 @@ class MultiRelay:
                         # MCP 请求转发给 Server
                         server = ch.get("server")
                         if server:
+                            # 记录归属：定向回传
+                            req_id = parse_req_id(data.get("text", raw))
+                            if req_id:
+                                ch["route"][req_id] = conn
                             await self._send_safe(server, data.get("text", raw))
                         continue
                 except json.JSONDecodeError:
@@ -289,19 +408,72 @@ class MultiRelay:
             pass
         finally:
             log.warning(f"🔌 [{name}] NLP Worker 断开")
-            ch["nlp_worker"] = None
+            self._detach(ch, "nlp_worker", conn)
             await self._push_to_nlp(name, {
                 "type": "worker_disconnected", "text": "Chat Worker 已断开"
             })
             self._cleanup(name)
 
+    # ── 三层回收：空闲超时兜底 + 整通道闲置移除 ──
+
+    async def _sweep_loop(self):
+        while True:
+            await asyncio.sleep(SWEEP_INTERVAL)
+            try:
+                now = time.time()
+                for name, ch in list(self.channels.items()):
+                    # 第二层：空闲超时回收单连接
+                    # 注意：主通道(is_primary)的 server 连接是 Kanzi 插件核心，永不空闲回收——
+                    # 否则 server 无请求空闲 120s 就被回收→反复断连→脚本请求丢失(之前日志 20:23/20:25 实锤)。
+                    primary = ch.get("is_primary")
+                    for slot, conns in ch["conns"].items():
+                        for conn in conns[:]:
+                            # 已由 _detach 移除的（removed 标记）→ 跳过，防重复移除竞态
+                            if conn.get("removed"):
+                                continue
+                            # 主通道 server 连接：核心链，不做空闲回收(由对端断开/重连自行管理)
+                            if primary and slot == "server":
+                                continue
+                            if now - conn["last_active"] > CONN_IDLE_TIMEOUT:
+                                log.info(f"⏱ [{name}] {slot} 连接空闲超时回收")
+                                try:
+                                    await self._send_safe(conn["ws"], json.dumps({
+                                        "type": "error",
+                                        "text": "connection idle timeout, closing"
+                                    }))
+                                    await conn["ws"].close()
+                                except Exception:
+                                    pass
+                                if conn in conns:
+                                    conns.remove(conn)
+                                    conn["removed"] = True
+                                # 若回收的是主连接，主字段重指剩余
+                                if conns:
+                                    ch[slot] = conns[-1]["ws"]
+                                else:
+                                    ch[slot] = None
+                                # 清理该连接遗留的 route 归属
+                                for rid, t in list(ch["route"].items()):
+                                    if t is conn:
+                                        ch["route"].pop(rid, None)
+                    # 第三层：整通道闲置移除 —— 仅非主通道（无 server 的临时/脚本通道）才回收
+                    # 主通道（is_primary，曾有 Kanzi server 连接）永不整通道清理，只收里面空闲的单连接。
+                    empty = not any(ch["conns"][s] for s in ch["conns"])
+                    if (not ch["is_primary"]) and empty and now - ch["last_active"] > CHANNEL_IDLE_TIMEOUT:
+                        self.channels.pop(name, None)
+                        log.info(f"🗑️ 整通道闲置回收(非主): {name}")
+            except Exception as e:
+                log.warning(f"回收扫描异常: {e}")
+
     # ── 清理 ──
 
     def _cleanup(self, name: str):
         ch = self.channels.get(name)
-        if ch and all(v is None for v in (ch["server"], ch["client"], ch["nlp"], ch["nlp_worker"])):
+        # 主通道（is_primary，曾有 server 连接）永不整通道清理 → 连接全断后保留通道结构，等 server 重连
+        if ch and (not ch.get("is_primary")) and not any(ch["conns"][s] for s in ch["conns"]):
+            # 非主通道：整通道无任何连接 → 立即可移除
             self.channels.pop(name, None)
-            log.info(f"🗑️ 清理通道: {name}")
+            log.info(f"🗑️ 清理通道(非主): {name}")
 
 
 def make_process_request(relay):
@@ -317,6 +489,10 @@ def make_process_request(relay):
 async def main():
     relay = MultiRelay()
     port = 58080
+
+    # 启动三层回收的后台扫描任务
+    asyncio.get_event_loop().create_task(relay._sweep_loop())
+
     process_request = make_process_request(relay)
 
     async with websockets.serve(
@@ -326,9 +502,10 @@ async def main():
         log.info(f"🔄 MCP 中继 ws://0.0.0.0:{port}")
         log.info(f"   路径区分通道: ws://ip:{port}/用户名")
         log.info(f"   Server:      ws://ip:{port}/用户名")
-        log.info(f"   Client:      ws://ip:{port}/用户名")
+        log.info(f"   Client:      ws://ip:{port}/用户名（多连接并存, 定向回传）")
         log.info(f"   NLP Client:  ws://ip:{port}/用户名  (聊天插件)")
         log.info(f"   NLP Worker:  ws://ip:{port}/用户名  (Claude 执行器)")
+        log.info(f"   ♻️ 回收: 断开即收 + 空闲{CONN_IDLE_TIMEOUT}s + 整通道闲置{CHANNEL_IDLE_TIMEOUT}s")
         await asyncio.Future()
 
 

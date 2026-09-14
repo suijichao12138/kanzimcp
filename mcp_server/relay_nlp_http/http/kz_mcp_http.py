@@ -192,6 +192,7 @@ class McpProxyHandler:
     HB_INTERVAL = 5       # 喂狗(kz_health)间隔 秒
     HB_MAX_FAILS = 3      # 连续 N 次无响应 ⇒ 判链路坏
     REQ_CHECK_INTERVAL = 2  # 单个 pending 周期检查间隔 秒
+    IDLE_GRACE_ROUNDS = 3   # active_req 为空时的宽容观察轮数(给插件回填留时间, 防误杀脚本请求)
 
     def __init__(self, relay: RelayClient, username: str, request_timeout=300.0,
                  hb_interval=None, hb_max_fails=None, req_check=None):
@@ -208,6 +209,7 @@ class McpProxyHandler:
         self._hb_task = None
         self._hb_fail_count = 0      # 连续无响应计数(0=最近一次探活成功)
         self._active_req = None      # 插件当前执行中的请求 id(kz_health 回填)
+        self._idle_empty_rounds = {}  # 各请求在 active_req 为空状态下的连续观察轮数
         self._hb_locked = False      # 喂狗自身占信道的锁(避免和业务请求抢)
         # 链路断开回调 → fail 所有 pending(自愈关键)
         self.relay.on_link_down = self._on_link_down
@@ -299,6 +301,7 @@ class McpProxyHandler:
         if timeout is None:
             timeout = self.request_timeout
         req_id = str(req.get("id"))
+        req_id = str(req.get("id"))
         fut = asyncio.get_event_loop().create_future()
         async with self._lock:
             self.pending[req_id] = fut
@@ -358,20 +361,28 @@ class McpProxyHandler:
             # 链路断(喂狗判定) → 该请求已被 fail_all, 这里只需等 fut 完成
             ar = self._active_req
             if ar is None:
-                # 插件空闲且还没收到该请求的响应 → 请求丢了(竞态/被吞), 秒级 fail
-                # 注意: 只有收到过 kz_health(链路活着) 才这么判; 链路坏由喂狗处理
-                if self._hb_fail_count < self.HB_MAX_FAILS:
+                # 插件空闲: 不再第一次就 sec级 fail。脚本/Kanzi 收到请求后 active_request_id
+                # 由 kz_health 周期回填(有间隔延迟), 可能暂时还是 None。
+                # 采用“连续多轮观察仍为空才 fail”的宽容窗口, 给插件回填留时间, 避免误杀脚本请求。
+                self._idle_empty_rounds[req_id] = self._idle_empty_rounds.get(req_id, 0) + 1
+                if (self._idle_empty_rounds[req_id] >= self.IDLE_GRACE_ROUNDS
+                        and self._hb_fail_count < self.HB_MAX_FAILS):
                     async with self._lock:
                         fut2 = self.pending.get(req_id)
                         if fut2 and not fut2.done():
-                            log.warning(f"⚠️ [{self.username}] 请求 {req_id} 插件空闲未响应 → 秒级 fail(重试)")
+                            log.warning(f"⚠️ [{self.username}] 请求 {req_id} 插件空闲连续{self._idle_empty_rounds[req_id]}轮未响应 → fail(重试)")
                             fut2.set_result({
                                 "jsonrpc": "2.0", "id": req_id,
                                 "error": {"code": -32000,
                                            "message": "MCP 请求丢失(插件空闲未收到), 请重试"}
                             })
                             return
-            # 否则(active_req==我 或 ==别的) → 插件忙, 继续等; 下一轮再看
+            else:
+                # active_req 有值(我在执行或排队) → 插件忙, 清掉空观察计数, 继续等
+                self._idle_empty_rounds.pop(req_id, None)
+            # 继续等; 下一轮再看
+
+        # 注: 链路坏由喂狗(fail_all_pending)处理, 与这里的宽容窗口无关, 不受影响。
 
     async def handle_mcp_response(self, raw: str):
         try:
@@ -383,16 +394,27 @@ class McpProxyHandler:
                 response = json.loads(data.get("text", "{}"))
             except json.JSONDecodeError:
                 return
-            req_id = str(response.get("id"))
         elif isinstance(data, dict) and "id" in data:
             response = data
-            req_id = str(data.get("id"))
         else:
             return
+        req_id = str(response.get("id"))
         async with self._lock:
             fut = self.pending.get(req_id)
-            if fut and not fut.done():
-                fut.set_result(response)
+            # ★ 方案B 兜底(兼容旧插件): 插件回包 id 可能恒为 -1/-1.0/None(字符串 id 被按整数解析),
+            #   此时按 id 配不上 → 退回 FIFO(最早未完成的 pending), 保证结果不丢。
+            #   代价: 多请求并发时可能按到达顺序配对(顺序不保证精确)。
+            #   根治办法是插件端原样透传 id(方案A); 两者同时生效时不会走到这里。
+            if not (fut and not fut.done()):
+                if req_id in ("-1", "-1.0", "None", "none", "null"):
+                    for _rid, _f in list(self.pending.items()):
+                        if not _f.done():
+                            log.info(f"↩ [{self.username}] 回包 id={req_id} 配不上 → FIFO 兜底配给请求 {_rid}")
+                            _f.set_result(response)
+                            return
+                    log.warning(f"⚠️ [{self.username}] 回包 id={req_id} 配不上且无 pending 可配 → 丢弃")
+                return
+            fut.set_result(response)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -422,7 +444,8 @@ class UserManager:
                 self._last_mtime = os.path.getmtime(config_path)
             except OSError:
                 pass
-        self.connections = {}   # user -> (RelayClient, McpProxyHandler)
+        self.connections = {}   # user -> [ (RelayClient, McpProxyHandler), ... ] 多连接并存
+                                # 方案甲: copilot 常驻一条(站住主通道), 脚本各自新建独立连接(不踢旧的)
 
     def _reload(self) -> bool:
         """重读白名单文件, 返回是否真的有变化。文件缺失/损坏时保留旧名单不崩溃。"""
@@ -443,12 +466,12 @@ class UserManager:
             log.info(f"➕ 白名单新增用户(热更新, 无需重启): {sorted(add)}")
         if rm:
             log.info(f"➖ 白名单移除用户(热更新): {sorted(rm)}")
-        # 新用户没启动过连接则维持懒加载; 被移除用户的连接停止释放
+        # 新用户没启动过连接则维持懒加载; 被移除用户的全部连接停止释放
         for u in rm:
-            conn = self.connections.pop(u, None)
-            if conn:
-                relay, _ = conn
-                asyncio.get_event_loop().create_task(self._safe_stop(relay))
+            conns = self.connections.pop(u, None)
+            if conns:
+                for relay, _ in conns:
+                    asyncio.get_event_loop().create_task(self._safe_stop(relay))
         return True
 
     async def _safe_stop(self, relay):
@@ -473,8 +496,14 @@ class UserManager:
         self.refresh_if_changed()
         return username in self.allowed
 
-    def _ensure(self, username: str):
-        if username not in self.connections:
+    def _ensure(self, username: str) -> list:
+        """返回该用户的连接列表。
+        每用户保持**一条稳定连接**(喂狗+业务共用), 这样才能让喂狗探活回填 _active_req;
+        若每请求新建连接, 新 handler 的喂狗还未回填就把请求判死(实测: 所有请求误杀)。
+        'copilot 站住 + 脚本独立' 靠 relay 通道隔离实现(不同 X-Kanzi-User = 不同通道)。
+        返回列表形式仅为了兼容调用方, 实际只有一条。"""
+        conns = self.connections.get(username)
+        if not conns:
             url = f"{self.relay_base}/{username}"
             relay = RelayClient(url, username)
             handler = McpProxyHandler(relay, username, self.request_timeout,
@@ -482,19 +511,22 @@ class UserManager:
                                       hb_max_fails=self.hb_max_fails,
                                       req_check=self.req_check)
             relay.on_message = handler.handle_mcp_response
-            # http 侧喂狗: 每用户一个喂狗任务(探 kz_health, 动态判定 pending)
-            handler.start_heartbeat()
-            self.connections[username] = (relay, handler)
+            self.connections[username] = [(relay, handler)]
         return self.connections[username]
 
     async def start_user(self, username: str):
-        relay, _ = self._ensure(username)
+        """启动该用户的稳定连接(未启动则启动), 返回 (relay, handler)。"""
+        conns = self._ensure(username)
+        relay, _ = conns[-1]
         if not relay.running:
             await relay.start()
-        return self.connections[username]
+            # 连接启动后才需要喂狗回填; _ensure 时未启动则不启(避免无谓任务)
+            conns[-1][1].start_heartbeat()
+        return conns[-1]
 
     def get_handler(self, username: str):
-        return self._ensure(username)[1]
+        """返回该用户的 handler(单条稳定连接)。"""
+        return self._ensure(username)[-1][1]
 
     async def stop_all(self):
         for relay, handler in self.connections.values():
@@ -890,12 +922,11 @@ class HttpMcpServer:
         if method == "ping":
             return {"jsonrpc": "2.0", "id": req_id, "result": {}}
 
-        # 需要 Kanzi 连接的操作 → 确保该用户 client 已连接
-        handler = self.users.get_handler(username)
-        # 懒加载启动(首次请求时建连; start() 已改为后台任务, 立即返回)
-        relay, _ = self.users.connections.get(username, (None, None))
-        if relay and not relay.running:
-            await self.users.start_user(username)
+        # 需要 Kanzi 连接的操作 → 拿到**本条请求专属**的连接并启动它
+        # 方案甲: 每次请求新建一条独立连接(copilot 常驻连接保留), 同一条既启动又用于发请求
+        # (修复: 之前 get_handler 取首个 running、start_user 起最新 —— 两条不是同一条,
+        #  导致新建连接 ws 一直为 None, 报 "Kanzi 未连接")
+        relay, handler = await self.users.start_user(username)
         # 等 client 槽真正连上中继(与 Kanzi server 直通), 避免首请求发空
         try:
             await asyncio.wait_for(relay.wait_connected(3.0), timeout=4.0)

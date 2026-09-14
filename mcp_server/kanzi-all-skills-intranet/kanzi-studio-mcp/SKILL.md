@@ -62,6 +62,48 @@ kanzi-studio-mcp 是内网 `kz_mcp_http.py` 提供的**三端点之一**，走 S
 ```
 
 - **注意**：不同用户名=完全隔离通道；同用户名多客户端共享通道会冲突。
+  - ⚠️ 2026-09-14 更新：同用户名下 **copilot 与脚本可各自独立连接并存**（relay 支持同通道多 client 并存，按请求 id 定向回传），不再互相踢。
+
+### 🤖 用脚本直接调 HTTP MCP（2026-09-14 实测打通）
+
+不走 copilot、直接用脚本（Python/任意语言）发 HTTP 请求调 Kanzi 时的流程与注意事项：
+
+**① 必需两件套**
+
+| 项 | 位置 | 说明 |
+|----|------|------|
+| **用户名** | HTTP header `X-Kanzi-User: <用户名>` | 必带；缺=403；用户名须在 `users.json` 白名单；不同用户名=不同 relay 通道 |
+| **请求 id** | JSON-RPC 体里的 `id` | 必带；**同一时刻唯一即可**（数字/字符串都行）；回包按此 id 配对 |
+
+**② 最小可用脚本（Python）**
+
+```python
+import json, urllib.request
+
+req = urllib.request.Request(
+    "http://<kz_mcp_http机IP>:9001/mcp",
+    data=json.dumps({
+        "jsonrpc": "2.0",
+        "id": "my-request-1",          # 唯一 id（字符串/数字均可）
+        "method": "tools/call",
+        "params": {"name": "kz_invoke",
+                   "arguments": {"target": "@project", "method": "get_Name", "args": []}}
+    }).encode(),
+    headers={"Content-Type": "application/json",
+             "X-Kanzi-User": "suijichao"},   # 必需
+    method="POST")
+print(urllib.request.urlopen(req, timeout=60).read().decode())
+```
+输出：`{"jsonrpc":"2.0","id":"my-request-1","result":{"content":[{"type":"text","text":"✅ 结果: cluster_hmi"}]}}`
+
+**③ 注意事项（实测踩过的坑）**
+
+- **不强制 `initialize`**：标准 MCP 客户端会先发 `initialize`，但脚本直发 `tools/call` 也能用（http 层不强制）。
+- **并发**：每个请求**开自己的 HTTP 连接**（或至少保证 id 唯一）。实测 5 并发 5/5 成功、各回各的 id、不串。
+- **超时**：给足 timeout（服务端默认 mcp_timeout 300s）；慢动作别用短超时。
+- **回包 id 必须原样透传**：插件若把字符串 id 按整数解析（旧版 bug），回包 id 会变 `-1`，上游按 id 配对就全对不上 → 全部请求被判「丢失」。**修复：插件 `GetRaw` 原样透传 id（方案A）+ http 侧 `-1` 时 FIFO 兜底（方案B）**，2026-09-14 已修复两层。
+- **响应为空/`isError`**：返回 `isError:true` 是 **Kanzi 真执行后**的业务错误（如方法名不存在），说明链路已通；与「请求丢失」完全不同。
+- **白名单热更新**：改 `users.json` 保存即生效，**不需要重启** kz_mcp_http.py。
 
 ## 二、工具清单（31 个，与插件 tools/list 实际注册一致）
 
