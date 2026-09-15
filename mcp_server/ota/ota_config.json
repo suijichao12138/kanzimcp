@@ -1,0 +1,106 @@
+{
+  "repo": {
+    "url": "git@github.com:suijichao12138/kanzimcp.git",
+    "branch": "main",
+    "local_dir": "D:\\kanziMCP_src",
+    "use_tag": true
+  },
+
+  "build": {
+    "python_exe": "python",
+    "pyinstaller": "pyinstaller",
+    "build_bat": "build_exe.bat",
+    "output_dir": "dist",
+    "note": "pyinstaller_args 完全按老隋指定的参数；src 是相对仓库根的源文件路径（src_dir 相对 build_exe.bat 所在目录）",
+    "components": [
+      {
+        "name": "relay",
+        "src": "mcp_server/relay_nlp_http/relay/relay_multi.py",
+        "exe_name": "relay_multi.exe",
+        "target_dir": "D:\\kanziMCP_relay",
+        "pyinstaller_args": "--clean --onefile --noconsole --name relay_multi --hidden-import websockets",
+        "cwd": "mcp_server/relay_nlp_http/relay"
+      },
+      {
+        "name": "http",
+        "src": "mcp_server/relay_nlp_http/http/kz_mcp_http.py",
+        "exe_name": "kz_mcp_http.exe",
+        "target_dir": "D:\\kanziMCP_relay",
+        "pyinstaller_args": "--onefile --noconsole --name kz_mcp_http --hidden-import websockets",
+        "cwd": "mcp_server/relay_nlp_http/http"
+      },
+      {
+        "name": "feishu",
+        "src": "mcp_server/relay_nlp_http/feishu/feishu_bridge.py",
+        "exe_name": "feishu_bridge.exe",
+        "target_dir": "D:\\kanziMCP_relay",
+        "pyinstaller_args": "--clean --onefile --noconsole --name feishu_bridge --hidden-import websockets --hidden-import lark_oapi",
+        "cwd": "mcp_server/relay_nlp_http/feishu"
+      }
+    ]
+  },
+
+  "launch": {
+    "note": "relay/http/feishu 三个一起重启（relay 重启时另两个同步重启）。lnk 不存在时按 exe/args/workdir 自动创建，无需手动建。",
+    "shortcuts": [
+      {
+        "name": "relay",
+        "lnk": "D:\\kanziMCP_relay\\relay.lnk",
+        "exe": "D:\\kanziMCP_relay\\relay_multi.exe",
+        "args": "",
+        "workdir": "D:\\kanziMCP_relay",
+        "wait_before_next": 3
+      },
+      {
+        "name": "http",
+        "lnk": "D:\\kanziMCP_relay\\http.lnk",
+        "exe": "D:\\kanziMCP_relay\\kz_mcp_http.exe",
+        "args": "--config config.json",
+        "workdir": "D:\\kanziMCP_relay",
+        "wait_before_next": 3
+      },
+      {
+        "name": "feishu",
+        "lnk": "D:\\kanziMCP_relay\\feishu.lnk",
+        "exe": "D:\\kanziMCP_relay\\feishu_bridge.exe",
+        "args": "--config feishu_config.json",
+        "workdir": "D:\\kanziMCP_relay",
+        "wait_before_next": 0
+      }
+    ]
+  },
+
+  "processes": {
+    "note": "停止时按此顺序杀；启动按 launch.shortcuts 顺序",
+    "kill_order": ["feishu_bridge.exe", "kz_mcp_http.exe", "relay_multi.exe"],
+    "kill_wait_ms": 2000
+  },
+
+  "health": {
+    "checks": [
+      { "name": "relay",  "type": "port", "host": "127.0.0.1", "port": 58080 },
+      { "name": "http",   "type": "port", "host": "127.0.0.1", "port": 9001 },
+      { "name": "feishu", "type": "process", "process": "feishu_bridge.exe" }
+    ],
+    "timeout_s": 30,
+    "interval_s": 2
+  },
+
+  "rollback": {
+    "enabled": true,
+    "backup_dir": "D:\\kanziMCP_relay\\_backup"
+  },
+
+  "poll": {
+    "interval_s": 60,
+    "check_on_start": true
+  },
+
+  "feishu_notify": {
+    "enabled": true,
+    "app_id": "cli_aaeaab3ea9b99cde",
+    "app_secret": "PUT_YOUR_SECRET_HERE",
+    "receive_id": "ou_b2c7839930ef2000965acd173d4c0663",
+    "receive_id_type": "open_id"
+  }
+}

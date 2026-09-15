@@ -65,6 +65,21 @@ def parse_req_id(text: str):
     return None
 
 
+def build_kanzi_offline_error(msg: str, name: str) -> str:
+    """Kanzi(Server) 不在线时，对一条 client 请求生成错误回包（原样带 id，便于定向回传）。"""
+    req_id = parse_req_id(msg)
+    payload = {
+        "jsonrpc": "2.0",
+        "id": req_id if req_id is not None else -1,
+        "error": {
+            "code": -32000,
+            "message": "Kanzi Studio 未连接（Server 不在线），请求未执行",
+        },
+        "channel": name,
+    }
+    return json.dumps(payload, ensure_ascii=False)
+
+
 def make_channel():
     return {
         "server":     None,   # 主连接（指向 conns 里最后一条，兼容现有 http/nlp 读取）
@@ -177,16 +192,41 @@ class MultiRelay:
 
     # ── 连接注册/注销通用辅助 ──
 
+    # 方向1（2026-09-15）: 只有 client 槽允许多连接并存（靠 route[req_id] 定向回传）；
+    # server / nlp / nlp_worker 是单个角色（Kanzi插件 / 飞书聊天入口 / Copilot worker），
+    # 必须单连接——新连接顶替旧连接（踢旧），避免断连重连时新旧并存导致消息发给死连接。
+    MULTI_OK_SLOTS = ("client",)
+
     def _attach(self, ch, slot: str, ws):
-        """连接加入并存列表，主字段指向最后一条（兼容现有读取）。返回 conn。"""
+        """连接加入列表。client 槽多连接并存；其他核心槽单连接（新顶旧）。
+        返回 (conn, kicked_ws)：kicked_ws 为被顶替的旧连接（需关闭），无则 None。"""
         conn = {"ws": ws, "last_active": time.time()}
+        kicked_ws = None
+        if slot not in self.MULTI_OK_SLOTS:
+            # 非多连接槽：先踢掉同槽旧连接，保证只有一个活跃连接
+            old_conns = ch["conns"][slot][:]
+            for old in old_conns:
+                if old.get("removed"):
+                    continue
+                kicked_ws = old["ws"]
+                old["removed"] = True
+                try:
+                    ch["conns"][slot].remove(old)
+                except ValueError:
+                    pass
+                # 清理该旧连接遗留的 route 归属
+                for rid, t in list(ch["route"].items()):
+                    if t is old:
+                        ch["route"].pop(rid, None)
+            if old_conns:
+                log.info(f"♻ [{ch.get('name', '?')}] {slot} 槽新连接顶替旧连接")
         ch["conns"][slot].append(conn)
         ch[slot] = ws          # 主字段 = 最后加入
         # 主通道标记：server（Kanzi）连接 = 该通道是主会话通道 → 永不整通道清理
         if slot == "server":
             ch["is_primary"] = True
         self._touch(ch)
-        return conn
+        return conn, kicked_ws
 
     def _detach(self, ch, slot: str, conn):
         """连接从列表移除；若它是主连接，主字段指向剩余最后一条。
@@ -207,17 +247,23 @@ class MultiRelay:
 
     async def _handle_server(self, ws, name: str):
         ch = self._ensure(name)
-        conn = self._attach(ch, "server", ws)
+        ch["name"] = name
+        conn, kicked = self._attach(ch, "server", ws)
+        if kicked is not None:
+            await self._send_safe(kicked, json.dumps({"type": "error", "text": "replaced by new server connection"}))
+            try:
+                await kicked.close()
+            except Exception:
+                pass
 
         await self._send_safe(ws, json.dumps({"type": "connected", "role": "server"}))
         log.info(f"✅ [{name}] Server 已连接（并存 #{len(ch['conns']['server'])}）")
 
-        # 方向一：server 上线 → flush 挂起的 client 请求（此前无 server 时暂存的脚本请求转发出去）
+        # 方向一：Kanzi 不在线期间不再积攒 client 请求（请求已当场回错）。
+        # 此处仅清空历史遗留队列，避免旧队列跨重启被误 flush。
         pending = ch.get("client_pending")
         if pending:
-            log.info(f"▶ [{name}] Server 上线，flush {len(pending)} 条挂起 Client 请求")
-            for pmsg in pending:
-                await self._send_safe(ws, pmsg)
+            log.info(f"🧹 [{name}] 丢弃 {len(pending)} 条历史遗留挂起请求（Kanzi 离线期间已改为直接回错）")
             ch["client_pending"] = []
 
         try:
@@ -256,27 +302,30 @@ class MultiRelay:
 
     async def _handle_client(self, ws, name: str, first_msg: str):
         ch = self._ensure(name)
-        conn = self._attach(ch, "client", ws)
+        ch["name"] = name
+        conn, kicked = self._attach(ch, "client", ws)
+        if kicked is not None:
+            try:
+                await kicked.close()
+            except Exception:
+                pass
 
         log.info(f"✅ [{name}] Client 已连接（并存 #{len(ch['conns']['client'])}）")
 
-        # 方向一：无 server 时挂起等待（不再拒绝/close，避免脚本被踢→疯狂重连→握手风暴）
-        # 消息暂存到 client_pending 队列，等 server 上线后由 _handle_server 统一 flush 转发。
+        # Kanzi 不在线 → 收到请求直接回错误，不积攒不挂起（server 不在线时请求根本执行不了）。
+        # 连接本身保持（不 close），客户端不会因此重连。
         server = ch.get("server")
         if server is None:
-            log.info(f"⏸ [{name}] Client 已连接但 Server 未上线，先挂起（消息暂存待 server 上线转发）")
+            log.info(f"⏸ [{name}] Client 已连接但 Kanzi(Server) 未上线 → 请求一律直接回错误，不积攒")
             try:
                 async for msg in ws:
                     self._touch(ch)
                     self._touch_conn(conn)
-                    req_id = parse_req_id(msg)
-                    if req_id:
-                        ch["route"][req_id] = conn  # 归属先记好，server 上线后定向回传
-                        ch.setdefault("client_pending", []).append(msg)
+                    await self._send_safe(ws, build_kanzi_offline_error(msg, name))
             except websockets.ConnectionClosed:
                 pass
             finally:
-                log.info(f"🔌 [{name}] Client 挂起期间断开")
+                log.info(f"🔌 [{name}] Client 断开（Kanzi 离线期间）")
                 self._detach(ch, "client", conn)
                 self._cleanup(name)
             return
@@ -299,11 +348,8 @@ class MultiRelay:
                     await self._send_safe(server, msg)
                     continue
                 else:
-                    # server 中途掉线 → 转挂起暂存，等重新上线
-                    req_id = parse_req_id(msg)
-                    if req_id:
-                        ch["route"][req_id] = conn
-                        ch.setdefault("client_pending", []).append(msg)
+                    # server 中途掉线 → 同样直接回错误，不积攒
+                    await self._send_safe(ws, build_kanzi_offline_error(msg, name))
         except websockets.ConnectionClosed:
             pass
         finally:
@@ -315,7 +361,13 @@ class MultiRelay:
 
     async def _handle_nlp_client(self, ws, name: str):
         ch = self._ensure(name)
-        conn = self._attach(ch, "nlp", ws)
+        ch["name"] = name
+        conn, kicked = self._attach(ch, "nlp", ws)
+        if kicked is not None:
+            try:
+                await kicked.close()
+            except Exception:
+                pass
 
         await self._send_safe(ws, json.dumps({
             "type": "connected",
@@ -367,7 +419,13 @@ class MultiRelay:
 
     async def _handle_nlp_worker(self, ws, name: str):
         ch = self._ensure(name)
-        conn = self._attach(ch, "nlp_worker", ws)
+        ch["name"] = name
+        conn, kicked = self._attach(ch, "nlp_worker", ws)
+        if kicked is not None:
+            try:
+                await kicked.close()
+            except Exception:
+                pass
 
         await self._send_safe(ws, json.dumps({
             "type": "connected", "role": "nlp_worker",
@@ -431,8 +489,10 @@ class MultiRelay:
                             # 已由 _detach 移除的（removed 标记）→ 跳过，防重复移除竞态
                             if conn.get("removed"):
                                 continue
-                            # 主通道 server 连接：核心链，不做空闲回收(由对端断开/重连自行管理)
-                            if primary and slot == "server":
+                            # 核心槽（server/nlp_worker/nlp）永不空闲回收——它们必须一直保持连接；
+                            # 只有 client 槽（脚本/http 短连接）才做空闲回收。
+                            # 主通道 server 也不能回收（历史教训：空闲 120s 被回收→脚本请求丢失）。
+                            if slot != "client":
                                 continue
                             if now - conn["last_active"] > CONN_IDLE_TIMEOUT:
                                 log.info(f"⏱ [{name}] {slot} 连接空闲超时回收")
