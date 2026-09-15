@@ -1,11 +1,10 @@
 {
   "repo": {
-    "url": "git@github.com:suijichao12138/kanzimcp.git",
+    "url": "https://gitee.com/suijichao/kanzimcp.git",
     "branch": "main",
     "local_dir": "D:\\kanziMCP_src",
     "use_tag": true
   },
-
   "build": {
     "python_exe": "python",
     "pyinstaller": "pyinstaller",
@@ -39,7 +38,6 @@
       }
     ]
   },
-
   "launch": {
     "note": "relay/http/feishu 三个一起重启（relay 重启时另两个同步重启）。lnk 不存在时按 exe/args/workdir 自动创建，无需手动建。",
     "shortcuts": [
@@ -69,33 +67,46 @@
       }
     ]
   },
-
   "processes": {
     "note": "停止时按此顺序杀；启动按 launch.shortcuts 顺序",
-    "kill_order": ["feishu_bridge.exe", "kz_mcp_http.exe", "relay_multi.exe"],
+    "kill_order": [
+      "feishu_bridge.exe",
+      "kz_mcp_http.exe",
+      "relay_multi.exe"
+    ],
     "kill_wait_ms": 2000
   },
-
   "health": {
     "checks": [
-      { "name": "relay",  "type": "port", "host": "127.0.0.1", "port": 58080 },
-      { "name": "http",   "type": "port", "host": "127.0.0.1", "port": 9001 },
-      { "name": "feishu", "type": "process", "process": "feishu_bridge.exe" }
+      {
+        "name": "relay",
+        "type": "port",
+        "host": "127.0.0.1",
+        "port": 58080
+      },
+      {
+        "name": "http",
+        "type": "port",
+        "host": "127.0.0.1",
+        "port": 9001
+      },
+      {
+        "name": "feishu",
+        "type": "process",
+        "process": "feishu_bridge.exe"
+      }
     ],
     "timeout_s": 30,
     "interval_s": 2
   },
-
   "rollback": {
     "enabled": true,
     "backup_dir": "D:\\kanziMCP_relay\\_backup"
   },
-
   "poll": {
     "interval_s": 60,
     "check_on_start": true
   },
-
   "feishu_notify": {
     "enabled": true,
     "app_id": "cli_aaeaab3ea9b99cde",

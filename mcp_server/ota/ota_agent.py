@@ -32,7 +32,11 @@ import urllib.request
 from datetime import datetime
 from pathlib import Path
 
-BASE_DIR = Path(__file__).resolve().parent
+BASE_DIR = (
+    Path(sys.executable).resolve().parent
+    if getattr(sys, "frozen", False)      # PyInstaller/onefile 打包后
+    else Path(__file__).resolve().parent  # 直接跑 .py
+)
 CONFIG_PATH = BASE_DIR / "ota_config.json"
 STATE_PATH = BASE_DIR / "ota_state.json"
 
@@ -68,7 +72,11 @@ def feishu_notify(cfg: dict, text: str) -> bool:
             headers={"Content-Type": "application/json; charset=utf-8"},
             method="POST",
         )
-        resp = json.loads(urllib.request.urlopen(req, timeout=15).read().decode())
+        try:
+            resp = json.loads(urllib.request.urlopen(req, timeout=15).read().decode())
+        except urllib.error.HTTPError as e:
+            log(f"飞书取 token 失败 HTTP {e.code}: {e.read().decode('utf-8', 'replace')[:500]}", "WARN")
+            return False
         if resp.get("code") != 0:
             log(f"飞书取 token 失败: {resp}", "WARN")
             return False
@@ -79,8 +87,10 @@ def feishu_notify(cfg: dict, text: str) -> bool:
             "msg_type": "text",
             "content": json.dumps({"text": text}, ensure_ascii=False),
         }
+        url2 = (f"https://open.feishu.cn/open-apis/im/v1/messages"
+                f"?receive_id_type={cfg.get('receive_id_type','open_id')}")
         req2 = urllib.request.Request(
-            f"https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type={cfg.get('receive_id_type','open_id')}",
+            url2,
             data=json.dumps(body, ensure_ascii=False).encode(),
             headers={
                 "Authorization": f"Bearer {token}",
@@ -88,14 +98,19 @@ def feishu_notify(cfg: dict, text: str) -> bool:
             },
             method="POST",
         )
-        resp2 = json.loads(urllib.request.urlopen(req2, timeout=15).read().decode())
+        try:
+            resp2 = json.loads(urllib.request.urlopen(req2, timeout=15).read().decode())
+        except urllib.error.HTTPError as e:
+            raw = e.read().decode("utf-8", "replace")
+            log(f"飞书发消息失败 HTTP {e.code}: {raw[:800]}", "WARN")
+            return False
         if resp2.get("code") != 0:
             log(f"飞书发消息失败: {resp2}", "WARN")
             return False
         log("飞书通知已发送")
         return True
     except Exception as e:
-        log(f"飞书通知异常: {e}", "WARN")
+        log(f"飞书通知异常: {type(e).__name__}: {e}", "WARN")
         return False
 
 
@@ -477,12 +492,21 @@ def main():
     ap = argparse.ArgumentParser(description="中继机 OTA 自动更新代理")
     ap.add_argument("--once", action="store_true", help="只跑一轮后退出")
     ap.add_argument("--force", action="store_true", help="忽略版本比对，强制更新到最新 tag")
+    ap.add_argument("--test-notify", action="store_true", help="只测飞书通知能否发通，然后退出")
     ap.add_argument("--config", default=str(CONFIG_PATH), help="配置文件路径")
     args = ap.parse_args()
 
     cfg = json.loads(Path(args.config).read_text(encoding="utf-8"))
     log("=" * 60)
     log("OTA Agent 启动")
+
+    if args.test_notify:
+        n = cfg.get("feishu_notify", {})
+        log(f"测试飞书通知 → app_id={n.get('app_id')} receive_id={n.get('receive_id')} "
+            f"type={n.get('receive_id_type')}")
+        ok = feishu_notify(n, "🔔 OTA 通知测试：如果你收到这条消息，说明通知链路正常。")
+        log("✅ 通知发送成功" if ok else "❌ 通知发送失败，请看上方 WARN 里的飞书原始返回")
+        return
 
     while True:
         try:
