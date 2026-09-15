@@ -225,9 +225,15 @@ class Bridge:
         elif msg_type == "connected":
             log.info(f"[{self.bot_name}] {msg.get('text','')}")
         elif msg_type == "worker_online":
+            # worker 上线：解掉可能的残留锁 + 提示用户已可用
             log.info(f"[{self.bot_name}] copilot worker 在线")
+            self._reset_round_state()
+            await self._reply_feishu("✅ Copilot 已连接，可以继续发送指令")
         elif msg_type == "worker_disconnected":
-            log.info(f"[{self.bot_name}] copilot worker 断开")
+            # worker 断开：必须解锁，否则 _busy 永远 True → 后续消息全被"请稍候"挡死
+            log.warning(f"[{self.bot_name}] copilot worker 断开，解锁并提示用户")
+            self._reset_round_state()
+            await self._reply_feishu("❌ Copilot 已断开，本轮已取消。请稍后重试（或等待自动重连）。")
         elif msg_type == "progress":
             # 多阶段活动反馈：绝不触发 _done_event(不作为一轮结束、不提前放行第二条)。
             # 单条 ·五行滚动编辑: 维持一条进度消息, 内容保留最近五行, 不刷屏。
@@ -242,6 +248,20 @@ class Bridge:
             log.warning(self._tag("⚠️ 无 last_sender, 回复无法路由(丢弃)"))
             return
         await self.feishu.send_text(open_id, text)
+
+    def _reset_round_state(self):
+        """解锁单会话互斥并清掉本轮状态。
+
+        worker 上线/断开时必须调用：否则 _busy 永远为 True，
+        后续消息全被"⏳ Copilot 正在处理上一条指令"挡死。
+        """
+        self._busy = False
+        self._done_event.set()          # 唤醒可能正在 wait 的协程
+        self._thinking_sent = False
+        self._progress_msg_id = None
+        self._progress_open_id = None
+        self._progress_lines = []
+        self._busy_round_seq = getattr(self, "_busy_round_seq", 0) + 1
 
     async def _reply_progress(self, line: str):
         """单条进度消息 · 五行滚动编辑。
