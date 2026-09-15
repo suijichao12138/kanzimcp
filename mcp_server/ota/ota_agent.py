@@ -101,13 +101,13 @@ def feishu_notify(cfg: dict, text: str) -> bool:
 
 # ────────────────────────── git ──────────────────────────
 
-def run(cmd, cwd=None, timeout=600):
+def run(cmd, cwd=None, timeout=600, env=None):
     """执行命令，返回 (returncode, stdout+stderr)"""
     try:
         p = subprocess.run(
             cmd, cwd=cwd, shell=isinstance(cmd, str),
             capture_output=True, text=True, timeout=timeout,
-            encoding="utf-8", errors="replace",
+            encoding="utf-8", errors="replace", env=env,
         )
         return p.returncode, (p.stdout or "") + (p.stderr or "")
     except subprocess.TimeoutExpired:
@@ -116,9 +116,22 @@ def run(cmd, cwd=None, timeout=600):
         return -1, f"命令异常: {e}"
 
 
+def git_env() -> dict:
+    """git 用的环境：自动接受新主机指纹（避免 Host key verification failed）。"""
+    env = dict(os.environ)
+    env["GIT_SSH_COMMAND"] = (
+        "ssh -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=NUL "
+        "-o BatchMode=yes"
+    )
+    return env
+
+
 def git_latest_tag(repo_url: str) -> str:
     """取远端最新 tag（按版本号排序）。失败返回空串。"""
-    rc, out = run(f"git ls-remote --tags --sort=-v:refname {repo_url}", timeout=60)
+    rc, out = run(
+        f"git ls-remote --tags --sort=-v:refname {repo_url}",
+        timeout=60, env=git_env(),
+    )
     if rc != 0:
         log(f"取远端 tag 失败: {out.strip()[:200]}", "WARN")
         return ""
@@ -140,23 +153,23 @@ def git_prepare(repo_cfg: dict) -> bool:
     if not (local / ".git").exists():
         log(f"本地源码目录不存在或非 git 仓库，开始 clone → {local}")
         local.parent.mkdir(parents=True, exist_ok=True)
-        rc, out = run(f'git clone {url} "{local}"', timeout=900)
+        rc, out = run(f'git clone {url} "{local}"', timeout=900, env=git_env())
         if rc != 0:
             log(f"clone 失败: {out.strip()[:300]}", "ERROR")
             return False
         log("clone 完成")
 
-    rc, out = run("git fetch --all --tags --force", cwd=str(local), timeout=300)
+    rc, out = run("git fetch --all --tags --force", cwd=str(local), timeout=300, env=git_env())
     if rc != 0:
         log(f"git fetch 失败: {out.strip()[:300]}", "ERROR")
         return False
 
-    rc, out = run(f"git checkout -f {target}", cwd=str(local), timeout=120)
+    rc, out = run(f"git checkout -f {target}", cwd=str(local), timeout=120, env=git_env())
     if rc != 0:
         log(f"checkout {target} 失败: {out.strip()[:300]}", "ERROR")
         return False
 
-    rc, out = run("git rev-parse HEAD", cwd=str(local))
+    rc, out = run("git rev-parse HEAD", cwd=str(local), env=git_env())
     head = out.strip().splitlines()[0] if rc == 0 else "?"
     log(f"源码已就绪: {target} @ {head[:10]}")
     return True
