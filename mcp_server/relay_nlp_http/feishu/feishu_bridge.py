@@ -890,11 +890,106 @@ def _extract_channel(relay_url: str) -> str:
     return relay_url.rstrip("/").rsplit("/", 1)[-1] or "default"
 
 
-def _normalize_bot(cfg_bot: dict, http_default_host: str, http_default_port: int, cwd: str) -> dict:
+# ═══════════════════════════════════════════════════════════════
+#  v3: inbox 自动清理(多 bot 共享单扫描任务, 每个 bot 独立目录)
+# ═══════════════════════════════════════════════════════════════
+class InboxCleaner:
+    """定期清理各 bot 的 inbox_dir。
+
+    多 bot 要点:
+    - 每 bot 目录独立, 但**只起一个扫描任务**(在 BotManager 里), 遍历所有 bot 的
+      inbox_dir; 热更新增/删 bot 时轮询名单自动跟进, 不重复起任务。
+    - 清理策略: ① 超过 max_age_days 的文件删除; ② 若剩余仍超过 max_files,
+      按 mtime 从旧到新删到只剩 max_files 个。
+    - 只处理普通文件, 不递归(避免误删子目录); 只删本 bot 目录内的直接子文件。
+    """
+
+    def __init__(self, inbox_dir: str, enabled=True, max_age_days=7,
+                 max_files=500, interval_s=3600, bot_name=""):
+        self.inbox_dir = inbox_dir
+        self.enabled = bool(enabled)
+        self.max_age_days = float(max_age_days) if max_age_days else 0
+        self.max_files = int(max_files) if max_files else 0
+        self.interval_s = max(60.0, float(interval_s or 3600))
+        self.bot_name = bot_name or "bot"
+
+    def sweep_once(self) -> tuple:
+        """扫一次, 返回 (删除数, 释放字节数)。异常内部吞掉, 不影响主流程。"""
+        removed, freed = 0, 0
+        d = self.inbox_dir
+        if not d or not os.path.isdir(d):
+            return 0, 0
+        now = time.time()
+        entries = []
+        try:
+            for fn in os.listdir(d):
+                fp = os.path.join(d, fn)
+                # 只处理直接子文件; 不递归、不碰目录(防误删)
+                if not os.path.isfile(fp):
+                    continue
+                try:
+                    st = os.stat(fp)
+                except OSError:
+                    continue
+                entries.append((fp, st.st_mtime, st.st_size))
+        except OSError as e:
+            log.warning(f"[{self.bot_name}] 🧹 清理失败(目录不可读): {e}")
+            return 0, 0
+
+        # ① 按年龄删
+        if self.max_age_days > 0:
+            cutoff = now - self.max_age_days * 86400
+            for fp, mtime, size in entries:
+                if mtime < cutoff:
+                    try:
+                        os.remove(fp)
+                        removed += 1
+                        freed += size
+                    except OSError:
+                        continue
+            entries = [(fp, mt, sz) for fp, mt, sz in entries if os.path.exists(fp)]
+
+        # ② 按数量删(保留最新 max_files 个)
+        if self.max_files > 0 and len(entries) > self.max_files:
+            entries.sort(key=lambda x: x[1])          # 旧 → 新
+            for fp, _, size in entries[: len(entries) - self.max_files]:
+                try:
+                    os.remove(fp)
+                    removed += 1
+                    freed += size
+                except OSError:
+                    continue
+
+        if removed:
+            log.info(f"[{self.bot_name}] 🧹 inbox 清理 {removed} 个文件, 释放 "
+                     f"{freed / 1024:.0f} KB ({self.inbox_dir})")
+        return removed, freed
+
+
+async def inbox_clean_loop(cleaners: list, interval_s: float):
+    """统一的 inbox 清理循环(多 bot 共用一个任务)。
+
+    启动 60s 后先扫一次, 之后每 interval_s 扫一遍所有 bot。
+    轮询时动态传入 cleaners(热更新增/删 bot 后, BotManager 会更新该列表内容)。
+    """
+    await asyncio.sleep(60)
+    while True:
+        try:
+            for c in list(cleaners):
+                if c.enabled:
+                    c.sweep_once()
+        except Exception as e:
+            log.warning(f"🧹 inbox 清理循环异常: {e}")
+        await asyncio.sleep(interval_s)
+
+
+def _normalize_bot(cfg_bot: dict, http_default_host: str, http_default_port: int, cwd: str,
+                   default_cleanup: dict = None) -> dict:
     """把 config 里一个 bot 项补全默认值, 返回规范化字典。
 
     http_port 默认用共享端口 http_default_port(顶层 http.port);
     若某 bot 单独指定了 http_port 则覆盖之(旧版多端口兼容)。
+    default_cleanup: 顶层 cleanup.inbox 默认值, 供本 bot 继承。
     """
     app_id = (cfg_bot.get("app_id") or "").strip()
     app_secret = (cfg_bot.get("app_secret") or "").strip()
@@ -914,6 +1009,25 @@ def _normalize_bot(cfg_bot: dict, http_default_host: str, http_default_port: int
         "http_port": int(cfg_bot.get("http_port") or http_default_port),
         "http_bind_ip": cfg_bot.get("http_bind_ip") or relay_host,
         "inbox_dir": cfg_bot.get("inbox_dir") or os.path.join(cwd, f"inbox_{name}"),
+        # v3: inbox 自动清理配置(每 bot 可单独覆盖, 默认继承顶层 cleanup.inbox)
+        "cleanup": _normalize_cleanup(cfg_bot.get("cleanup") or {}, default_cleanup),
+    }
+
+
+def _normalize_cleanup(bot_cleanup: dict, default_cleanup: dict) -> dict:
+    """归一化单个 bot 的 inbox 清理配置。
+    bot.cleanup 里的字段覆盖顶层 cleanup.inbox 默认值; 未给则用默认。
+    """
+    d = dict(default_cleanup or {})
+    if isinstance(bot_cleanup, dict):
+        for k, v in bot_cleanup.items():
+            if v is not None:
+                d[k] = v
+    return {
+        "enabled": bool(d.get("enabled", True)),
+        "max_age_days": float(d.get("max_age_days", 7) or 0),
+        "max_files": int(d.get("max_files", 500) or 0),
+        "interval_s": float(d.get("interval_s", 3600) or 3600),
     }
 
 
@@ -929,6 +1043,14 @@ def load_config(path: str, http_default_host: str, cwd: str) -> dict:
     http_cfg = cfg.get("http") or {}
     http_host = http_cfg.get("host") or http_default_host
     http_port = int(http_cfg.get("port") or 8081)
+    # v3: inbox 自动清理默认值(顶层 cleanup.inbox); 各 bot 可用自己的 cleanup 覆盖
+    _cleanup_cfg = (cfg.get("cleanup") or {}).get("inbox") or {}
+    default_cleanup = {
+        "enabled": bool(_cleanup_cfg.get("enabled", True)),
+        "max_age_days": float(_cleanup_cfg.get("max_age_days", 7) or 0),
+        "max_files": int(_cleanup_cfg.get("max_files", 500) or 0),
+        "interval_s": float(_cleanup_cfg.get("interval_s", 3600) or 3600),
+    }
     raw_bots = cfg.get("bots")
     # 兼容旧版单 bot: 无 bots 数组但有顶层单 bot 字段
     if not raw_bots and (cfg.get("relay_url") or cfg.get("app_id")):
@@ -943,7 +1065,7 @@ def load_config(path: str, http_default_host: str, cwd: str) -> dict:
         }]
     if not isinstance(raw_bots, list):
         raise ValueError("config 缺 bots 数组(或顶层单 bot 的 relay_url/app_id)")
-    bots = [_normalize_bot(b, http_host, http_port, cwd) for b in raw_bots]
+    bots = [_normalize_bot(b, http_host, http_port, cwd, default_cleanup) for b in raw_bots]
     # 校验 name 唯一(URL/通道路由依赖 name)
     names = [b["name"] for b in bots]
     if len(names) != len(set(names)):
@@ -954,6 +1076,7 @@ def load_config(path: str, http_default_host: str, cwd: str) -> dict:
     return {
         "reload": reload_cfg,
         "http": http_cfg,
+        "cleanup": {"inbox": default_cleanup},
         "bots": bots,
     }
 
@@ -1076,6 +1199,7 @@ class BotNode:
         self.feishu = None
         self._relay = None
         self._feishu_thread = None
+        self.inbox_cleaner = None
 
     async def start(self):
         bot = self.bot
@@ -1099,6 +1223,17 @@ class BotNode:
         self.feishu = feishu
         self._relay = relay
 
+        # v3: 本 bot 的 inbox 清理器(由 BotManager 统一轮询, 不单独起任务)
+        c = bot.get("cleanup") or {}
+        self.inbox_cleaner = InboxCleaner(
+            bot["inbox_dir"],
+            enabled=c.get("enabled", True),
+            max_age_days=c.get("max_age_days", 7),
+            max_files=c.get("max_files", 500),
+            interval_s=c.get("interval_s", 3600),
+            bot_name=bot["name"],
+        )
+
         # 注册到共享文件服务(多 bot 共用单端口, 靠 /<bot>/ 路由)
         bridge.register_file_service(queue.Queue())
         self.router.register(bot["name"], bot["inbox_dir"], bridge._upload_queue)
@@ -1106,7 +1241,10 @@ class BotNode:
         feishu.start_long_conn()
         # 主循环作为 asyncio task
         self.run_task = asyncio.create_task(bridge.run())
-        log.info(f"🚀 [{self.name}] 机器人已启动: relay={bot['relay_url']}")
+        log.info(f"🚀 [{self.name}] 机器人已启动: relay={bot['relay_url']}" +
+                 (f" | inbox清理: {'开' if self.inbox_cleaner.enabled else '关'}"
+                  f"(>{self.inbox_cleaner.max_age_days:g}天/{self.inbox_cleaner.max_files}个)"
+                  if self.inbox_cleaner.enabled else " | inbox清理: 关"))
 
     async def stop(self):
         """停掉该机器人: 停 relay 任务、取消 run_task、终止长连接子进程、注销路由。"""
@@ -1183,6 +1321,11 @@ class BotManager:
                 log.error(f"⚠️ 热更新读取/应用失败(下次重试): {e}")
             await asyncio.sleep(interval)
 
+    @property
+    def cleaners(self) -> list:
+        """当前运行中的各 bot 的 inbox 清理器(随热更新增删自动跟进)。"""
+        return [n.inbox_cleaner for n in self.bots.values() if n.inbox_cleaner]
+
     async def stop_all(self):
         for name, node in list(self.bots.items()):
             await node.stop()
@@ -1218,6 +1361,14 @@ async def main():
     mgr = BotManager(cfg["bots"], router, loop)
     await mgr.start_all()
     log.info(f"🚀 桥启动: {len(mgr.bots)} 个机器人")
+
+    # v3: inbox 自动清理(多 bot 只起一个扫描任务, 遍历所有 bot 的 inbox_dir)
+    _ck_interval = float((cfg.get("cleanup") or {}).get("inbox", {}).get("interval_s", 3600) or 3600)
+    mgr.clean_loop_interval = _ck_interval
+    cleaner_task = asyncio.create_task(inbox_clean_loop(mgr.cleaners, _ck_interval))
+    _any = any(c.enabled for c in mgr.cleaners)
+    log.info(f"🧹 inbox 自动清理{'已开启' if _any else '已关闭'}: 每 {_ck_interval / 60:.0f} 分钟扫一遍 "
+             f"({len(mgr.cleaners)} 个 bot 的 inbox)")
 
     # 热更新 watcher
     if reload_enabled:
