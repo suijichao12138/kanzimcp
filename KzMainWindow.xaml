@@ -27,7 +27,7 @@
                 <TextBlock Grid.Column="0" Text="MCP" VerticalAlignment="Center"
                            FontSize="12" Foreground="#888" FontWeight="Bold" Margin="0,0,4,0"/>
                 <TextBox Grid.Column="1" x:Name="MCPUrlBox"
-                         Text="ws://10.10.118.152:58080/suijichao"
+                         Text="ws://10.10.118.152:58080/username"
                          FontSize="11" VerticalAlignment="Center"/>
                 <Button Grid.Column="2" x:Name="ConnectMCPBtn" Content="连接" 
                         Width="46" Height="22" FontSize="11" Margin="4,0,2,0"
@@ -53,7 +53,7 @@
                 <TextBlock Grid.Column="0" Text="聊天" VerticalAlignment="Center"
                            FontSize="12" Foreground="#888" FontWeight="Bold" Margin="0,0,4,0"/>
                 <TextBox Grid.Column="1" x:Name="ChatUrlBox"
-                         Text="ws://10.10.118.152:58080/suijichao"
+                         Text="ws://10.10.118.152:58080/username"
                          FontSize="11" VerticalAlignment="Center"/>
                 <Button Grid.Column="2" x:Name="ConnectChatBtn" Content="连接" 
                         Width="46" Height="22" FontSize="11" Margin="4,0,2,0"

@@ -1,8 +1,8 @@
 using System.Reflection;
 using System.Runtime.InteropServices;
 
-[assembly: AssemblyTitle("KzMCPChatPlugin-v8_localization")]
-[assembly: AssemblyDescription("Kanzi Studio MCP + 聊天助手整合插件 (v8_localization)")]
+[assembly: AssemblyTitle("KzMCPChatPlugin-v8")]
+[assembly: AssemblyDescription("Kanzi Studio MCP + 聊天助手整合插件 (v8: 菜单名修正 + 连接地址配置持久化)")]
 [assembly: AssemblyConfiguration("")]
 [assembly: AssemblyCompany("")]
 [assembly: AssemblyProduct("KzMCPChatPlugin")]

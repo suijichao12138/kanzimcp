@@ -51,6 +51,9 @@ namespace KzMCPChatPlugin
             _mcpClient.ConnectionChanged += OnMCPConnectionChanged;
             _mcpClient.LogReceived += OnMCPLog;
 
+            // 从 Kanzi 用户偏好恢复上次的地址(无存量值则用 XAML 默认值)
+            LoadSavedUrls();
+
             // 工程信息
             try
             {
@@ -74,8 +77,24 @@ namespace KzMCPChatPlugin
                 MCPStatus.Text = connected ? "●" : "○";
                 MCPStatus.Foreground = connected ? new Media.SolidColorBrush(Media.Colors.Lime) : new Media.SolidColorBrush(Media.Colors.Gray);
                 MCPLog($"MCP Server {(connected ? "已连接" : "已断开")}");
-                if (connected) RefreshProjectInfo();
+                if (connected)
+                {
+                    // 连接成功时覆盖式保存当前地址
+                    KzSettings.Set(_studio, KzSettings.KeyMcpUrl, MCPUrlBox.Text.Trim());
+                    RefreshProjectInfo();
+                }
             });
+        }
+
+        /// <summary>插件窗口构造时, 用用户偏好里存过的地址覆盖 XAML 默认值。</summary>
+        private void LoadSavedUrls()
+        {
+            try
+            {
+                MCPUrlBox.Text = KzSettings.Get(_studio, KzSettings.KeyMcpUrl, KzSettings.DefaultMcpUrl);
+                ChatUrlBox.Text = KzSettings.Get(_studio, KzSettings.KeyChatUrl, KzSettings.DefaultChatUrl);
+            }
+            catch { }
         }
 
         private void OnMCPLog(string msg)
@@ -180,6 +199,11 @@ namespace KzMCPChatPlugin
                 ChatStatus.Text = connected ? "●" : "○";
                 ChatStatus.Foreground = connected ? new Media.SolidColorBrush(Media.Colors.Lime) : new Media.SolidColorBrush(Media.Colors.Gray);
                 AddSysMsg(connected ? "已连接" : "已断开");
+                if (connected)
+                {
+                    // 连接成功时覆盖式保存当前地址
+                    KzSettings.Set(_studio, KzSettings.KeyChatUrl, ChatUrlBox.Text.Trim());
+                }
             });
         }
 

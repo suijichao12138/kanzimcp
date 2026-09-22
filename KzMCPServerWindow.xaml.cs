@@ -11,16 +11,27 @@ namespace KzMCPChatPlugin
     {
         private readonly KzMCPServerClient _mcpClient;
         private readonly KzMCPReflectionBridge _bridge;
+        private readonly KanziStudio _studio;
         private bool _connected;
 
-        public KzMCPServerWindow(KzMCPServerClient mcpClient, KzMCPReflectionBridge bridge)
+        public KzMCPServerWindow(KzMCPServerClient mcpClient, KzMCPReflectionBridge bridge,
+                                 KanziStudio studio = null)
         {
             InitializeComponent();
             _mcpClient = mcpClient;
             _bridge = bridge;
+            _studio = studio;
 
             _mcpClient.ConnectionChanged += OnConnectionChanged;
             _mcpClient.LogReceived += OnLog;
+
+            // 从 Kanzi 用户偏好恢复上次的地址(无存量值则用 XAML 默认值)
+            try
+            {
+                RelayUrlBox.Text = KzSettings.Get(_studio, KzSettings.KeyRelayUrl,
+                                                  KzSettings.DefaultRelayUrl);
+            }
+            catch { }
 
             RefreshProjectInfo();
         }
@@ -36,7 +47,12 @@ namespace KzMCPChatPlugin
                 StatusText.Text = connected ? "已连接" : "未连接";
                 ChannelText.Text = _mcpClient.Channel;
                 Log($"MCP Server {(connected ? "已连接" : "已断开")}");
-                if (connected) RefreshProjectInfo();
+                if (connected)
+                {
+                    // 连接成功时覆盖式保存当前地址
+                    KzSettings.Set(_studio, KzSettings.KeyRelayUrl, RelayUrlBox.Text.Trim());
+                    RefreshProjectInfo();
+                }
             });
         }
 

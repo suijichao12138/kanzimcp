@@ -53,6 +53,8 @@
     <Compile Include="Properties\AssemblyInfo.cs" />
     <!-- JSON 工具 -->
     <Compile Include="JsonUtils.cs" />
+    <!-- 配置持久化(Kanzi IUserPreferences) -->
+    <Compile Include="KzSettings.cs" />
     <!-- 反射桥 -->
     <Compile Include="KzMCPReflectionBridge.cs" />
     <!-- WebSocket MCP Server（替代 server_ws.py） -->

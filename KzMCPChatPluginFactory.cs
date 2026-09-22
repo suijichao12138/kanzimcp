@@ -20,7 +20,7 @@ namespace KzMCPChatPlugin
         {
             get
             {
-                return new CommandPlacement("aiMCPMenu", ContextMenuPlacement.NONE, false, null);
+                return new CommandPlacement("KanziMCPMenu", ContextMenuPlacement.NONE, false, null);
             }
         }
 

@@ -1,5 +1,5 @@
 kanzimcp OTA 发布标记文件
 用途：打 tag 时一并更新，便于确认同步/更新是否到位。
-最新发布: v7
-时间: 2026-09-22 11:14:00
-内容: relay 中文消息补 ensure_ascii=False(6处不再转义成 \uXXXX) + feishu_bridge 新增 error 分支(relay 侧错误回飞书并解锁 _busy，修复用户零反馈与锁死)
+最新发布: v8
+时间: 2026-09-22 16:05:00
+内容: 插件侧 v8 —— 菜单名修正(KanziMCPMenu) + 三处连接默认地址改为 /username + 新增配置持久化(KzSettings.cs，走 Kanzi 原生 IUserPreferences，连接成功时覆盖式保存)；含 v7 内容(relay 中文 ensure_ascii=False + feishu_bridge error 分支)
