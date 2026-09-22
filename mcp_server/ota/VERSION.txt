@@ -1,5 +1,5 @@
 kanzimcp OTA 发布标记文件
 用途：打 tag 时一并更新，便于确认同步/更新是否到位。
-最新发布: v8
-时间: 2026-09-22 16:05:00
-内容: 插件侧 v8 —— 菜单名修正(KanziMCPMenu) + 三处连接默认地址改为 /username + 新增配置持久化(KzSettings.cs，走 Kanzi 原生 IUserPreferences，连接成功时覆盖式保存)；含 v7 内容(relay 中文 ensure_ascii=False + feishu_bridge error 分支)
+最新发布: v8.1
+时间: 2026-09-22 16:30:00
+内容: 插件侧 v8.1 —— 在 v8 基础上补 KzMCPServerWindow.xaml.cs 的 using Rightware.Kanzi.Studio.PluginInterface（修复 CS0246 编译错误，已本地验证通过）。v8 内容: 菜单名修正(KanziMCPMenu) + 三处连接默认地址改为 /username + 新增配置持久化(KzSettings.cs，走 Kanzi 原生 IUserPreferences，连接成功时覆盖式保存)；含 v7 内容(relay 中文 ensure_ascii=False + feishu_bridge error 分支)
