@@ -234,6 +234,15 @@ class Bridge:
             log.warning(f"[{self.bot_name}] copilot worker 断开，解锁并提示用户")
             self._reset_round_state()
             await self._reply_feishu("❌ Copilot 已断开，本轮已取消。请稍后重试（或等待自动重连）。")
+        elif msg_type == "error":
+            # relay 侧错误(如 worker 不在线、消息格式错、未知类型): 必须回飞书,
+            # 否则用户发消息后界面零反馈, 完全不知道出了什么事。
+            # 同时解锁: 这类错误常发生在"消息已发出、worker 没接"时,
+            # 不解锁则 _busy 卡 True, 后续消息全被"请稍候"挡死。
+            t = str(msg.get("text", "") or "未知错误")
+            log.warning(f"[{self.bot_name}] relay error: {t[:200]}")
+            self._reset_round_state()
+            await self._reply_feishu(f"❌ {t}")
         elif msg_type == "progress":
             # 多阶段活动反馈：绝不触发 _done_event(不作为一轮结束、不提前放行第二条)。
             # 单条 ·五行滚动编辑: 维持一条进度消息, 内容保留最近五行, 不刷屏。

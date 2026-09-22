@@ -1,5 +1,5 @@
 kanzimcp OTA 发布标记文件
 用途：打 tag 时一并更新，便于确认同步/更新是否到位。
-最新发布: v6
-时间: 2026-09-16 17:23:00
-内容: feishu_bridge 新增 inbox 自动清理（多 bot 共用一个扫描任务，按天+按数量两级清理，可配置）
+最新发布: v7
+时间: 2026-09-22 11:14:00
+内容: relay 中文消息补 ensure_ascii=False(6处不再转义成 \uXXXX) + feishu_bridge 新增 error 分支(relay 侧错误回飞书并解锁 _busy，修复用户零反馈与锁死)

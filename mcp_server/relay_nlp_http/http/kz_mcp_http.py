@@ -75,8 +75,9 @@ def load_users(config_path: str) -> set:
 class RelayClient:
     """管理到中继的 WebSocket 连接, 角色 = client (外部 MCP 客户端)
 
-    每个用户一条连接, URL = <relay_base>/<username>。
-    Kanzi server 未启动时, relay 会拒绝(4001) —— 程序重连直到 server 上线。
+    每个用户一条连接(懒加载, 后续请求复用), URL = <relay_base>/<username>。
+    Kanzi server 未启动时 relay 不再拒连(历史版本曾用 4001 拒连, 现已改为连接保持 +
+    请求直接回错误), 因此下方的 4001 分支仅为兼容旧版中继保留。
     """
 
     def __init__(self, relay_url: str, username: str):
@@ -140,6 +141,7 @@ class RelayClient:
 
             except websockets.ConnectionClosed as e:
                 if e.code == 4001:
+                    # 兼容旧版中继(现已改为连接保持 + 请求回错误, 不再发 4001)
                     log.warning(f"🔌 [{self.username}] server 不在线, 5秒后重试...")
                 else:
                     log.warning(f"🔌 [{self.username}] 中继连接断开, 3秒后重连...")
@@ -444,8 +446,10 @@ class UserManager:
                 self._last_mtime = os.path.getmtime(config_path)
             except OSError:
                 pass
-        self.connections = {}   # user -> [ (RelayClient, McpProxyHandler), ... ] 多连接并存
-                                # 方案甲: copilot 常驻一条(站住主通道), 脚本各自新建独立连接(不踢旧的)
+        self.connections = {}   # user -> [ (RelayClient, McpProxyHandler) ]
+                                # 每用户一条稳定连接(喂狗+业务共用), 懒加载、后续请求复用。
+                                # '脚本独立'靠 relay 通道隔离实现: 脚本用不同 X-Kanzi-User
+                                # = 不同通道, 不依赖这里开多连接。
 
     def _reload(self) -> bool:
         """重读白名单文件, 返回是否真的有变化。文件缺失/损坏时保留旧名单不崩溃。"""
@@ -922,16 +926,15 @@ class HttpMcpServer:
         if method == "ping":
             return {"jsonrpc": "2.0", "id": req_id, "result": {}}
 
-        # 需要 Kanzi 连接的操作 → 拿到**本条请求专属**的连接并启动它
-        # 方案甲: 每次请求新建一条独立连接(copilot 常驻连接保留), 同一条既启动又用于发请求
-        # (修复: 之前 get_handler 取首个 running、start_user 起最新 —— 两条不是同一条,
+        # 需要 Kanzi 连接的操作 → 取得该用户的稳定连接(无则新建, 有则复用)并确保已启动
+        # (历史修复: 之前 get_handler 取首个 running、start_user 起最新 —— 两条不是同一条,
         #  导致新建连接 ws 一直为 None, 报 "Kanzi 未连接")
         relay, handler = await self.users.start_user(username)
         # 等 client 槽真正连上中继(与 Kanzi server 直通), 避免首请求发空
         try:
             await asyncio.wait_for(relay.wait_connected(3.0), timeout=4.0)
         except (asyncio.TimeoutError, Exception):
-            # server 未上线时 relay 会 4001 拒连, 这里不抛错, 让下方 fallback
+            # Kanzi server 未上线时 relay 不拒连(连接保持), 请求一律直接回错误, 这里不抛错让下方 fallback
             pass
         if not (relay.ws and getattr(relay.ws, "state", None) and relay.ws.state.name == "OPEN"):
             if method == "tools/list":

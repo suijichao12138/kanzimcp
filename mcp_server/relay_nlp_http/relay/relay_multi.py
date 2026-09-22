@@ -287,7 +287,7 @@ class MultiRelay:
                     await self._send_safe(nlp_worker, json.dumps({
                         "type": "mcp_response",
                         "text": msg
-                    }))
+                    }, ensure_ascii=False))
         except websockets.ConnectionClosed:
             pass
         finally:
@@ -375,7 +375,7 @@ class MultiRelay:
             "text": f"已连接到通道 [{name}]",
             "server_online": ch["server"] is not None,
             "worker_online": ch["nlp_worker"] is not None
-        }))
+        }, ensure_ascii=False))
         log.info(f"✅ [{name}] NLP Client 已连接")
 
         await self._flush_nlp_pending(name)
@@ -389,7 +389,7 @@ class MultiRelay:
                 except json.JSONDecodeError:
                     await self._send_safe(ws, json.dumps({
                         "type": "error", "text": "消息格式错误"
-                    }))
+                    }, ensure_ascii=False))
                     continue
 
                 msg_type = data.get("type", "")
@@ -403,11 +403,11 @@ class MultiRelay:
                         await self._send_safe(ws, json.dumps({
                             "type": "error",
                             "text": "没有可用的 Chat Worker，请先启动 nlp_worker.py"
-                        }))
+                        }, ensure_ascii=False))
                 else:
                     await self._send_safe(ws, json.dumps({
                         "type": "error", "text": f"未知消息类型: {msg_type}"
-                    }))
+                    }, ensure_ascii=False))
         except websockets.ConnectionClosed:
             pass
         finally:
@@ -430,7 +430,7 @@ class MultiRelay:
         await self._send_safe(ws, json.dumps({
             "type": "connected", "role": "nlp_worker",
             "text": f"已连接到通道 [{name}]"
-        }))
+        }, ensure_ascii=False))
         log.info(f"✅ [{name}] NLP Worker 已连接")
 
         # 通知 nlp_client worker 在线
