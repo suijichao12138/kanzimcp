@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KanziMCP 部署管理器</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<header>
+  <div class="brand">KanziMCP <span>部署管理器</span></div>
+  <div class="head-right">
+    <span id="upd-badge" class="badge hidden">有新版本</span>
+    <span id="status-dot" class="dot dot-gray"></span>
+    <span id="status-text">连接中…</span>
+  </div>
+</header>
+
+<nav id="tabs">
+  <button class="tab active" data-tab="overview">状态总览</button>
+  <button class="tab" data-tab="deploy">部署 / 升级</button>
+  <button class="tab" data-tab="config">配置</button>
+  <button class="tab" data-tab="logs">日志</button>
+  <button class="tab" data-tab="settings">设置</button>
+</nav>
+
+<main>
+
+<!-- ══════════ 状态总览 ══════════ -->
+<section id="tab-overview" class="panel active">
+  <div class="card">
+    <div class="card-head">
+      <h2>版本信息</h2>
+      <button class="btn" onclick="checkUpdate()">检查更新</button>
+    </div>
+    <div class="kv">
+      <div><label>当前版本</label><span id="ov-local">—</span></div>
+      <div><label>远端最新</label><span id="ov-latest">—</span></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-head">
+      <h2>组件状态</h2>
+      <div>
+        <button class="btn" onclick="checkEnv()">检查环境</button>
+        <button class="btn btn-warn" onclick="restartComp('all')">全部重启</button>
+      </div>
+    </div>
+    <table class="tbl">
+      <thead><tr><th>组件</th><th>程序</th><th>状态</th><th>健康</th><th>PID</th><th>操作</th></tr></thead>
+      <tbody id="ov-comps"><tr><td colspan="6" class="muted">加载中…</td></tr></tbody>
+    </table>
+  </div>
+
+  <div class="card" id="env-card" style="display:none">
+    <div class="card-head"><h2>环境检测</h2></div>
+    <table class="tbl">
+      <thead><tr><th>项目</th><th>结果</th><th>版本 / 说明</th></tr></thead>
+      <tbody id="ov-env"></tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ══════════ 部署 / 升级 ══════════ -->
+<section id="tab-deploy" class="panel">
+  <div class="card">
+    <div class="card-head"><h2>版本升级</h2></div>
+    <p class="muted">升级会重新拉取源码、编译三个组件并重启服务，期间服务会短暂中断。</p>
+    <div class="row">
+      <button class="btn btn-primary" onclick="doUpgrade()">⬆ 升级到最新版本</button>
+      <span id="upg-target" class="muted"></span>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><h2>一键部署</h2></div>
+    <p class="muted">不比对版本，直接走完整流程：拉源码 → 编译 → 生成配置 → 重启组件。</p>
+    <div class="row">
+      <button class="btn btn-primary" onclick="doDeploy()">🚀 一键部署</button>
+    </div>
+  </div>
+
+  <div class="card" id="task-card" style="display:none">
+    <div class="card-head"><h2 id="task-title">任务进度</h2></div>
+    <div class="bar"><div id="task-bar" class="bar-fill"></div></div>
+    <div class="row"><span id="task-step" class="muted"></span></div>
+    <pre id="task-log" class="log"></pre>
+  </div>
+</section>
+
+<!-- ══════════ 配置 ══════════ -->
+<section id="tab-config" class="panel">
+  <div class="card">
+    <div class="card-head"><h2>配置文件</h2></div>
+    <div class="row">
+      <select id="cfg-sel" onchange="loadConfig()">
+        <option value="deployer">deployer_config.json（部署管理器自身）</option>
+        <option value="http">config.json（http 组件）</option>
+        <option value="users">users.json（白名单，热更新不用重启）</option>
+        <option value="feishu">feishu_config.json（飞书桥，热更新不用重启）</option>
+      </select>
+      <button class="btn btn-primary" onclick="saveConfig()">保存</button>
+      <span id="cfg-hint" class="muted"></span>
+    </div>
+    <textarea id="cfg-text" spellcheck="false" placeholder="加载中…"></textarea>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><h2>首次配置向导</h2></div>
+    <p class="muted">按步骤填好即可完成整套服务配置（配置项均有中文说明）。</p>
+    <div id="wiz-body"></div>
+    <div class="row">
+      <button class="btn btn-primary" onclick="saveWizard()">保存全部配置</button>
+      <span id="wiz-hint" class="muted"></span>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════ 日志 ══════════ -->
+<section id="tab-logs" class="panel">
+  <div class="card">
+    <div class="card-head">
+      <h2>日志</h2>
+      <div class="row">
+        <select id="log-sel" onchange="loadLog()">
+          <option value="relay">relay 中继</option>
+          <option value="http">http 组件</option>
+          <option value="feishu">feishu 飞书桥</option>
+          <option value="deployer">deployer 管理器</option>
+        </select>
+        <select id="log-lines" onchange="loadLog()">
+          <option value="100">100 行</option>
+          <option value="200" selected>200 行</option>
+          <option value="500">500 行</option>
+          <option value="1000">1000 行</option>
+        </select>
+        <label class="chk"><input type="checkbox" id="log-auto" checked> 自动刷新(3s)</label>
+        <button class="btn" onclick="loadLog()">刷新</button>
+        <button class="btn btn-warn" onclick="clearLog()">清空</button>
+      </div>
+    </div>
+    <div class="row"><span id="log-info" class="muted"></span></div>
+    <pre id="log-text" class="log log-tall">加载中…</pre>
+  </div>
+</section>
+
+<!-- ══════════ 设置 ══════════ -->
+<section id="tab-settings" class="panel">
+  <div class="card">
+    <div class="card-head"><h2>部署管理器设置</h2></div>
+    <div id="set-body"><p class="muted">加载中…</p></div>
+    <div class="row">
+      <button class="btn btn-primary" onclick="saveSettings()">保存设置</button>
+      <button class="btn btn-warn" onclick="restartSelf()">保存并重启管理器</button>
+      <span id="set-hint" class="muted"></span>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-head"><h2>通知测试</h2></div>
+    <p class="muted">用当前配置发一条飞书测试消息。</p>
+    <button class="btn" onclick="testNotify()">发送测试通知</button>
+    <span id="notify-hint" class="muted"></span>
+  </div>
+</section>
+
+</main>
+
+<div id="toast" class="toast hidden"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

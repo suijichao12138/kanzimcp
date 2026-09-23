@@ -37,6 +37,9 @@ import sys
 import time
 import uuid
 
+# 日志文件轮转(组件自己管, 不依赖外部程序)
+from logging.handlers import RotatingFileHandler
+
 # 官方 Kanzi MCP 客户端(api/doc) —— 供本进程聚合网关做三端点代理
 from official_mcp import (
     OfficialMcpHttpClient,
@@ -54,6 +57,22 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
 )
 log = logging.getLogger("kz-mcp-http")
+
+
+def setup_file_log(path: str, max_bytes: int = 10 * 1024 * 1024, backup_count: int = 5):
+    """追加 RotatingFileHandler。日志文件由本进程自己轮转, 无需外部停进程。
+    max_bytes 满时自动切分为 path.1/.2..., 全程不中断服务。"""
+    if not path:
+        return
+    try:
+        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+        fh = RotatingFileHandler(path, maxBytes=max_bytes,
+                                 backupCount=backup_count, encoding="utf-8")
+        fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+        logging.getLogger().addHandler(fh)
+        log.info(f"📄 文件日志已启用: {path} (max {max_bytes}B × {backup_count})")
+    except Exception as e:
+        log.warning(f"文件日志启用失败({path}): {e}")
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -1113,6 +1132,8 @@ def write_config_example(path):
 # ═══════════════════════════════════════════════════════════════════
 async def main():
     parser = argparse.ArgumentParser(description="单进程多用户 Kanzi MCP over HTTP server")
+    parser.add_argument("--log-path", default=None,
+                       help="日志文件路径(组件自己轮转, 10MB×5); 不传则只输出控制台")
     parser.add_argument("--config", default=None,
                        help="配置文件路径 (默认 config.json; 所有启动参数都在这改)。命令行参数仍可覆盖对应项。白名单永远在 users 字段指定的 users.json, 改它不重启热更新)")
     parser.add_argument("--relay-base", default=None,
@@ -1142,6 +1163,7 @@ async def main():
     parser.add_argument("--debug", const=True, nargs="?", default=None,
                        help="开启调试日志")
     args = parser.parse_args()
+    setup_file_log(args.log_path)
 
     # 加载配置文件（不存在则生成示例）
     cfg_path = args.config or DEFAULT_CONFIG_PATH

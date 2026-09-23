@@ -1,5 +1,17 @@
 kanzimcp OTA 发布标记文件
 用途：打 tag 时一并更新，便于确认同步/更新是否到位。
-最新发布: v8.1
-时间: 2026-09-22 16:30:00
-内容: 插件侧 v8.1 —— 在 v8 基础上补 KzMCPServerWindow.xaml.cs 的 using Rightware.Kanzi.Studio.PluginInterface（修复 CS0246 编译错误，已本地验证通过）。v8 内容: 菜单名修正(KanziMCPMenu) + 三处连接默认地址改为 /username + 新增配置持久化(KzSettings.cs，走 Kanzi 原生 IUserPreferences，连接成功时覆盖式保存)；含 v7 内容(relay 中文 ensure_ascii=False + feishu_bridge error 分支)
+最新发布: v9
+时间: 2026-09-23 10:46:00
+内容: 新版部署管理器 kanzi-deployer（mcp_server/deployer/，替代旧 ota/）+ 三组件日志文件轮转
+  - 新增 kanzi-deployer：网页管理控制台（状态总览/部署升级/配置/日志/设置五个页签）
+    * 局域网网页配置 relay、http、飞书三组件；OTA 自身配置（Gitee 地址、飞书 bot、端口、密码）也可在网页改
+    * 一键拉取源码→编译→生成配置→启动三组件；支持首次配置向导（配置项含中文说明）
+    * 升级按钮需二次确认，长任务进度实时显示；自动升级开关保留但默认关闭
+    * 单组件重启（relay 重启连带 http+feishu）；配置文件保存后按需重启
+    * 日志四页分离：relay / http / feishu / deployer
+    * 模块化拆分：core/（12 模块，纯逻辑）+ web/（server/auth/api/tasks + static 前端）
+    * 零第三方依赖（标准库 http.server / urllib / subprocess）
+    * 所有路径自管理（bin/conf/logs/src/_backup），基于 exe 目录，不依赖绝对路径
+  - 三组件日志：新增 --log-path 参数 + RotatingFileHandler（10MB×5）
+    * 组件自己轮转，轮转过程不中断服务；不传参数则行为不变（向后兼容）
+  - 旧目录 mcp_server/ota/ 标记废弃（DEPRECATED.md），代码保留

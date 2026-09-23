@@ -62,10 +62,29 @@ import threading
 import time
 import urllib.request
 
+# 日志文件轮转(组件自己管, 不依赖外部程序)
+from logging.handlers import RotatingFileHandler
+
 import websockets
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("feishu-bridge-v3")
+
+
+def setup_file_log(path: str, max_bytes: int = 10 * 1024 * 1024, backup_count: int = 5):
+    """追加 RotatingFileHandler。日志文件由本进程自己轮转, 无需外部停进程。
+    max_bytes 满时自动切分为 path.1/.2..., 全程不中断服务。"""
+    if not path:
+        return
+    try:
+        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+        fh = RotatingFileHandler(path, maxBytes=max_bytes,
+                                 backupCount=backup_count, encoding="utf-8")
+        fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+        logging.getLogger().addHandler(fh)
+        log.info(f"📄 文件日志已启用: {path} (max {max_bytes}B × {backup_count})")
+    except Exception as e:
+        log.warning(f"文件日志启用失败({path}): {e}")
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -1343,12 +1362,15 @@ class BotManager:
 async def main():
     parser = argparse.ArgumentParser(description="飞书 ↔ nlp_worker(copilot) 桥 v3(多 bot + 热更新)")
     parser.add_argument("--config", default="feishu_config.json", help="配置文件路径")
+    parser.add_argument("--log-path", default=None,
+                        help="日志文件路径(组件自己轮转, 10MB×5); 不传则只输出控制台")
     parser.add_argument("--debug", action="store_true")
     args = parser.parse_args()
     if args.debug:
         global _DEBUG
         _DEBUG = True
         logging.getLogger().setLevel(logging.DEBUG)
+    setup_file_log(args.log_path)
 
     loop = asyncio.get_running_loop()
     http_default_host = "0.0.0.0"

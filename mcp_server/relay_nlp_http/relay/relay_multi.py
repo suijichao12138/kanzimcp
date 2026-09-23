@@ -25,15 +25,36 @@ server ↔ client 双向转发（client 槽支持多连接定向回传）。
 import asyncio
 import json
 import logging
+import os
 import sys
 import time
+import argparse
 import websockets
+
+# 日志: 控制台 + 可选文件轮转(--log-path 指定, 由 OTA 等外部程序传入)
+from logging.handlers import RotatingFileHandler
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
 )
 log = logging.getLogger("kz-relay-multi")
+
+
+def setup_file_log(path: str, max_bytes: int = 10 * 1024 * 1024, backup_count: int = 5):
+    """追加 RotatingFileHandler。日志文件由本进程自己轮转, 无需外部停进程。
+    max_bytes 满时自动切分为 path.1/.2..., 全程不中断服务。"""
+    if not path:
+        return
+    try:
+        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+        fh = RotatingFileHandler(path, maxBytes=max_bytes,
+                                 backupCount=backup_count, encoding="utf-8")
+        fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+        logging.getLogger().addHandler(fh)
+        log.info(f"📄 文件日志已启用: {path} (max {max_bytes}B × {backup_count})")
+    except Exception as e:
+        log.warning(f"文件日志启用失败({path}): {e}")
 
 # ── 回收配置（可按需调整）──
 SWEEP_INTERVAL        = 30    # 回收扫描间隔 秒
@@ -549,6 +570,12 @@ def make_process_request(relay):
 async def main():
     relay = MultiRelay()
     port = 58080
+
+    ap = argparse.ArgumentParser(description="Kanzi Studio MCP WebSocket 中继")
+    ap.add_argument("--log-path", default=None,
+                    help="日志文件路径(组件自己轮转, 10MB×5); 不传则只输出控制台")
+    args = ap.parse_args()
+    setup_file_log(args.log_path)
 
     # 启动三层回收的后台扫描任务
     asyncio.get_event_loop().create_task(relay._sweep_loop())
