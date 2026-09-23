@@ -56,6 +56,34 @@ def ws_handshake(host: str, port: int, path: str = "/",
     return False, f"{host}:{port} 拒绝握手: {head.strip()[:80]}"
 
 
+
+def http_probe(host: str, port: int, path: str = "/",
+               timeout: float = 3.0) -> tuple[bool, str]:
+    """裸 HTTP 服务探测：发一个 GET，收到任意 HTTP 响应即视为健康。
+
+    用于 http 组件（streamable HTTP MCP 端点，不是 WebSocket 服务）。
+    4xx/5xx 也算「服务活着」—— 说明端口在监听得懂 HTTP，只是这个路径不认。
+    """
+    req = (f"GET {path or '/'} HTTP/1.1\r\n"
+           f"Host: {host}:{int(port)}\r\n"
+           f"Connection: close\r\n"
+           f"User-Agent: kanzi-deployer-health\r\n"
+           f"\r\n").encode()
+    try:
+        with socket.create_connection((host, int(port)), timeout=timeout) as sk:
+            sk.sendall(req)
+            sk.settimeout(timeout)
+            data = sk.recv(256)
+    except (OSError, ValueError) as e:
+        return False, f"{host}:{port} 不通: {e}"
+    if not data:
+        return False, f"{host}:{port} 无响应"
+    head = data.split(b"\r\n", 1)[0].decode("latin-1", "replace").strip()
+    if head.upper().startswith("HTTP/"):
+        code = head.split()[1] if len(head.split()) > 1 else "?"
+        return True, f"{host}:{port} HTTP {code}"
+    return False, f"{host}:{port} 响应异常: {head[:60]}"
+
 def ws_port_open(host: str, port: int, path: str = "/",
                  timeout: float = 2.0) -> tuple[bool, str]:
     """端口的 WebSocket 可用性（握手成功即视为健康）。
@@ -98,12 +126,20 @@ def check_one(check: dict) -> tuple[bool, str]:
     if t == "port":
         host = check.get("host", "127.0.0.1")
         port = int(check.get("port", 0))
-        # 默认发真握手：relay/http 都是 WebSocket 服务，握手成功才算真的能用
-        if check.get("ws", True):
+        # 只有显式 ws=True 才发 WebSocket 握手。
+        # 默认纯 TCP：不是所有组件都是 WebSocket 服务（http 组件就是裸 HTTP MCP），
+        # 对非 WS 服务发 Upgrade 请求会握手失败 → 健康检查误报。
+        if check.get("ws"):
             return ws_port_open(host, port, path=check.get("path", "/"),
                                 timeout=float(check.get("timeout_s", 2.0)))
         ok = port_open(host, port)
         return ok, f"{host}:{port} {'可连通' if ok else '不通'}"
+    if t == "http":
+        # 裸 HTTP 服务探测：能收到任意 HTTP 响应（含 4xx）就说明服务活着
+        host = check.get("host", "127.0.0.1")
+        port = int(check.get("port", 0))
+        return http_probe(host, port, path=check.get("path", "/"),
+                          timeout=float(check.get("timeout_s", 3.0)))
     if t == "process":
         exe = check.get("process", "")
         ok = process_running(exe)

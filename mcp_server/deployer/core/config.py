@@ -18,7 +18,9 @@ DEFAULT_COMPONENTS = {
         "pyinstaller_args": "--clean --onefile --noconsole --name relay_multi "
                             "--hidden-import websockets",
         "args_template": ["--log-path", "{logs}/relay.log"],
-        "health": {"type": "port", "host": "127.0.0.1", "port": 58080},
+        # relay 是 WebSocket 服务：发真握手探测（避免纯 TCP 探活给它制造
+        # "opening handshake failed" 日志噪音）
+        "health": {"type": "port", "host": "127.0.0.1", "port": 58080, "ws": True},
     },
     "http": {
         "exe_name": "kz_mcp_http.exe",
@@ -28,7 +30,9 @@ DEFAULT_COMPONENTS = {
                             "--hidden-import websockets",
         "args_template": ["--config", "{conf}/config.json",
                           "--log-path", "{logs}/http.log"],
-        "health": {"type": "port", "host": "127.0.0.1", "port": 9001},
+        # http 组件是裸 HTTP MCP 端点（asyncio.start_server），不是 WebSocket：
+        # 用 http 探测（收到任意 HTTP 响应即健康），发 Upgrade 握手会失败
+        "health": {"type": "http", "host": "127.0.0.1", "port": 9001},
     },
     "feishu": {
         "exe_name": "feishu_bridge.exe",
@@ -76,7 +80,8 @@ DEFAULT_CONFIG = {
         "timeout_s": 1800,
     },
     "kill_wait_ms": 2000,
-    "health": {"timeout_s": 30, "interval_s": 2},
+    # 健康检查等待：interval_s 探测间隔（放宽到 5s，2s 太密会刷探测日志）
+    "health": {"timeout_s": 30, "interval_s": 5},
     "log": {"max_bytes": 10485760, "backup_count": 5},
     "feishu_notify": {
         "enabled": True,

@@ -40,6 +40,13 @@ logging.basicConfig(
 )
 log = logging.getLogger("kz-relay-multi")
 
+# websockets 库自己的 INFO 日志（connection open / connection close）会随每个
+# 连接刷屏 —— 健康检查、端口探测都会触发，翻日志时全是噪音。
+# 只保留它的 WARNING 及以上（真出错还是要看的，比如 handler 异常）。
+logging.getLogger("websockets").setLevel(logging.WARNING)
+logging.getLogger("websockets.server").setLevel(logging.WARNING)
+logging.getLogger("websockets.client").setLevel(logging.WARNING)
+
 
 def setup_file_log(path: str, max_bytes: int = 10 * 1024 * 1024, backup_count: int = 5):
     """追加 RotatingFileHandler。日志文件由本进程自己轮转, 无需外部停进程。
