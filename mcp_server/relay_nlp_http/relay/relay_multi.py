@@ -569,13 +569,19 @@ def make_process_request(relay):
 
 async def main():
     relay = MultiRelay()
-    port = 58080
 
     ap = argparse.ArgumentParser(description="Kanzi Studio MCP WebSocket 中继")
     ap.add_argument("--log-path", default=None,
                     help="日志文件路径(组件自己轮转, 10MB×5); 不传则只输出控制台")
+    ap.add_argument("--port", type=int, default=58080,
+                    help="监听端口(默认 58080)")
+    ap.add_argument("--host", default="0.0.0.0",
+                    help="监听地址(默认 0.0.0.0, 即所有网卡)")
     args = ap.parse_args()
     setup_file_log(args.log_path)
+
+    port = args.port
+    bind_host = args.host
 
     # 启动三层回收的后台扫描任务
     asyncio.get_event_loop().create_task(relay._sweep_loop())
@@ -583,10 +589,10 @@ async def main():
     process_request = make_process_request(relay)
 
     async with websockets.serve(
-        relay.handle, "0.0.0.0", port,
+        relay.handle, bind_host, port,
         process_request=process_request
     ):
-        log.info(f"🔄 MCP 中继 ws://0.0.0.0:{port}")
+        log.info(f"🔄 MCP 中继 ws://{bind_host}:{port}")
         log.info(f"   路径区分通道: ws://ip:{port}/用户名")
         log.info(f"   Server:      ws://ip:{port}/用户名")
         log.info(f"   Client:      ws://ip:{port}/用户名（多连接并存, 定向回传）")

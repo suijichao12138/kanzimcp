@@ -17,7 +17,23 @@ from . import api, auth
 
 # 运行期上下文（配置 / 路径 / 状态），由 deployer.py 注入
 CTX = None
-_STATIC = Path(__file__).resolve().parent / "static"
+
+
+def _static_dir() -> Path:
+    """静态资源目录。
+
+    - PyInstaller onefile 解包目录: sys._MEIPASS/web/static
+    - PyInstaller onedir / 源码运行: 本文件同级 static
+    """
+    if getattr(sys, "frozen", False):
+        base = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
+        for cand in (base / "web" / "static", base / "static"):
+            if cand.exists():
+                return cand
+    return Path(__file__).resolve().parent / "static"
+
+
+_STATIC = _static_dir()
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -207,14 +223,53 @@ class Server:
 
 
 def local_ips() -> list:
-    """列出本机可用的局域网 IP，供启动提示。"""
+    """列出本机可用的局域网 IP（按可用性排序，第一个最可能是对的）。"""
     ips = []
+
+    def _add(ip):
+        if not ip or ip.startswith("127.") or ip.startswith("169.254."):
+            return
+        if ip not in ips:
+            ips.append(ip)
+
+    # ① 首选：UDP socket 探测默认出口网卡（不发包，只是让系统选出路由源地址）
+    for probe in ("10.255.255.255", "8.8.8.8"):
+        try:
+            sk = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try:
+                sk.connect((probe, 53))
+                _add(sk.getsockname()[0])
+            finally:
+                sk.close()
+        except Exception:                            # noqa: BLE001
+            pass
+
+    # ② 补充：主机名解析出的地址
     try:
         hostname = socket.gethostname()
         for info in socket.getaddrinfo(hostname, None, socket.AF_INET):
-            ip = info[4][0]
-            if ip not in ips and not ip.startswith("127."):
-                ips.append(ip)
+            _add(info[4][0])
     except Exception:                                # noqa: BLE001
         pass
+
+    # ③ 兜底：真实网卡枚举（不依赖 DNS/hosts）
+    try:
+        import socket as _s
+        if hasattr(_s, "if_nameindex"):
+            for _, name in _s.if_nameindex():
+                try:
+                    import fcntl
+                    import struct
+                    sk = _s.socket(_s.AF_INET, _s.SOCK_DGRAM)
+                    try:
+                        packed = fcntl.ioctl(sk.fileno(), 0x8915,   # SIOCGIFADDR
+                                             struct.pack("256s", name[:15].encode()))
+                        _add(_s.inet_ntoa(packed[20:24]))
+                    finally:
+                        sk.close()
+                except Exception:                    # noqa: BLE001
+                    continue
+    except Exception:                                # noqa: BLE001
+        pass
+
     return ips

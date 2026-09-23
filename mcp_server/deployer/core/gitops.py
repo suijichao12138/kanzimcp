@@ -6,7 +6,15 @@
 """
 import os
 import subprocess
+import sys
 from pathlib import Path
+
+CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
+
+
+def no_window_flags() -> int:
+    """Windows 下隐藏控制台黑窗（否则每次调外部命令都闪一下）。"""
+    return CREATE_NO_WINDOW
 
 
 def git_env() -> dict:
@@ -27,6 +35,7 @@ def run(cmd, cwd=None, timeout=600, env=None) -> tuple[bool, str]:
         p = subprocess.run(
             cmd, cwd=cwd, timeout=timeout, env=env or git_env(),
             capture_output=True, text=True, encoding="utf-8", errors="replace",
+            creationflags=CREATE_NO_WINDOW,
         )
         out = ((p.stdout or "") + (p.stderr or "")).strip()
         return p.returncode == 0, out
@@ -58,6 +67,34 @@ def latest_tag(repo_url: str, timeout: int = 60) -> str:
     if not tags:
         return ""
     return max(set(tags), key=_version_key)
+
+
+
+def local_tag(src_dir: Path) -> str:
+    """取本地源码目录当前所在 tag（精确匹配 HEAD）。
+
+    `git describe --tags --exact-match` 只在 HEAD 正好落在某个 tag 上时返回，
+    否则返回空（比如停在分支上）。找不到时退化为「分支名」，再不行给短 commit。
+    """
+    src_dir = Path(src_dir)
+    if not (src_dir / ".git").exists():
+        return ""
+    ok, out = run(["git", "describe", "--tags", "--exact-match", "HEAD"],
+                  cwd=src_dir, timeout=30)
+    tag = (out or "").strip().splitlines()[-1].strip() if ok else ""
+    if tag:
+        return tag
+    ok, out = run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=src_dir, timeout=30)
+    br = (out or "").strip().splitlines()[-1].strip() if ok else ""
+    if br and br != "HEAD":
+        return br
+    ok, out = run(["git", "rev-parse", "--short", "HEAD"], cwd=src_dir, timeout=30)
+    return (out or "").strip().splitlines()[-1].strip() if ok else ""
+
+
+def source_ready(src_dir: Path) -> bool:
+    """源码目录是否已就绪（存在且是 git 仓库）。"""
+    return (Path(src_dir) / ".git").exists()
 
 
 def _version_key(tag: str):

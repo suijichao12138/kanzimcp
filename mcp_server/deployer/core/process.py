@@ -81,17 +81,83 @@ def pid_of(name: str) -> int | None:
     return proc.pid if proc.poll() is None else None
 
 
+def kill_by_name(exe_name: str) -> bool:
+    """按 exe 名强杀全部同名进程，并等到它们真的消失。
+
+    ⚠️ taskkill 是异步的：返回 0 只代表命令受理，进程可能还在退出中，
+    此时 exe 文件仍被占用，立刻覆盖会 `[WinError 5] 拒绝访问`。
+    所以这里必须轮询等待，直到 tasklist 查不到为止。
+    """
+    if not exe_name:
+        return True
+    if sys.platform == "win32":
+        try:
+            subprocess.run(["taskkill", "/F", "/T", "/IM", exe_name],
+                           capture_output=True, text=True, timeout=15,
+                           encoding="utf-8", errors="replace",
+                           creationflags=CREATE_NO_WINDOW)
+        except Exception:                                    # noqa: BLE001
+            pass
+        deadline = time.time() + 15
+        while time.time() < deadline:
+            if not process_exists(exe_name):
+                time.sleep(0.5)          # 再给它一点释放文件句柄的时间
+                return True
+            time.sleep(0.4)
+        return not process_exists(exe_name)
+
+    # Linux/macOS：先精确按进程名杀，退化为带路径边界的模糊匹配
+    try:
+        subprocess.run(["pkill", "-9", "-x", exe_name], timeout=15)
+        subprocess.run(["pkill", "-9", "-f", f"[/]{exe_name}"], timeout=15)
+    except Exception:                                        # noqa: BLE001
+        pass
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        if not process_exists(exe_name):
+            return True
+        time.sleep(0.3)
+    return not process_exists(exe_name)
+
+
+def wait_file_free(path, timeout_s: float = 20.0) -> bool:
+    """等文件不再被占用（可删/可写）。
+
+    Windows 上文件被进程占用时删不掉也覆盖不了。这里实际尝试以写方式打开
+    来探测；成功即认为已释放。
+    """
+    path = Path(path)
+    if not path.exists():
+        return True
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        try:
+            with open(path, "r+b"):
+                return True
+        except OSError:
+            time.sleep(0.4)
+    return False
+
+
 def process_exists(exe_name: str) -> bool:
     """按 exe 名查系统进程（Windows tasklist / Linux pgrep）。"""
     try:
         if sys.platform == "win32":
             p = subprocess.run(["tasklist", "/FI", f"IMAGENAME eq {exe_name}", "/NH"],
                                capture_output=True, text=True, timeout=10,
-                               encoding="utf-8", errors="replace")
+                               encoding="utf-8", errors="replace",
+                               creationflags=CREATE_NO_WINDOW)
             return exe_name.lower() in (p.stdout or "").lower()
-        p = subprocess.run(["pgrep", "-f", exe_name], capture_output=True,
+        # 用 -x 精确匹配进程名：-f 会匹配整个命令行，
+        # 可能把 deployer 自己（命令行里含 exe 名）也算进去，导致误判/误杀。
+        p = subprocess.run(["pgrep", "-x", exe_name], capture_output=True,
                            text=True, timeout=10)
-        return p.returncode == 0 and bool((p.stdout or "").strip())
+        if p.returncode == 0 and (p.stdout or "").strip():
+            return True
+        # 退化：进程名可能带路径（如 /tmp/bin/relay_multi.exe）
+        p2 = subprocess.run(["pgrep", "-f", f"[/]{exe_name}"], capture_output=True,
+                            text=True, timeout=10)
+        return p2.returncode == 0 and bool((p2.stdout or "").strip())
     except Exception:                                        # noqa: BLE001
         return False
 
@@ -113,9 +179,14 @@ def stop(name: str, exe_name: str = "", wait_ms: int = 2000) -> tuple[bool, str]
         return True, f"{name} 已停止"
 
     # 句柄丢失（例如 deployer 自己重启过），按进程名杀
-    if exe_name and process_exists(exe_name):
-        ok = _taskkill(exe_name)
-        return ok, f"{name} 已按进程名停止" if ok else f"{name} 停止失败(taskkill)"
+    # 无论有没有句柄，都兜底按名清一遍：可能残留了上次没退干净的进程，
+    # 不清掉的话稍后覆盖 exe 会 [WinError 5] 拒绝访问。
+    if exe_name:
+        left = process_exists(exe_name)
+        if left:
+            ok = kill_by_name(exe_name)
+            return (True, f"{name} 已按进程名停止") if ok else \
+                   (False, f"{name} 停止失败：进程 {exe_name} 仍在运行")
     return True, f"{name} 未在运行"
 
 
@@ -124,7 +195,8 @@ def _taskkill(exe_name: str) -> bool:
         if sys.platform == "win32":
             p = subprocess.run(["taskkill", "/F", "/IM", exe_name],
                                capture_output=True, text=True, timeout=15,
-                               encoding="utf-8", errors="replace")
+                               encoding="utf-8", errors="replace",
+                               creationflags=CREATE_NO_WINDOW)
             return p.returncode == 0
         subprocess.run(["pkill", "-f", exe_name], timeout=15)
         return True
@@ -133,13 +205,23 @@ def _taskkill(exe_name: str) -> bool:
 
 
 def stop_all(order: list, components: dict, wait_ms: int = 2000) -> list:
-    """按给定顺序停止全部组件（通常传 START_ORDER 的反序）。"""
+    """按给定顺序停止全部组件（通常传 START_ORDER 的反序）。
+
+    每个组件停完后二次确认：进程真的没了、exe 文件真的可写了，才算停好。
+    否则残留进程会让下一步覆盖 exe 报 [WinError 5] 拒绝访问。
+    """
     results = []
     for name in order:
-        exe_name = components.get(name, {}).get("exe_name", "")
+        comp = components.get(name, {}) or {}
+        exe_name = comp.get("exe_name", "")
         ok, msg = stop(name, exe_name, wait_ms)
         results.append((name, ok, msg))
-        time.sleep(wait_ms / 1000)
+        # 再补一刀：句柄停了不代表同名残留进程没了
+        if exe_name and process_exists(exe_name):
+            done = kill_by_name(exe_name)
+            if not done:
+                results[-1] = (name, False,
+                               f"{name} 停止失败：进程 {exe_name} 仍在运行")
     return results
 
 

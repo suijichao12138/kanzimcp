@@ -6,13 +6,17 @@
 """
 import shutil
 import subprocess
+import sys
+
+CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 
 
 def _probe(cmd: list[str], timeout: int = 15) -> tuple[bool, str]:
     """跑一个命令看是否可用，返回 (是否成功, 版本/错误信息)。"""
     try:
         p = subprocess.run(cmd, capture_output=True, text=True,
-                           timeout=timeout, encoding="utf-8", errors="replace")
+                           timeout=timeout, encoding="utf-8", errors="replace",
+                           creationflags=CREATE_NO_WINDOW)
         if p.returncode == 0:
             first = (p.stdout or p.stderr or "").strip().splitlines()
             return True, first[0] if first else "ok"

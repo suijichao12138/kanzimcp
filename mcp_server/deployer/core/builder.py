@@ -45,6 +45,7 @@ def build_component(name: str, comp: dict, src_root: Path, paths,
             cmd, cwd=str(workdir), stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT, text=True, encoding="utf-8",
             errors="replace", env=gitops.git_env(),
+            creationflags=gitops.no_window_flags(),
         )
         tail: list[str] = []
         for line in proc.stdout:                             # type: ignore[union-attr]

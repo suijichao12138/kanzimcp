@@ -56,6 +56,13 @@ DEFAULT_CONFIG = {
         "port": 9100,
         "auth": {"enabled": True, "user": "admin", "password_sha256": ""},
     },
+    # 组件健康监控：relay / http / feishu 挂了或端口不通 → 飞书通知（只通知不重启）
+    # 状态变化才通知（挂了发一条、恢复了发一条），持续挂着不重复发。
+    "monitor": {
+        "enabled": True,      # 是否开启健康监控
+        "interval_s": 30,     # 检测间隔（秒）
+        "grace_s": 90,        # 启动后冷静期（秒）：这期间发现问题也不通知，避免组件还在起就误报
+    },
     "repo": {
         "url": "https://gitee.com/suijichao/kanzimcp.git",
         "branch": "main",
@@ -79,17 +86,37 @@ DEFAULT_CONFIG = {
         "receive_id_type": "open_id",
     },
     # 组件的连接参数（用于生成 conf/ 下的配置文件）
+    # 注意: 字段名必须与组件源码读取的键严格一致，否则组件会静默走默认值
     "comp_params": {
         "http": {
-            "listen": "0.0.0.0:9001",
+            "listen_host": "0.0.0.0",          # → listen: "<host>:<port>"
+            "listen_port": 9001,
             "relay_base": "ws://127.0.0.1:58080",
+            "mcp_timeout": 1800,
+            "heartbeat_interval": 30,
+            "heartbeat_max_fails": 3,
+            "req_check_interval": 2,
+            "result_ttl": 1800,
             "result_public_host": "",
             "result_threshold_entries": 50,
             "result_threshold_bytes": 4096,
         },
+        # relay 无配置文件，仅端口（用于健康检查与生成组件参数）
         "relay": {"port": 58080},
-        "feishu": {"http_host": "0.0.0.0", "http_port": 8081, "bots": []},
+        "feishu": {
+            "http_host": "0.0.0.0",
+            "http_port": 8081,
+            # 顶层 cleanup.inbox —— 各 bot 未填时继承这里
+            "cleanup": {
+                "enabled": True,
+                "max_age_days": 7,      # 组件字段名: max_age_days
+                "max_files": 500,       # 组件字段名: max_files
+                "interval_s": 3600,     # 组件字段名: interval_s
+            },
+            "bots": [],
+        },
     },
+    # http 白名单（写 conf/users.json；改它不需要重启）
     "users": [],
 }
 

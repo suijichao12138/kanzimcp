@@ -4,6 +4,7 @@
 
 失败时自动回滚（用 _backup 里升级前的 exe）。
 """
+import json
 import shutil
 import time
 from pathlib import Path
@@ -21,19 +22,51 @@ def _backup_exes(components: dict, paths) -> dict:
         exe = paths.bin / comp.get("exe_name", f"{name}.exe")
         if exe.exists():
             target = dest / exe.name
-            try:
-                shutil.copy2(exe, target)
-                backups[name] = target
-            except Exception:                                # noqa: BLE001
-                pass
+            # 文件可能正被运行中的进程占用（共享读通常没问题，但保险起见重试）
+            for attempt in range(3):
+                try:
+                    shutil.copy2(exe, target)
+                    backups[name] = target
+                    break
+                except Exception:                            # noqa: BLE001
+                    if attempt < 2:
+                        time.sleep(1.0)
     return backups
 
 
+def _missing_configs(paths) -> list:
+    """列出缺失的组件配置文件（http / users / feishu）。"""
+    want = [
+        ("config.json", paths.comp_config("http")),
+        ("users.json", paths.users_json()),
+        ("feishu_config.json", paths.comp_config("feishu")),
+    ]
+    return [name for name, p in want if not p.exists()]
+
+
+def _read_users(paths) -> list:
+    """读 conf/users.json 里的白名单（部署后以此为准）。"""
+    try:
+        data = json.loads(paths.users_json().read_text(encoding="utf-8"))
+        return list(data.get("users") or [])
+    except Exception:                                        # noqa: BLE001
+        return []
+
+
 def _restore(backups: dict, components: dict, paths) -> None:
-    """回滚：把备份的 exe 覆盖回去。"""
+    """回滚：把备份的 exe 覆盖回去。
+
+    覆盖前先清残留进程并等文件释放，否则回滚本身也会 [WinError 5] 拒绝访问，
+    留下一个半新半旧的 bin/（二次部署会更难收拾）。
+    """
     for name, bak in backups.items():
-        exe = paths.bin / components.get(name, {}).get("exe_name", f"{name}.exe")
+        exe_name = components.get(name, {}).get("exe_name", f"{name}.exe")
+        exe = paths.bin / exe_name
         try:
+            if process.process_exists(exe_name):
+                process.kill_by_name(exe_name)
+            if exe.exists():
+                process.wait_file_free(exe, timeout_s=20)
             shutil.copy2(bak, exe)
         except Exception:                                    # noqa: BLE001
             pass
@@ -51,12 +84,13 @@ def deploy_exes(produced: dict, components: dict, paths) -> tuple[bool, str]:
         dst = paths.bin / exe_name
         try:
             paths.bin.mkdir(parents=True, exist_ok=True)
-            if dst.exists():
-                try:
-                    dst.unlink()
-                except OSError:
-                    time.sleep(1.5)                          # 文件被占用，等一下
-                    dst.unlink()
+            # 覆盖前：残留进程先杀掉，再等文件真释放。
+            # Windows 上进程没退干净时删/覆盖都会 [WinError 5] 拒绝访问。
+            if process.process_exists(exe_name):
+                process.kill_by_name(exe_name)
+            if dst.exists() and not process.wait_file_free(dst, timeout_s=20):
+                return False, (f"{name} 部署失败：{exe_name} 仍被占用"
+                               f"（可能仍有残留进程，请手动结束该进程后重试）")
             shutil.copy2(src, dst)
             msgs.append(f"{name} → {dst.name}")
         except Exception as e:                               # noqa: BLE001
@@ -64,10 +98,13 @@ def deploy_exes(produced: dict, components: dict, paths) -> tuple[bool, str]:
     return True, "；".join(msgs) if msgs else "无组件部署"
 
 
-def do_deploy(cfg: dict, paths, tag: str = "", progress=None, do_build: bool = True):
+def do_deploy(cfg: dict, paths, tag: str = "", progress=None, do_build: bool = True,
+              result: dict | None = None):
     """完整部署/升级流程。
 
     progress(step_key, message, percent) 回调用于页面进度显示。
+    result: 可选 dict，成功后写入 {"tag": 实际部署的版本号}，
+            供调用方记录版本（一键部署时 tag 可能为空，以源码真实 tag 为准）。
     返回 (成功, 汇总信息)
     """
     def rep(key, msg, pct=0):
@@ -79,6 +116,7 @@ def do_deploy(cfg: dict, paths, tag: str = "", progress=None, do_build: bool = T
 
     components = cfg.get("components") or cfgmod.DEFAULT_COMPONENTS
     order = cfgmod.START_ORDER
+    conf_warnings: list = []          # 非致命提醒，随成功信息一起返回
     build_cfg = cfg.get("build", {})
     repo = cfg.get("repo", {})
 
@@ -94,8 +132,9 @@ def do_deploy(cfg: dict, paths, tag: str = "", progress=None, do_build: bool = T
         return False, f"环境不满足，缺少: {missing}"
 
     # ── 2. 拉源码 ──
-    rep("git", "拉取源码 …", 10)
     target_tag = tag or ""
+    actual_tag = ""          # 源码实际落在哪个版本（一键部署 tag 为空时靠这个）
+    rep("git", "拉取源码 …", 10)
     ok, msg = gitops.prepare(
         repo.get("url", ""), repo.get("branch", "main"), paths.src,
         use_tag=repo.get("use_tag", True), tag=target_tag,
@@ -103,6 +142,8 @@ def do_deploy(cfg: dict, paths, tag: str = "", progress=None, do_build: bool = T
     if not ok:
         return False, f"拉取源码失败: {msg}"
     rep("git", msg, 20)
+    # 一键部署（tag 为空）时，版本号以源码真实 tag 为准
+    actual_tag = gitops.local_tag(paths.src) or target_tag
 
     # ── 3. 备份现有 exe ──
     rep("backup", "备份现有程序 …", 22)
@@ -125,9 +166,20 @@ def do_deploy(cfg: dict, paths, tag: str = "", progress=None, do_build: bool = T
                 produced[n]["detail"] for n in failed)
         rep("build", "编译完成", 70)
 
-    # ── 5. 生成配置 ──
-    rep("conf", "生成组件配置 …", 72)
+    # ── 5. 检查配置 ──
+    # 三个配置文件必须已存在（由「配置」页保存生成）。
+    # 不做自动生成：缺配置时后端 /api/deploy 已提前拦下并弹窗引导去配置页，
+    # 这里只兜底（比如直接调 core 内部接口时）。
+    rep("conf", "检查组件配置 …", 71)
+    missing = _missing_configs(paths)
+    if missing:
+        return False, ("缺少配置文件: " + "、".join(missing)
+                       + "。请先到「配置」页填写并保存，再执行部署。")
     conf_results = templates.write_all(cfg, paths)
+    bad_confs = [r["file"] for r in conf_results if not r.get("ok")]
+    if bad_confs:
+        return False, f"生成配置文件失败: {', '.join(bad_confs)}"
+    rep("conf", "配置就绪", 73)
 
     # ── 6. 停旧进程 ──
     rep("stop", "停止旧进程 …", 76)
@@ -161,10 +213,19 @@ def do_deploy(cfg: dict, paths, tag: str = "", progress=None, do_build: bool = T
     if unhealthy:
         # 健康检查失败不回滚（进程已起，回滚反而更乱），只报告
         rep("health", f"⚠️ 未通过: {', '.join(unhealthy)}", 100)
-        return False, f"部署完成但健康检查未通过: {', '.join(unhealthy)}"
+        msg = f"部署完成但健康检查未通过: {', '.join(unhealthy)}"
+        if conf_warnings:
+            msg += "\n⚠️ " + "\n⚠️ ".join(conf_warnings)
+        return False, msg
 
     rep("health", "全部正常", 100)
-    return True, f"部署成功（{target_tag or repo.get('branch')}）"
+    if result is not None:
+        result["tag"] = actual_tag or target_tag
+    summary = f"部署成功（{actual_tag or target_tag or repo.get('branch')}）"
+    if conf_warnings:
+        rep("warn", "；".join(conf_warnings), 100)
+        summary += "\n⚠️ " + "\n⚠️ ".join(conf_warnings)
+    return True, summary
 
 
 def restart_component(name: str, cfg: dict, paths) -> tuple[bool, str]:

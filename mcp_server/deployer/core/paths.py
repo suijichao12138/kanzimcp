@@ -36,8 +36,10 @@ class Paths:
         └── _backup/     升级备份
     """
 
-    def __init__(self, root: Path | None = None, overrides: dict | None = None):
+    def __init__(self, root: Path | None = None, overrides: dict | None = None,
+                 config_path: Path | None = None):
         self.root = Path(root) if root else install_dir()
+        self._config_path = Path(config_path) if config_path else None
         ov = overrides or {}
         # 每个子目录都允许在配置里覆盖（相对路径 → 相对 root）
         self.bin = self._sub("bin", ov.get("bin"))
@@ -63,6 +65,9 @@ class Paths:
     # ── 配置文件路径 ──
     @property
     def deployer_config(self) -> Path:
+        # 指定了 --config 就写回那个文件，保证「读到哪、写到哪」一致
+        if self._config_path:
+            return self._config_path
         return self.root / "deployer_config.json"
 
     def comp_config(self, name: str) -> Path:

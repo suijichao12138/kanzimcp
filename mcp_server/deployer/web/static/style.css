@@ -108,3 +108,97 @@ select, input[type=text], input[type=password], input[type=number] {
 }
 .toast-err { background: #b91c1c; }
 .toast-ok { background: #047857; }
+
+/* ══════════ 配置向导：分组 / 双列 / 飞书 bot 卡片 ══════════ */
+
+.wiz-group {
+  border: 1px solid #e5e7eb; border-radius: 8px;
+  padding: 14px 16px; margin-bottom: 14px; background: #fff;
+}
+.wiz-group h3 {
+  margin: 0 0 12px; font-size: 14px; font-weight: 600; color: #111827;
+  padding-bottom: 8px; border-bottom: 1px solid #f3f4f6;
+}
+.wiz-subgroup {
+  margin-top: 12px; padding: 10px 12px; background: #f9fafb;
+  border: 1px solid #f3f4f6; border-radius: 6px;
+}
+.wiz-subgroup h4 {
+  margin: 0 0 8px; font-size: 12.5px; font-weight: 600; color: #4b5563;
+}
+
+.field { margin-bottom: 10px; }
+.field label { display: block; font-size: 12.5px; font-weight: 500; color: #374151; margin-bottom: 3px; }
+.field .desc { font-size: 11.5px; color: #9ca3af; margin-bottom: 4px; line-height: 1.5; }
+.field input { width: 100%; box-sizing: border-box; }
+.req { color: #dc2626; }
+
+.field-row { display: flex; gap: 12px; }
+.field-row > .field { flex: 1; min-width: 0; }
+
+.bots-head {
+  display: flex; justify-content: space-between; align-items: center;
+  margin: 14px 0 8px; font-size: 13px; font-weight: 500; color: #374151;
+}
+.bot-card {
+  border: 1px solid #d1d5db; border-left: 3px solid #2563eb;
+  border-radius: 6px; padding: 12px 14px; margin-bottom: 10px; background: #fcfcfd;
+}
+.bot-head {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-bottom: 10px; font-size: 13px; font-weight: 600; color: #1f2937;
+}
+.btn.small { padding: 3px 9px; font-size: 12px; }
+.btn.danger { border-color: #fca5a5; color: #b91c1c; }
+.btn.danger:hover { background: #fef2f2; }
+
+/* ══════════ 飞书 bot 可折叠卡片 ══════════ */
+
+.bot-head {
+  cursor: pointer;
+  user-select: none;
+  padding: 2px 0;
+}
+.bot-head:hover { color: #1d4ed8; }
+.bot-title {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 13.5px; font-weight: 600; color: #1f2937;
+}
+.bot-caret {
+  display: inline-block; width: 12px;
+  transition: transform .18s ease;
+  color: #6b7280; font-size: 11px;
+}
+.bot-card.open .bot-caret { transform: rotate(90deg); }
+.bot-actions { display: inline-flex; gap: 8px; }
+.bot-body { padding-top: 10px; border-top: 1px solid #f3f4f6; margin-top: 8px; }
+.bot-body.hidden { display: none; }
+
+/* ══════════ 弹窗 ══════════ */
+.modal-mask {
+  position: fixed; inset: 0; background: rgba(15, 23, 42, .48);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 999; padding: 20px;
+}
+.modal {
+  background: #fff; border-radius: 10px; width: 100%; max-width: 460px;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, .26);
+  animation: modal-in .14s ease-out;
+}
+@keyframes modal-in {
+  from { opacity: 0; transform: translateY(-8px) scale(.985); }
+  to   { opacity: 1; transform: none; }
+}
+.modal-head {
+  padding: 14px 18px 0;
+}
+.modal-head h3 { margin: 0; font-size: 15.5px; color: #0f172a; }
+.modal-body {
+  padding: 10px 18px 4px; font-size: 13px; line-height: 1.75; color: #334155;
+}
+.modal-body p { margin: 6px 0; }
+.modal-body ul { margin: 6px 0 6px 20px; padding: 0; }
+.modal-body li { margin: 4px 0; }
+.modal-foot {
+  padding: 12px 18px 16px; display: flex; justify-content: flex-end; gap: 8px;
+}

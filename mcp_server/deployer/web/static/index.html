@@ -69,16 +69,18 @@
     <div class="card-head"><h2>版本升级</h2></div>
     <p class="muted">升级会重新拉取源码、编译三个组件并重启服务，期间服务会短暂中断。</p>
     <div class="row">
-      <button class="btn btn-primary" onclick="doUpgrade()">⬆ 升级到最新版本</button>
+      <button id="btn-upgrade" class="btn btn-primary" onclick="doUpgrade()">⬆ 升级到最新版本</button>
       <span id="upg-target" class="muted"></span>
     </div>
   </div>
 
   <div class="card">
     <div class="card-head"><h2>一键部署</h2></div>
-    <p class="muted">不比对版本，直接走完整流程：拉源码 → 编译 → 生成配置 → 重启组件。</p>
+    <p class="muted">不比对版本，直接走完整流程：拉源码 → 编译 → 生成配置 → 重启组件。<br>
+       执行前会检查配置是否齐全（缺配置文件 / 白名单为空时会弹窗引导去「配置」页）。</p>
     <div class="row">
       <button class="btn btn-primary" onclick="doDeploy()">🚀 一键部署</button>
+      <span class="muted">首次部署走这个；之后升版本才用上面的「升级」。</span>
     </div>
   </div>
 
@@ -168,6 +170,19 @@
 </main>
 
 <div id="toast" class="toast hidden"></div>
+
+<!-- ══════════ 弹窗 ══════════ -->
+<div id="modal-mask" class="modal-mask hidden">
+  <div class="modal">
+    <div class="modal-head"><h3 id="modal-title">提示</h3></div>
+    <div class="modal-body" id="modal-body"></div>
+    <div class="modal-foot">
+      <button class="btn" id="modal-cancel">取消</button>
+      <button class="btn btn-primary" id="modal-ok">确定</button>
+    </div>
+  </div>
+</div>
 <script src="/static/app.js"></script>
+
 </body>
 </html>
