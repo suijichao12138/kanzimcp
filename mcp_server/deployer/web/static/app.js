@@ -314,9 +314,10 @@ function renderWizard() {
 
   <div class="wiz-group">
     <h3>② http 组件（MCP over HTTP）</h3>
-    ${fieldRow('监听地址', 'http-host', http.listen_host || '0.0.0.0',
-               '端口', 'http-port', http.listen_port || 9001,
-               '监听地址填 0.0.0.0 才能让远程 Copilot 连进来；改成 127.0.0.1 则只能本机连。')}
+    ${fieldGrid([
+      {label: '监听地址', id: 'http-host', value: http.listen_host || '0.0.0.0'},
+      {label: '端口', id: 'http-port', value: http.listen_port || 9001, type: 'number'},
+    ], '监听地址填 0.0.0.0 才能让远程 Copilot 连进来；改成 127.0.0.1 则只能本机连。')}
     ${field('外置阈值(记录数)', 'http-ent', http.result_threshold_entries || 50, '返回结果超过这么多条就落盘成文件，只回 URL。', false, 'number')}
     ${field('外置阈值(字节)', 'http-bytes', http.result_threshold_bytes || 4096, '返回文本超过这么多字节就落盘。截图 base64 必然超，会被外置。', false, 'number')}
     <div class="field">
@@ -328,10 +329,10 @@ function renderWizard() {
 
   <div class="wiz-group">
     <h3>③ 飞书桥（多机器人）</h3>
-    <div class="field-row">
-      ${field('文件服务监听 IP', 'fs-host', fs.http_host || '0.0.0.0', '飞书文件服务（上传/下载）的绑定地址。0.0.0.0 = 所有网卡都监听（推荐）；已自动填好本机 IP 作为备选。')}
-      ${field('文件服务端口', 'fs-port', fs.http_port || 8081, '所有 bot 共用的文件服务端口。', false, 'number')}
-    </div>
+    ${fieldGrid([
+      {label: '文件服务监听 IP', id: 'fs-host', value: fs.http_host || '0.0.0.0'},
+      {label: '文件服务端口', id: 'fs-port', value: fs.http_port || 8081, type: 'number'},
+    ], '两个 bot 共用一个文件服务：0.0.0.0 = 所有网卡都监听（推荐），已自动填好本机 IP 作备选。')}
     <div class="bots-head">
       <span>机器人列表（每个 bot 一条独立中继通道）</span>
       <button class="btn small" id="add-bot-btn" type="button">+ 添加 Bot</button>
@@ -366,10 +367,16 @@ function field(label, id, value, desc, required, type) {
   </div>`;
 }
 
-function fieldRow(label1, id1, v1, label2, id2, v2, desc) {
-  return `<div class="field-row">
-    ${field(label1, id1, v1, desc || '')}
-    ${field(label2, id2, v2, '')}
+/** 一行多列的纯字段（不带描述）—— 描述统一放在行上方，避免各列高低不齐。 */
+function fieldGrid(cells, note) {
+  const cols = cells.map((c) => `
+    <div class="grid-cell">
+      <label>${c.label}${c.required ? ' <span class="req">*</span>' : ''}</label>
+      <input type="${c.type || 'text'}" id="${c.id}" value="${escapeHtml(String(c.value))}">
+    </div>`).join('');
+  return `<div class="grid-field">
+    ${note ? `<div class="desc">${note}</div>` : ''}
+    <div class="grid-cells" style="--cols:${cells.length}">${cols}</div>
   </div>`;
 }
 
@@ -462,14 +469,19 @@ function renderBots(bots) {
 
 function cleanupFields(prefix, c, note) {
   c = c || {};
-  return `<div class="field-row">
-    ${field('启用', prefix + '-cl-enabled',
-            c.enabled === true ? 'true' : (c.enabled === false ? 'false' : ''),
-            (note || '') + ' true / false；留空 = 继承。')}
-    ${field('保留天数', prefix + '-cl-age', c.max_age_days != null ? c.max_age_days : '', '超过这么多天的 inbox 文件会被删。留空=继承。', false, 'number')}
-    ${field('保留数量', prefix + '-cl-files', c.max_files != null ? c.max_files : '', '目录内最多留几个文件，超出删最旧。留空=继承。', false, 'number')}
-    ${field('扫描间隔(秒)', prefix + '-cl-interval', c.interval_s != null ? c.interval_s : '', '多久扫一次。留空=继承。', false, 'number')}
-  </div>`;
+  // 四个字段一行，描述统一提到行上方 —— 各列 label/input 天然对齐，
+  // 不会因为某个描述换行成两行而把输入框挤歪。
+  return fieldGrid([
+    {label: '启用', id: prefix + '-cl-enabled',
+     value: c.enabled === true ? 'true' : (c.enabled === false ? 'false' : '')},
+    {label: '保留天数', id: prefix + '-cl-age',
+     value: c.max_age_days != null ? c.max_age_days : '', type: 'number'},
+    {label: '保留数量', id: prefix + '-cl-files',
+     value: c.max_files != null ? c.max_files : '', type: 'number'},
+    {label: '扫描间隔(秒)', id: prefix + '-cl-interval',
+     value: c.interval_s != null ? c.interval_s : '', type: 'number'},
+  ], (note || '') + ' 启用填 true / false。三个数值都可留空 = 继承上一级；'
+     + '保留天数按文件时间删，保留数量超出时删最旧，扫描间隔是多久扫一次。');
 }
 
 function collectCleanup(prefix) {

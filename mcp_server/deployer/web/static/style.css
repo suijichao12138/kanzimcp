@@ -133,8 +133,6 @@ select, input[type=text], input[type=password], input[type=number] {
 .field input { width: 100%; box-sizing: border-box; }
 .req { color: #dc2626; }
 
-.field-row { display: flex; gap: 12px; }
-.field-row > .field { flex: 1; min-width: 0; }
 
 .bots-head {
   display: flex; justify-content: space-between; align-items: center;
@@ -201,4 +199,28 @@ select, input[type=text], input[type=password], input[type=number] {
 .modal-body li { margin: 4px 0; }
 .modal-foot {
   padding: 12px 18px 16px; display: flex; justify-content: flex-end; gap: 8px;
+}
+
+/* 一行多个字段（描述统一在行上方）：各列 label + input 天然对齐，
+   不会因为某个描述换行成两行而把输入框挤歪。 */
+.grid-field { margin-bottom: 12px; }
+.grid-field > .desc {
+  color: #6b7280; font-size: 12px; line-height: 1.6; margin-bottom: 5px;
+}
+.grid-field .grid-cells {
+  display: grid;
+  grid-template-columns: repeat(var(--cols, 2), minmax(0, 1fr));
+  gap: 12px;
+}
+.grid-cell { display: flex; flex-direction: column; min-width: 0; }
+.grid-cell label {
+  display: block; font-size: 12.5px; font-weight: 500;
+  color: #374151; margin-bottom: 3px;
+}
+.grid-cell input {
+  width: 100%; box-sizing: border-box;
+}
+/* 窄屏（向导页在手机/窄窗口看）时两列挤不下 → 自动换行 */
+@media (max-width: 640px) {
+  .grid-field .grid-cells { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
