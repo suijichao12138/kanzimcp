@@ -180,7 +180,9 @@ namespace KzMCPChatPlugin
                 object msgIdRaw = JsonUtils.GetRaw(req, "id");
                 string msgIdStr = msgIdRaw?.ToString() ?? "";
 
-                await FireLog($"📩 收到请求: {method}");
+                // 探活(kz_health)的收/发不打日志，避免每 5 秒刷屏盖住业务调用信息。
+                if (method != "kz_health")
+                    await FireLog($"📩 收到请求: {method}");
 
                 string responseJson;
 
@@ -230,7 +232,8 @@ namespace KzMCPChatPlugin
                     string toolName = JsonUtils.GetStr(@params, "name");
                     var arguments = JsonUtils.GetDict(@params, "arguments");
 
-                    await FireLog($"▶ 调用工具: {toolName}");
+                    if (toolName != "kz_health")
+                        await FireLog($"▶ 调用工具: {toolName}");
 
                     // 在后台线程执行，避免阻塞接收循环
                     var wsRef = ws; // 缓存引用避免闭包竞态
@@ -258,7 +261,8 @@ namespace KzMCPChatPlugin
                                 }
                             });
                             await SendAsync(wsRef, resp, ctRef);
-                            await FireLog($"✅ {toolName} 成功");
+                            if (!isHealth)
+                                await FireLog($"✅ {toolName} 成功");
                         }
                         catch (Exception ex)
                         {
