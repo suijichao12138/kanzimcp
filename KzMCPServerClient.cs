@@ -181,7 +181,10 @@ namespace KzMCPChatPlugin
                 string msgIdStr = msgIdRaw?.ToString() ?? "";
 
                 // 探活(kz_health)的收/发不打日志，避免每 5 秒刷屏盖住业务调用信息。
-                if (method != "kz_health")
+                // 注意：喂狗是 method=tools/call + params.name=kz_health，不能只按 method 判断。
+                bool _isHealthReq = method == "tools/call"
+                    && JsonUtils.GetStr(JsonUtils.GetDict(req, "params"), "name") == "kz_health";
+                if (!_isHealthReq)
                     await FireLog($"📩 收到请求: {method}");
 
                 string responseJson;
