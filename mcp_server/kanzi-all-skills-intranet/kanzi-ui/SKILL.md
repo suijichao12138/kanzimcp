@@ -338,6 +338,50 @@ mcp kz_invoke target=@obj5279 method=set_Item args=["Node2DPrefabPlaceholderTemp
 > ⚠️ 若用 EmptyNode2D 建节点再 AddProperty("Node2DPrefabPlaceholderTemplate") 会失败（"ProjectItem of type..."），因为该属性不属于普通 EmptyNode2D。**必须用 Node2DPrefabPlaceholder 类型创建。**
 > ⚠️ `kz_delete_node` 按路径能删除冲突/错误的占位节点（如误建的 EmptyNode2D warning_pop）。
 
+## 🌟 创建别名 Alias（2026-10-13 实测打通）
+
+> **别名（Alias）**：对节点的稳定引用，用 `#别名` 访问，节点在树里移动也不影响。
+> 必须挂在**资源字典（Resource Dictionary）**里。Screen 节点和 prefab 根节点默认带资源字典。
+> 用途：绑定表达式 `{#别名/属性}`、引擎 API `lookupNode("#别名")`、Action 的 Target Item。
+>
+> **底层 API（Studio 插件 API，kanzidocmcp 文档确认）**：
+> - `ResourceDictionary.CreateNodeAliasEntry(string resourceID, Node node)` —— 对象重载
+> - `ResourceDictionary.CreateNodeAliasEntry(string resourceID, string relativePath)` —— **字符串重载（推荐）**
+> - `ResourceDictionary.DeleteEntry(string resourceID)` —— 删除别名
+> - `ResourceDictionary.NodeReferences` —— 枚举所有别名 `[key, 指向]`
+
+```python
+# 1. 拿节点的资源字典（Screen 默认有字典）
+mcp kz_invoke target=/Screens/Screen method=get_ResourceDictionary
+# → ref_id = @obj5567  (ResourceDictionaryWrapper)
+
+# 2. ⚠️ 创建别名：必须用【字符串相对路径】重载，路径不带前导 /，不带 @obj:
+mcp kz_invoke target=@obj5567 method=CreateNodeAliasEntry args=["@string:Info", "@string:Screens/Screen/RootPage/Info"]
+# → ✅ 调用成功（无返回值）
+# ⚠️ 用对象重载 CreateNodeAliasEntry("Info", @obj:...) 会存成 "@obj:/Screens/..." 带前缀形式，指向错误！
+
+# 3. 验证：枚举别名
+mcp kz_invoke target=@obj5567 method=get_NodeReferences
+# → name = [Info, Screens/Screen/RootPage/Info]  ✅ 路径正确
+
+# 4. 删除别名（改错时）
+mcp kz_invoke target=@obj5567 method=DeleteEntry args=["@string:Info"]
+# → ✅ 结果: True
+
+# 5. 保存工程（kz_save_project 内部走 ExecutePluginCommand 会失败！用 GeneratedCommandInvoker）
+mcp kz_invoke target=@studio method=get_Commands
+# → ref_id = @obj1153 (GeneratedCommandInvoker)
+mcp kz_invoke target=@obj1153 method=SaveProject args=["@project"]
+# → ✅ 调用成功
+```
+
+**📌 实测要点（2026-10-13，工程 test）：**
+- Screen 的资源字典 = `get_ResourceDictionary`（Screen 节点上直接拿）
+- ✅ 正确指向显示为 `[Info, Screens/Screen/RootPage/Info]`（无 `@obj:` 前缀、无前导 `/`）
+- ❌ 错误指向显示为 `[Info, @obj:/Screens/Screen/RootPage/Info]`（用了对象重载）
+- 引擎侧用 `#Info` 访问；`kz_invoke` 的 target 不支持 `#别名` 语法（那是引擎 lookup）
+- **kz_save_project 工具不可用**（ExecutePluginCommand 反射不到），保存一律走 GeneratedCommandInvoker.SaveProject(@project)
+
 ## TextBlock2D 完整配置流程
 
 ```python
