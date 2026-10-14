@@ -88,8 +88,8 @@ skills:
   max_total_bytes: 524288
   entries:
     # A parent without its own SKILL.md automatically discovers child skills.
-    - path: ./skills
-      enabled: false
+    - path: ./skills/kanzi-skills-index
+      enabled: true
     # - path: D:\your-project\.github\skills
     #   enabled: true
     # If a directory has its own SKILL.md, set recursive: true to include children too.
