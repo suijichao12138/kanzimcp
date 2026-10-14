@@ -5,6 +5,8 @@ description: Kanzi Studio UI 节点创建/配置。EmptyNode2D、TextBlock2D、�
 
 # Kanzi UI 节点操作
 
+> 📖 **属性查询指引**：具体属性的 UI 面板名称、含义、默认值，统一查 **`kanzi-properties-quickref`** skill（常用属性速查，按节点分组：`UI 属性名 | 绑定写法 | 说明`）。查不到的冷门属性再去 `kanzi-properties-*` 全量版（2d/3d/layout/control/resource/structure/trajectory）。
+
 ## 🚀 多工程切换（2026-08-17 实测打通，v12）
 
 bridge 支持多工程操作。默认 `@project` 指向 ActiveProject，可在多工程间随时切换，两种方式：

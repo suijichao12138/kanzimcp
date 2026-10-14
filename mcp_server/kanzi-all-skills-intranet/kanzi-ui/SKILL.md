@@ -5,6 +5,8 @@ description: Kanzi Studio UI 节点创建/配置。EmptyNode2D、TextBlock2D、�
 
 # Kanzi UI 节点操作
 
+> 📖 **属性查询指引**：具体属性的 UI 面板名称、含义、默认值，统一查 **`kanzi-properties-quickref`** skill（常用属性速查，按节点分组：`UI 属性名 | 绑定写法 | 说明`）。查不到的冷门属性再去 `kanzi-properties-*` 全量版（2d/3d/layout/control/resource/structure/trajectory）。
+
 ## 🚀 多工程切换（2026-08-17 实测打通，v12）
 
 bridge 支持多工程操作。默认 `@project` 指向 ActiveProject，可在多工程间随时切换，两种方式：
@@ -35,9 +37,9 @@ bridge 支持多工程操作。默认 `@project` 指向 ActiveProject，可在�
 
 **MCP (Model Context Protocol)** 通过 WebSocket JSON-RPC 调用 Kanzi Studio 插件。
 
-### 接入（内网 HTTP MCP）
+### 接入（本机中继桥）
 
-内网 HTTP MCP server（`relay_nlp_http/kz_mcp_http.py`）：`http://10.10.118.152:9001/mcp`（请求头 `X-Kanzi-User: <用户名>`，如 `suijichao`；中继通道 `ws://10.10.118.152:58080/<用户名>`）。直接调用 MCP 工具 `kz_invoke` 等，无需本地客户端脚本。MCP 工具返回 `ref_id = @objN` 自动进缓存，重启 Studio 后编号失效须重新枚举。
+客户端 `kanzi-mcp-client.mjs`（workspace 根目录）：中继 `ws://123.57.85.81:58080`，channel `openclaw-main`，调用 `node kanzi-mcp-client.mjs '<tools/call 参数 JSON>'`。返回 `ref_id = @objN` 自动进缓存，重启 Studio 后编号失效须重新枚举。
 
 ### 基本请求格式
 
