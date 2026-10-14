@@ -30,7 +30,6 @@ bridge 支持多工程操作。默认 `@project` 指向 ActiveProject，可在�
 - 全程 **ActiveProject 不变**（方案 A 承诺），不打扰你在 Studio 正编辑的工程。
 
 
-
 ## MCP 协议基础
 
 **MCP (Model Context Protocol)** 通过 WebSocket JSON-RPC 调用 Kanzi Studio 插件。
@@ -75,6 +74,8 @@ bridge 支持多工程操作。默认 `@project` 指向 ActiveProject，可在�
 
 ```
 CreateBinding(Property property, AnimationTargetPropertyAttributeEnum attribute, string code)
+CreateBinding(Property property, AnimationTargetPropertyAttributeEnum attribute, string code, BindingTypeEnum bindingMode)   // 4参重载
+CreateBinding(Property property, AnimationTargetPropertyAttributeEnum attribute, string code, BindingTypeEnum bindingMode, NodeReferenceBase pushTarget)  // 5参重载
 ```
 
 ### 参数说明
@@ -84,10 +85,26 @@ CreateBinding(Property property, AnimationTargetPropertyAttributeEnum attribute,
 | property | 目标节点上要绑定的属性对象（从 get_Properties 获取 @obj ref） |
 | attribute | 属性字段枚举（通常是 `@enum:WHOLE_PROPERTY`） |
 | code | 绑定表达式，用 `@string:` 强制字符串（如 `@string:{#Info/warning.value}`） |
+| bindingMode | **（可选）绑定模式枚举，默认 ONE_WAY（单向）** |
+| pushTarget | **（可选）TO_SOURCE 模式下的推送目标节点引用** |
 
-> ✅ **v4 实测**：三个参数推荐用标识符 `@obj:属性ref` + `@enum:WHOLE_PROPERTY` + `@string:{#code}`，避免枚举/字符串被误解析。
+> ✅ **v4 实测**：三个必填参数推荐用标识符 `@obj:属性ref` + `@enum:WHOLE_PROPERTY` + `@string:{#code}`，避免枚举/字符串被误解析。
+> ⚠️ **双向绑定**：需要 TWO_WAY 时用 4 参重载 `args=["@obj:属性ref", "@enum:WHOLE_PROPERTY", "@string:{#code}", "@enum:TWO_WAY"]`。
+
+### `BindingTypeEnum` 枚举（官方文档）
+
+| 值 | 含义 |
+|----|------|
+| 0 | NONE |
+| **1** | **ONE_WAY（单向，默认）** |
+| 2 | TWO_WAY（双向） |
+| 3 | TO_SOURCE（反向推送） |
+| 4 | EXPRESSION |
+| 5 | ANIMATION |
 
 ### 枚举值 `AnimationTargetPropertyAttributeEnum`
+
+> ⚠️ **数值必须按官方文档（2026-10-14 kanzidocmcp 核对修正）**。旧版把 SCALE 和 ROTATION 的数字写反了！
 
 | 值 | 含义 |
 |----|------|
@@ -95,15 +112,21 @@ CreateBinding(Property property, AnimationTargetPropertyAttributeEnum attribute,
 | 0 | TRANSLATION_X |
 | 1 | TRANSLATION_Y |
 | 2 | TRANSLATION_Z |
-| 3 | ROTATION_X |
-| 4 | ROTATION_Y |
-| 5 | ROTATION_Z |
-| 6 | SCALE_X |
-| 7 | SCALE_Y |
-| 8 | SCALE_Z |
+| **3** | **SCALE_X** |
+| **4** | **SCALE_Y** |
+| **5** | **SCALE_Z** |
+| **6** | **ROTATION_Z** |
+| **7** | **ROTATION_Y** |
+| **8** | **ROTATION_X** |
 | **9** | **WHOLE_PROPERTY（最常用，操作整个属性值）** |
+| 10 | COLOR_R |
+| 11 | COLOR_G |
+| 12 | COLOR_B |
+| 13 | COLOR_A |
 
-> 可用 `@enum:WHOLE_PROPERTY` 精准转换，或直接传数字 `9`（两者等价）。
+> 建议直接用 `@enum:WHOLE_PROPERTY` / `@enum:SCALE_X` 等符号名，**避免手写数字出错**。
+> 官方文档：`kanzi-studio-plugin-api` → `AnimationTargetPropertyAttributeEnum`（a00260 页）。
+> ⚠️ 注意：这是**插件侧**枚举（CreateBinding 用），和运行时 API 的 `PropertyField` 枚举数值**不同**（运行时 Whole=0/TranslationX=1…），别混。
 
 ## 完整流程
 
@@ -145,6 +168,18 @@ mcp({"jsonrpc":"2.0","id":"4","method":"tools/call","params":{"name":"kz_invoke"
 mcp({"jsonrpc":"2.0","id":"5","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"@obj11","method":"get_IsBindingEnabled"}}})
 ```
 
+### Binding 接口其它可查属性（官方文档，2026-10-14 补充）
+
+| 方法 | 返回 | 说明 |
+|------|------|------|
+| `get_Property` | Property | 绑定的目标属性 |
+| `get_Code` | string | 绑定表达式 |
+| `get_BindingType` | BindingTypeEnum | 绑定方向（ONE_WAY/TWO_WAY/…） |
+| `get_IsBindingEnabled` | bool | 是否启用 |
+| `get_IsCodeValid` | bool | 表达式是否合法（诊断用） |
+| `get_IsBindingActive` | bool | 绑定当前是否生效 |
+| `get_PropertyAttribute` | AnimationTargetPropertyAttributeEnum | 绑定的属性字段 |
+
 ## 删除绑定
 
 ```python
@@ -170,18 +205,99 @@ mcp({"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"kz_invoke"
 - CreateBinding 前必须确保目标属性已在节点上（先 AddProperty）
 - Studio 重启后所有 ref 失效，需要重新获取
 
-### ⚠️ 绑定表达式中的 `/`
-- ✅ **正确格式**: `{#Info/warning.value}`（**斜杠**路径）—— Kanzi 标准绑定语法，**必须用斜杠**
-- ❌ ~~`{#Info.warning.value}`（点号路径）~~ —— **点号格式不对/不可用**，不要用
-- **当前版本已修复**: `{#...}` 绑定表达式（`{` 开头）不会被误判为节点路径
+### ⚠️ 绑定表达式语法 — 斜杠 vs 点号（2026-10-14 文档核对澄清）
 
-## 绑定表达式格式参考
+**两条规则分开记，之前混在一起了：**
 
+**① 节点路径分隔用斜杠 `/`**
+- ✅ `{#Info/warning.value}` —— 别名 + 斜杠 + 属性（Kanzi 标准）
+- ✅ `{../Camera/Fov}` —— 相对路径 + 斜杠 + 属性
+- ❌ ~~`{#Info.warning.value}`~~ —— 节点路径里用点号不可用
+
+**② 属性字段（property field）用点号 `.`**
+- ✅ `{@../Box/LayoutTransformation}.scaleY` —— 花括号外点号取字段
+- ✅ `x = {@./Node3D.RenderTransformation}.translationX`
+- ✅ `getCurrentValue().translationX`
+- 所以「点号」本身不是不能用，是**用错位置**（当路径分隔符才错；当字段访问就对）
+
+**变换属性字段名对照（官方）：**
+
+| 字段 | 名称（花括号外点号） |
+|------|------|
+| 2D/3D 位移 X | `x` / `translationX` |
+| 位移 Y | `y` / `translationY` |
+| 位移 Z | `z` / `translationZ` |
+| 缩放 X | `scaleX` |
+| 缩放 Y | `scaleY` |
+| 缩放 Z | `scaleZ` |
+| 3D 旋转（四元数） | `rotation` |
+| 2D 绕 Z 旋转 | `rotationZ` |
+
+**通用字段**：非颜色/变换属性用 `N` 或 `VectorN`（N=X/Y/Z/W）。
+
+## 绑定表达式格式参考（官方语法）
+
+### ① 属性绑定 `{[path]/[property]}`
 ```python
-# 简单绑定 — 直接引用另一个属性值
-"{#Info/warning.value}"
+# 绑定当前节点自身属性（@ 符号=校验路径+跟随移动）
+"{@./Node.Width}"
 
-# 带转换的绑定（Info 上已有的绑定示例）
+# 绑定父级/兄弟节点属性
+"{@../Camera/Fov}"
+"{../Camera/Fov}"          # 不带 @ 则不跟踪节点移动
+"{@../Box/LayoutVerticalMargin}"
+
+# 相对路径 + 别名 + 运算符混合
+"{@../Camera/Fov} * {../Box/RenderTransformation}.scaleX"
+"{#MainCamera/Fov} * {../Box/RenderTransformation}.scaleX"
+```
+
+> **`@` 符号的作用**：① 校验路径是否有效（无效在 Binding Editor 报错）② 源/目标节点在节点树中移动时自动更新路径 ③ **只能在同一个 prefab 内用 @，不能跨 prefab**。
+
+### ② 别名绑定 `{#[aliasName]/[property]}`（已实测）
+```python
+# 绑定别名指向节点的属性
+"{#Info/warning.value}"
+"{#Grid/Node.Width}"
+```
+
+### ③ 属性字段绑定（点号）
+```python
+"{@../Image/Node2D.RenderTransformation}.x"
+"{../Box/LayoutTransformation}.scaleY"
+"{@../Camera/Fov} * {../Box/RenderTransformation}.scaleX"
+```
+
+### ④ 变量 / 注释 / 运算符
+```python
+# 注释用 # 开头
+A = 2.0
+B = 4
+(A < B) ? A : B          # 条件运算 ? :
+mod(23, 27)              # 函数
+({../Camera/Fov} + {../Box/RenderTransformation}.scaleX) / 2   # 括号分组
+```
+
+### ⑤ 临时变量（material type 绑定专用）
+```python
+# 引用同 material type 里临时变量绑定的结果
+"{##Self/[targetPropertyName]}"
+```
+
+### ⑥ 修改当前属性值时用 getCurrentValue()
+```python
+# 绑定表达式要修改当前目标属性的值时，不能直接引用目标属性，必须用 getCurrentValue()
+"getCurrentValue().translationX + 10"
+```
+
+### ⑦ 类型规则（官方）
+- **只能绑定相似数据类型**：color→color、vector2→vector2 等
+- 绑定取**最后一个表达式**的值
+- int/float/bool 之间**隐式转换**（取决于目标属性类型）；字符串转换**显式**
+- 四个基本类型互转：integer / float / boolean / string
+
+### ⑧ 完整示例（Info 上已有，带转换）
+```python
 "#A = {#Info/sys.ignState}\n#MOD(CLAMP(0,1,ABS(A-(1)))+1,2)\nA = {#Info/charge.state}"
 ```
 
@@ -192,6 +308,12 @@ mcp({"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"kz_invoke"
 | `调用线程无法访问此对象，因为另一个线程拥有该对象` | 在非 UI 线程调用了线程敏感方法（如 CreateBinding） | ✅ 新版已修：所有反射调用统一调度到 UI 线程执行，不再报此错 |
 | code 为 null 或空 | `{#...}` 被当成节点路径解析 | ✅ 新版已修：绑定表达式（`{` 开头）不再被误判为节点路径，保留 code 原字符串 |
 | `找不到与参数匹配的方法` | ref 格式错误（@10 而非 @obj10） | 检查 ref 组装代码，用完整 `@obj10` |
+| `Cannot find item`（找不到项） | 绑定里的相对路径/别名指向了不存在的节点 | 检查路径；用 `@` 前缀让 Studio 校验路径有效性 |
+| `Invalid argument data type` | 函数参数类型不对（如 rotateX 传了整数） | 查函数签名；rotateX 第一参要是属性字段，第二参整数 |
+| `The attribute is not a valid property field` | 属性用了不存在的字段名（如 LayoutTransformation 没有 Translation） | 用 `translationX/Y/Z`、`scaleX/Y/Z` 等正确字段名 |
+| `Invalid result data type` | 函数返回值类型与目标属性不匹配 | 改目标属性/字段支持返回类型（如 ROTATION 支持四元数） |
+| `Cannot use target property in the binding expression` | 表达式里直接引用了目标属性（自己绑自己） | 用 `getCurrentValue()` 取当前值 |
+| `Assign a value to the identifier before you use it` | 变量未赋值就使用 | 先 `A = ...` 赋值再引用 |
 
 ## 调试工具
 
