@@ -347,8 +347,8 @@ mcp kz_invoke target=@obj5279 method=set_Item args=["Node2DPrefabPlaceholderTemp
 > 用途：绑定表达式 `{#别名/属性}`、引擎 API `lookupNode("#别名")`、Action 的 Target Item。
 >
 > **底层 API（Studio 插件 API，kanzidocmcp 文档确认）**：
-> - `ResourceDictionary.CreateNodeAliasEntry(string resourceID, Node node)` —— 对象重载
-> - `ResourceDictionary.CreateNodeAliasEntry(string resourceID, string relativePath)` —— **字符串重载（推荐）**
+> - `ResourceDictionary.CreateNodeAliasEntry(string resourceID, Node node)` —— **对象重载（推荐，2026-10-14 老隋确认正确）**
+> - `ResourceDictionary.CreateNodeAliasEntry(string resourceID, string relativePath)` —— 字符串重载（❌ 不可靠，建的是虚别名）
 > - `ResourceDictionary.DeleteEntry(string resourceID)` —— 删除别名
 > - `ResourceDictionary.NodeReferences` —— 枚举所有别名 `[key, 指向]`
 
@@ -357,20 +357,28 @@ mcp kz_invoke target=@obj5279 method=set_Item args=["Node2DPrefabPlaceholderTemp
 mcp kz_invoke target=/Screens/Screen method=get_ResourceDictionary
 # → ref_id = @obj5567  (ResourceDictionaryWrapper)
 
-# 2. ⚠️ 创建别名：必须用【字符串相对路径】重载，路径不带前导 /，不带 @obj:
-mcp kz_invoke target=@obj5567 method=CreateNodeAliasEntry args=["@string:Info", "@string:Screens/Screen/RootPage/Info"]
-# → ✅ 调用成功（无返回值）
-# ⚠️ 用对象重载 CreateNodeAliasEntry("Info", @obj:...) 会存成 "@obj:/Screens/..." 带前缀形式，指向错误！
+# 2. 遍历节点树拿到目标节点的对象引用（Screen → RootPage → Info）
+mcp kz_invoke target=/Screens/Screen method=get_Children
+# → ref_id = @obj4924 (PageHostPluginWrapper / RootPage)
+mcp kz_invoke target=@obj4924 method=get_Children
+# → ref_id = @obj8466 (EmptyNode2DPluginWrapper / Info)  ← 目标节点
 
-# 3. 验证：枚举别名
+# 3. ⚠️ 创建别名：必须用【对象重载】，第二个参数传节点对象引用
+mcp kz_invoke target=@obj5567 method=CreateNodeAliasEntry args=["@string:Info", "@obj8466"]
+# → ✅ 调用成功（无返回值）
+# ⚠️ 用字符串重载 CreateNodeAliasEntry("Info", "Screens/Screen/RootPage/Info") 会建出虚别名，
+#    没真正引用到节点（2026-10-14 实测：建完 DeleteEntry 报 No entry exists）！
+
+# 4. 验证：枚举别名，确认 Value 是 NodeReferenceBase（真引用）
 mcp kz_invoke target=@obj5567 method=get_NodeReferences
 # → name = [Info, Screens/Screen/RootPage/Info]  ✅ 路径正确
+# → 取 Value: ref_id = @obj8468 / type = NodeReferenceBase / name = Screens/Screen/RootPage/Info
 
-# 4. 删除别名（改错时）
+# 5. 删除别名（改错时）
 mcp kz_invoke target=@obj5567 method=DeleteEntry args=["@string:Info"]
 # → ✅ 结果: True
 
-# 5. 保存工程（kz_save_project 内部走 ExecutePluginCommand 会失败！用 GeneratedCommandInvoker）
+# 6. 保存工程（kz_save_project 内部走 ExecutePluginCommand 会失败！用 GeneratedCommandInvoker）
 mcp kz_invoke target=@studio method=get_Commands
 # → ref_id = @obj1153 (GeneratedCommandInvoker)
 mcp kz_invoke target=@obj1153 method=SaveProject args=["@project"]
