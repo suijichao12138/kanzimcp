@@ -616,7 +616,8 @@ class HttpMcpServer:
     RESULT_SUMMARY_COUNT = 8       # 摘要(前 N 项)条数
     RESULT_SUMMARY_CHARS = 120     # 摘要单条截断字符数
 
-    def __init__(self, user_manager: UserManager, host="127.0.0.1", port=9001, url_path="/mcp"):
+    def __init__(self, user_manager: UserManager, host="127.0.0.1", port=9001, url_path="/mcp",
+                 skills_dir: str | None = None):
         self.users = user_manager
         self.host = host
         self.port = port
@@ -636,6 +637,12 @@ class HttpMcpServer:
             "/kanzi_api_mcp": (self.kanzi_api, "kanzi-api"),
             "/kanzi_doc_mcp": (self.kanzi_doc, "kanzi-doc"),
         }
+        # ★ Skill MCP 本地处理器：读 deployer 维护的独立 skill 仓库（data/skills）
+        self.skills_mcp = None
+        if skills_dir:
+            import skills_mcp as _sm
+            self.skills_mcp = _sm.SkillsMcpHandler(skills_dir)
+            log.info(f"📚 Skill MCP 已启用: 端点 /kanzi_skill_mcp, 目录 {skills_dir}")
 
     # ═══════════ 大批量结果外置（2026-09-02 老隋定稿）═══════════
     def set_result_offload(self, tmp_dir=None, ttl=None, public_host=None):
@@ -809,12 +816,13 @@ class HttpMcpServer:
                 await self._handle_data_get(path_norm, writer)
                 return
             is_official = path_norm in self.OFFICIAL_ENDPOINTS
-            is_studio = (not is_official) and (
+            is_skills = path_norm == "/kanzi_skill_mcp"
+            is_studio = (not is_official) and (not is_skills) and (
                 path_norm == self.url_path.rstrip("/")
                 or path_norm == "/"
                 or path_norm == "/kanzistudio_mcp"
             )
-            if not (is_official or is_studio):
+            if not (is_official or is_studio or is_skills):
                 await self._send_http(writer, 404, "text/plain", "Not Found")
                 return
 
@@ -858,10 +866,19 @@ class HttpMcpServer:
                                                   "id": None}))
                 return
 
-            # 按路径路由: 官方端点 → 官方客户端处理; 否则 → 本地 studio(现有逻辑)
+            # 按路径路由: 官方端点 → 官方客户端处理; skill 端点 → 本地处理器; 否则 → 本地 studio(现有逻辑)
             if is_official:
                 client, client_name = self.OFFICIAL_ENDPOINTS[path_norm]
                 resp = await self._handle_jsonrpc_official(client, client_name, req)
+            elif is_skills:
+                if self.skills_mcp is None:
+                    await self._send_http(writer, 500, "application/json",
+                                          json.dumps({"jsonrpc": "2.0",
+                                                      "error": {"code": -32000,
+                                                                "message": "Skill MCP 未启用（缺少 --skills-dir 参数）"},
+                                                      "id": None}))
+                    return
+                resp = self.skills_mcp.handle(req)
             else:
                 resp = await self._handle_jsonrpc(req, username)
             if resp is None:
@@ -1160,6 +1177,8 @@ async def main():
                        help="记录数超过此值才外置 (默认 50)")
     parser.add_argument("--result-threshold-bytes", type=int, default=None,
                        help="文本超过此字节才外置 (默认 4096)")
+    parser.add_argument("--skills-dir", default=None,
+                       help="Skill MCP 数据目录（deployer 维护的独立 skill 仓库，默认不启用）")
     parser.add_argument("--debug", const=True, nargs="?", default=None,
                        help="开启调试日志")
     args = parser.parse_args()
@@ -1199,7 +1218,7 @@ async def main():
                           config_path=users_file,
                           hb_interval=hb_interval, hb_max_fails=hb_max_fails,
                           req_check=req_check)
-    http_mcp = HttpMcpServer(manager, host, port)
+    http_mcp = HttpMcpServer(manager, host, port, skills_dir=args.skills_dir)
     # 大批量结果外置配置 (阈值/TTL/TMP 目录)
     _e = args.result_threshold_entries
     http_mcp.RESULT_THRESHOLD_ENTRIES = _e if _e is not None else _cfg_int(cfg, "result_threshold_entries", 50)

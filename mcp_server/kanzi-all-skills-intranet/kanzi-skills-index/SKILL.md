@@ -71,3 +71,20 @@ description: Kanzi skills 导航索引。列出全部 kanzi-* skill 的名称、
 - **绝不整读** `kanzi-properties-quickref`（48KB 单文件）。用搜索/定位只取需要的段落或行。
 - 全量版（kanzi-properties-2d/3d/...）同样只读目标节点章节，不要整读。
 - 每次查询属性，读取的内容控制在**单个属性分组**以内（≤ 几 KB）。
+
+## 🛠️ Skill MCP 工具（优先使用，2026-10-15 上线）
+
+> 9001 网关新增 `/kanzi_skill_mcp` 端点（需 `--skills-dir` 启用），提供 4 个工具。
+> **优先用工具，别直接读文件** —— 工具返回精确结果，不占上下文。
+
+| 工具 | 用途 | 何时用 |
+|------|------|--------|
+| `search_property(query, limit?)` | 搜属性表，返回匹配行（UI名\|绑定写法\|说明），中英文都行 | **查任何属性** |
+| `list_skills()` | 列出所有 skill 名+用途 | 不知道有哪些 skill 时 |
+| `get_skill_summary(name)` | 某 skill 描述+章节列表 | 了解 skill 覆盖内容 |
+| `read_skill_section(name, heading)` | 读某 skill 指定章节 | 要操作步骤时 |
+
+**使用规则**：
+1. 查属性 → `search_property`（传关键词如 `actual width`/`字体`），**不要直接读 quickref 文件**。
+2. 要操作步骤 → `get_skill_summary` 看章节 → `read_skill_section` 读那一段。
+3. 工具查不到才读文件（且只读命中段落）。`search_property` 查不到时换更短关键词再试。

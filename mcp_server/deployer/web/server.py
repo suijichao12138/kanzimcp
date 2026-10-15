@@ -14,6 +14,7 @@ from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 
 from . import api, auth
+from . import skills_api
 
 # 运行期上下文（配置 / 路径 / 状态），由 deployer.py 注入
 CTX = None
@@ -127,6 +128,14 @@ class Handler(BaseHTTPRequestHandler):
                 code, body = api.logs_get(CTX, name, lines)
             elif path == "/api/config":
                 code, body = api.config_get(CTX, (qs.get("name") or [""])[0])
+            elif path == "/api/skills":
+                code, body = skills_api.skills_list(CTX)
+            elif path == "/api/skills/download":
+                name = (qs.get("name") or [""])[0]
+                as_zip = (qs.get("zip") or [""])[0] in ("1", "true", "yes")
+                code, body = skills_api.skills_download(CTX, name, as_zip)
+            elif path == "/api/skills/get":
+                code, body = skills_api.skills_get(CTX, (qs.get("name") or [""])[0])
             else:
                 code, body = 404, {"ok": False, "error": "not found"}
         except Exception as e:                       # noqa: BLE001
@@ -149,6 +158,12 @@ class Handler(BaseHTTPRequestHandler):
                 code, out = api.config_put(CTX, urlparse(self.path).query
                                            and parse_qs(urlparse(self.path).query).get("name", [""])[0]
                                            or body.get("name", ""), body)
+            elif path == "/api/skills/upload":
+                code, out = skills_api.skills_upload(CTX, body)
+            elif path == "/api/skills/delete":
+                code, out = skills_api.skills_delete(CTX, (body or {}).get("name", ""))
+            elif path == "/api/skills/edit":
+                code, out = skills_api.skills_edit(CTX, (body or {}).get("name", ""), body)
             elif path == "/api/wizard":
                 code, out = api.wizard_put(CTX, body)
             elif path == "/api/logs/clear":

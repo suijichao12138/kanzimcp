@@ -69,6 +69,7 @@ function goTab(name) {
   if (name === 'logs') loadLog();
   if (name === 'config' || name === 'settings') loadWizard();
   if (name === 'config') loadConfig();
+  if (name === 'skills') loadSkills();
   if (name === 'overview') refreshStatus();
   window.scrollTo(0, 0);
 }
@@ -708,3 +709,144 @@ autoRefresh();
     if (e.key === 'Escape' && !mask.classList.contains('hidden')) closeModal();
   });
 })();
+
+
+// ══════════ Skills 管理（独立仓库，仅供 skill MCP 服务使用）══════════
+
+function fmtSize(b) {
+  if (!b && b !== 0) return '—';
+  if (b < 1024) return b + ' B';
+  if (b < 1024 * 1024) return (b / 1024).toFixed(1) + ' KB';
+  return (b / 1024 / 1024).toFixed(1) + ' MB';
+}
+
+async function loadSkills() {
+  const r = await call('GET', '/api/skills');
+  if (!r.ok) return toast(r.error || '加载失败', 'err');
+  const body = $('skills-body');
+  $('skills-dir').textContent = '目录: ' + (r.data.dir || '');
+  const skills = r.data.skills || [];
+  if (!skills.length) {
+    body.innerHTML = '<tr><td colspan="5" class="muted">暂无 skill，点击右上「上传 skill」添加</td></tr>';
+    return;
+  }
+  body.innerHTML = skills.map((s) => `
+    <tr>
+      <td><code>${s.name}</code></td>
+      <td class="muted">${(s.description || '').slice(0, 60)}</td>
+      <td>${fmtSize(s.size)}</td>
+      <td>${s.file_count}</td>
+      <td class="row">
+        <button class="btn btn-sm" onclick="downloadSkill('${s.name}', false)">下载</button>
+        <button class="btn btn-sm" onclick="downloadSkill('${s.name}', true)">下载zip</button>
+        <button class="btn btn-sm" onclick="editSkill('${s.name}')">编辑</button>
+        <button class="btn btn-sm btn-warn" onclick="deleteSkill('${s.name}')">删除</button>
+      </td>
+    </tr>`).join('');
+}
+
+/** 下载单个 SKILL.md 或整个 zip。 */
+async function downloadSkill(name, asZip) {
+  const r = await call('GET', `/api/skills/download?name=${encodeURIComponent(name)}${asZip ? '&zip=1' : ''}`);
+  if (!r.ok) return toast(r.error || '下载失败', 'err');
+  const data = r.data;
+  let bytes;
+  if (data.file_bytes_b64) {
+    const bin = atob(data.file_bytes_b64);
+    bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  } else {
+    bytes = new TextEncoder().encode(data.content || '');
+  }
+  const blob = new Blob([bytes], { type: data.mime || 'application/octet-stream' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = data.filename || name + (asZip ? '.zip' : '/SKILL.md');
+  document.body.appendChild(a);
+  a.click();
+  URL.revokeObjectURL(a.href);
+  a.remove();
+  toast('已下载 ' + a.download, 'ok');
+}
+
+/** 上传弹窗：支持粘贴单文件文本，或选 zip。 */
+function uploadSkillModal() {
+  openModal({
+    title: '上传 skill',
+    html: `
+      <p class="muted">两种方式：<br>① 单个 <code>SKILL.md</code>：填名字 + 粘贴内容<br>② 整个目录：上传 <code>.zip</code>（内须含 SKILL.md）</p>
+      <div class="row" style="margin-top:8px">
+        <label class="chk"><input type="radio" name="up-mode" value="single" checked onchange="upModeSwitch()"> 单文件</label>
+        <label class="chk"><input type="radio" name="up-mode" value="zip" onchange="upModeSwitch()"> zip 目录</label>
+      </div>
+      <div id="up-single">
+        <label>skill 名</label>
+        <input id="up-name" placeholder="如 kanzi-foo" style="width:100%">
+        <label>SKILL.md 内容</label>
+        <textarea id="up-content" rows="8" placeholder="---\nname: xxx\ndescription: ...\n---\n..." style="width:100%;font-family:monospace"></textarea>
+      </div>
+      <div id="up-zip" style="display:none">
+        <label>zip 文件（须含 SKILL.md）</label>
+        <input type="file" id="up-file" accept=".zip" style="width:100%">
+      </div>
+    `,
+    okText: '上传',
+    onOk: async () => {
+      const mode = document.querySelector('input[name="up-mode"]:checked').value;
+      const name = $('up-name').value.trim();
+      if (!name) return toast('请填 skill 名', 'err');
+      if (mode === 'single') {
+        const content = $('up-content').value;
+        if (!content.trim()) return toast('SKILL.md 内容为空', 'err');
+        const r = await call('POST', '/api/skills/upload', { mode: 'single', name, content });
+        if (!r.ok) return toast(r.error || '上传失败', 'err');
+        toast('上传成功', 'ok'); loadSkills();
+      } else {
+        const file = $('up-file').files[0];
+        if (!file) return toast('请选择 zip 文件', 'err');
+        const buf = await file.arrayBuffer();
+        const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+        const r = await call('POST', '/api/skills/upload', { mode: 'zip', name, data_b64: b64 });
+        if (!r.ok) return toast(r.error || '上传失败', 'err');
+        toast('上传成功 (' + (r.data.files || []).length + ' 个文件)', 'ok'); loadSkills();
+      }
+    },
+  });
+  window.upModeSwitch = () => {
+    const mode = document.querySelector('input[name="up-mode"]:checked').value;
+    $('up-single').style.display = mode === 'single' ? '' : 'none';
+    $('up-zip').style.display = mode === 'zip' ? '' : 'none';
+  };
+}
+
+/** 编辑 SKILL.md。 */
+async function editSkill(name) {
+  const r = await call('GET', '/api/skills/get?name=' + encodeURIComponent(name));
+  if (!r.ok) return toast(r.error || '加载失败', 'err');
+  openModal({
+    title: '编辑 skill: ' + name,
+    html: `<textarea id="edit-content" rows="14" style="width:100%;font-family:monospace"></textarea>`,
+    okText: '保存',
+    onOk: async () => {
+      const content = $('edit-content').value;
+      const rr = await call('POST', '/api/skills/edit', { name, content });
+      if (!rr.ok) return toast(rr.error || '保存失败', 'err');
+      toast('已保存', 'ok'); loadSkills();
+    },
+  });
+  $('edit-content').value = r.data.content || '';
+}
+
+/** 删除 skill。 */
+async function deleteSkill(name) {
+  openModal({
+    title: '删除 skill: ' + name,
+    html: `<p>确定删除 <code>${name}</code>？<br><span class="muted">会移到回收站（_backup/skills_trash/），可找回。</span></p>`,
+    okText: '删除',
+    onOk: async () => {
+      const r = await call('POST', '/api/skills/delete', { name });
+      if (!r.ok) return toast(r.error || '删除失败', 'err');
+      toast('已删除', 'ok'); loadSkills();
+    },
+  });
+}

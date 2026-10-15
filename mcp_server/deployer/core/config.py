@@ -53,7 +53,8 @@ START_ORDER = ["relay", "http", "feishu"]
 DEFAULT_CONFIG = {
     "paths": {
         "bin": "bin", "conf": "conf", "logs": "logs",
-        "src": "src", "tmp": "tmp_results", "data": "data", "backup": "_backup",
+        "src": "src", "tmp": "tmp_results", "data": "data",
+        "skills": "data/skills", "backup": "_backup",
     },
     "web": {
         "bind": "0.0.0.0",
