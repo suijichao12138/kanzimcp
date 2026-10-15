@@ -56,6 +56,7 @@ description: Kanzi skills 导航索引。列出全部 kanzi-* skill 的名称、
 | `kanzi-localization` | 多国语资源表增删改查 | 多语言文本时 |
 | `kanzi-resource-create` | 颜色/纹理/字体资源创建 | 建资源时 |
 | `kanzi-material-brush` | 渐变材质笔刷三层关联 | 建材质时 |
+| `kanzi-shader` | Shader 操作：定位/改 MaterialType 双 shader、属性→uniform 绑定、三层关联 | 写/改 shader 时 |
 | `kanzi-save-export` | 工程保存 + kzb 导出 | 保存/导出时 |
 | `kanzi-screenshot` | Studio/Preview 截图 | 验证效果时 |
 
