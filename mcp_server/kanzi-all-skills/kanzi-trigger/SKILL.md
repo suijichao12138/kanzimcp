@@ -5,32 +5,6 @@ description: Kanzi Studio Triggers（触发器）创建与配置。TriggerNodeCo
 
 # Kanzi Trigger 创建
 
-## 🚀 多工程切换（2026-08-17 实测打通，v12）
-
-bridge 支持多工程操作。默认 `@project` 指向 ActiveProject，可在多工程间随时切换，两种方式：
-
-**① `kz_select_project` 切换 `@project` 作用目标（推荐）**
-```json
-{"name":"kz_select_project","arguments":{"name":"hmi-alarm"}}
-// ✅ 已切换到工程: hmi-alarm（之后 @project 相关操作作用于该工程；ActiveProject 不变）
-
-{"name":"kz_select_project","arguments":{"name":""}}
-// ✅ 已切回 ActiveProject: cluster_hmi
-```
-
-**② `@proj:<工程名>[/路径]` 前缀独立引用某工程（不切 @project）**
-```json
-{"name":"kz_invoke","arguments":{"target":"@proj:hmi-alarm/Prefabs/warning","method":"get_Name","args":[]}}
-```
-
-**要点：**
-- `kz_list_projects` 列出所有已打开工程（标 `[Active]` / `[Primary]`）。
-- **select 到哪个工程就操作哪个；与工程是否 Active 无关**——次级工程上读写（建节点/保存）都正常。
-- 切到某工程后，`/Screens/...`、`/Prefabs/...` 等路径都指该工程；要回 ActiveProject 再 select 空串。
-- 全程 **ActiveProject 不变**（方案 A 承诺），不打扰你在 Studio 正编辑的工程。
-
-
-
 ## 连接模板（本机中继桥）
 
 通过中继 WebSocket 连接 Kanzi Studio 插件。客户端 `kanzi-mcp-client.mjs`（workspace 根目录）。
@@ -289,7 +263,6 @@ actB.set_Item(PropertyValue, "@string:1")
 - ✅ **OnPropertyChangedTrigger 完整链路打通**：info 下 warning+text 节点、绑定、触发warning.value、双分支 Condition(action 判断EQUALS/DIFFERENT + 固定值) → SetPropertyAction 写 text.text=0/1，全部读回验证通过（2026-08-07）
 - ✅ **DispatchMessageAction 控制动画启停打通**：trigger 追加动作，MessageType=Play/Stop，默认 RoutingTarget 指向节点自身；循环（RepeatCount=0）+3倍速（DurationScale=3）配在 PlayMessageArguments（2026-08-07）
 - ✅ **DispatchMessageAction → StateManager.GoToState 打通（老隋纠正）**：直接跳转状态，State/StateGroup 参数用**裸名字符串**（非 @obj引用）；分支A→warning_0、分支B→warning_2（2026-08-07）
-
 
 ## 相关主题
 - 节点/组件创建：kanzi-ui skill

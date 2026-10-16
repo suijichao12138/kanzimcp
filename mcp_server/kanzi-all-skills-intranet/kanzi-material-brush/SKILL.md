@@ -1,47 +1,15 @@
 ---
 name: kanzi-material-brush
-description: Kanzi Studio 创建「参数化渐变材质笔刷」的完整流程（Material + MaterialType + MaterialBrush 三层关联，含顶点/片元双着色器、uniform 属性、binding）。2026-08-11 完整实测打通。适用于 HMI 工程要新建一个带红→黄（或任意两色）渐变的可复用材质刷。所有命令走中继桥（ws://10.10.118.152:58080，kz_invoke）。
+description: Kanzi Studio 创建「参数化渐变材质笔刷」的完整流程（Material + MaterialType + MaterialBrush 三层关联，含顶点/片元双着色器、uniform 属性、binding）。2026-08-11 完整实测打通。适用于 HMI 工程要新建一个带红→黄（或任意两色）渐变的可复用材质刷。所有命令走中继桥（ws://123.57.85.81:58080，kz_invoke）。
 ---
 
 # Kanzi 创建材质笔刷（参数化渐变）
 
-## 🚀 多工程切换（2026-08-17 实测打通，v12）
-
-bridge 支持多工程操作。默认 `@project` 指向 ActiveProject，可在多工程间随时切换，两种方式：
-
-**① `kz_select_project` 切换 `@project` 作用目标（推荐）**
-```json
-{"name":"kz_select_project","arguments":{"name":"hmi-alarm"}}
-// ✅ 已切换到工程: hmi-alarm（之后 @project 相关操作作用于该工程；ActiveProject 不变）
-
-{"name":"kz_select_project","arguments":{"name":""}}
-// ✅ 已切回 ActiveProject: cluster_hmi
-```
-
-**② `@proj:<工程名>[/路径]` 前缀独立引用某工程（不切 @project）**
-```json
-{"name":"kz_invoke","arguments":{"target":"@proj:hmi-alarm/Prefabs/warning","method":"get_Name","args":[]}}
-```
-
-**要点：**
-- `kz_list_projects` 列出所有已打开工程（标 `[Active]` / `[Primary]`）。
-- **select 到哪个工程就操作哪个；与工程是否 Active 无关**——次级工程上读写（建节点/保存）都正常。
-- 切到某工程后，`/Screens/...`、`/Prefabs/...` 等路径都指该工程；要回 ActiveProject 再 select 空串。
-- 全程 **ActiveProject 不变**（方案 A 承诺），不打扰你在 Studio 正编辑的工程。
-
-
-
-> **2026-08-11 完整实测打通**。新建一个带「红→黄渐变」参数化 shader 的可复用材质刷。
-> 三层关联：`Brush → MaterialBrush.Material → Material → MaterialType`。
-> **一律用新名字，不污染现有工程**（progressBar/progressBarMaterial/redYellow 都不动）。
-
----
-
 ## 0. 前置：接入中继桥 + 定位库
 
 ```bash
-# 接入：内网 HTTP MCP（relay_nlp_http/kz_mcp_http.py） http://10.10.118.152:9001/mcp，请求头 X-Kanzi-User: <用户名>
-# 中继通道：ws://10.10.118.152:58080/<用户名>；调用 = 直接调 MCP 工具 kz_invoke（参数 {"target":"<ref或路径>","method":"<方法>","args":[...]}）
+# 中继：ws://123.57.85.81:58080，channel = openclaw-main，客户端名 kanzi-mcp-client.mjs
+# 调用：node kanzi-mcp-client.mjs '{"name":"kz_invoke","arguments":{"target":"<ref或路径>","method":"<方法>","args":[...]}}'
 
 # 建立连接后先 initialize(protocolVersion=2024-11-05)，再：
 kz_invoke target=@project method=get_Children          # → Material Types 库 @objMT

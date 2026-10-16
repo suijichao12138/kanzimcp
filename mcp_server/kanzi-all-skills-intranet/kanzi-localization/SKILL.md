@@ -5,44 +5,18 @@ description: Kanzi Studio 多国语资源表（Localization Table）的完整增
 
 # Kanzi 多国语资源表（Localization Table）
 
-## 🚀 多工程切换（2026-08-17 实测打通，v12）
-
-bridge 支持多工程操作。默认 `@project` 指向 ActiveProject，可在多工程间随时切换，两种方式：
-
-**① `kz_select_project` 切换 `@project` 作用目标（推荐）**
-```json
-{"name":"kz_select_project","arguments":{"name":"hmi-alarm"}}
-// ✅ 已切换到工程: hmi-alarm（之后 @project 相关操作作用于该工程；ActiveProject 不变）
-
-{"name":"kz_select_project","arguments":{"name":""}}
-// ✅ 已切回 ActiveProject: cluster_hmi
-```
-
-**② `@proj:<工程名>[/路径]` 前缀独立引用某工程（不切 @project）**
-```json
-{"name":"kz_invoke","arguments":{"target":"@proj:hmi-alarm/Prefabs/warning","method":"get_Name","args":[]}}
-```
-
-**要点：**
-- `kz_list_projects` 列出所有已打开工程（标 `[Active]` / `[Primary]`）。
-- **select 到哪个工程就操作哪个；与工程是否 Active 无关**——次级工程上读写（建节点/保存）都正常。
-- 切到某工程后，`/Screens/...`、`/Prefabs/...` 等路径都指该工程；要回 ActiveProject 再 select 空串。
-- 全程 **ActiveProject 不变**（方案 A 承诺），不打扰你在 Studio 正编辑的工程。
-
-
 ## 概念
 Kanzi 的**多国语资源表（Localization Table）**集中存放工程里所有要翻译的文本，每行一个翻译条目（key + 每个语言一条翻译）。GUI 在 Localization 编辑器里管理。
 
-## 接入方式（内网 HTTP MCP）
+## 接入方式（本机中继桥）
 
-通过内网 HTTP MCP server（`relay_nlp_http/kz_mcp_http.py`）连接 Kanzi Studio 插件，直接调用 MCP 工具，无需本地客户端脚本。
+通过中继 WebSocket 连接 Kanzi Studio 插件。客户端 `kanzi-mcp-client.mjs`（workspace 根目录）。
 
-- **HTTP MCP**：`http://10.10.118.152:9001/mcp`（请求头 `X-Kanzi-User: <用户名>`，白名单见 users.json，如 `suijichao`）
-- **中继通道**：`ws://10.10.118.152:58080/<用户名>`（relay_multi 监听 58080，路径决定连哪台 Kanzi，须与 kz_mcp_http.py 一致）
-- **调用**：直接调用 MCP 工具 `kz_invoke` 等，参数 `{"target":..., "method":..., "args":[...]}`
+- **中继**：`ws://123.57.85.81:58080`，channel = `openclaw-main`
+- **调用**：`node kanzi-mcp-client.mjs '<tools/call 参数 JSON>'`
 - **参数格式**：`{"name":"kz_invoke","arguments":{"target":"<ref或路径>","method":"<方法>","args":[...]}}`
 - 返回 `ref_id = @objN` 自动进对象缓存，`@objN` 可作后续 target（重启 Studio 后编号失效，须重新枚举）
-- 示例中的 `mcp kz_invoke target=X method=Y args=[...]` 等价于直接调用 MCP 工具 `kz_invoke`（参数 `{"target":"X","method":"Y","args":[...]}`）`
+- 示例中的 `mcp kz_invoke target=X method=Y args=[...]` 等价于 `node kanzi-mcp-client.mjs '{"name":"kz_invoke","arguments":{"target":"X","method":"Y","args":[...]}}'`
 - **本地化 CRUD**：v13 工具 `kz_loc_entry_*`（add/set/delete/get/list，完整 CRUD，日常优先）+ `kz_loc_entry_add_language`/`kz_loc_entry_delete_language`（语言列增删），底层仍走 `kz_invoke` 反射。读字体/资源引用用 `kz_localized_resources`。
 - 底层用 `kz_invoke`（反射），本地化专用工具 `kz_loc_entry_*`（v13，完整 CRUD，日常优先）。
 

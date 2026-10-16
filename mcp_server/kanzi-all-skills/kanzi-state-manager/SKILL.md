@@ -5,32 +5,6 @@ description: Kanzi Studio 状态机创建/配置。StateManager、StateGroup、S
 
 # Kanzi State Manager API
 
-## 🚀 多工程切换（2026-08-17 实测打通，v12）
-
-bridge 支持多工程操作。默认 `@project` 指向 ActiveProject，可在多工程间随时切换，两种方式：
-
-**① `kz_select_project` 切换 `@project` 作用目标（推荐）**
-```json
-{"name":"kz_select_project","arguments":{"name":"hmi-alarm"}}
-// ✅ 已切换到工程: hmi-alarm（之后 @project 相关操作作用于该工程；ActiveProject 不变）
-
-{"name":"kz_select_project","arguments":{"name":""}}
-// ✅ 已切回 ActiveProject: cluster_hmi
-```
-
-**② `@proj:<工程名>[/路径]` 前缀独立引用某工程（不切 @project）**
-```json
-{"name":"kz_invoke","arguments":{"target":"@proj:hmi-alarm/Prefabs/warning","method":"get_Name","args":[]}}
-```
-
-**要点：**
-- `kz_list_projects` 列出所有已打开工程（标 `[Active]` / `[Primary]`）。
-- **select 到哪个工程就操作哪个；与工程是否 Active 无关**——次级工程上读写（建节点/保存）都正常。
-- 切到某工程后，`/Screens/...`、`/Prefabs/...` 等路径都指该工程；要回 ActiveProject 再 select 空串。
-- 全程 **ActiveProject 不变**（方案 A 承诺），不打扰你在 Studio 正编辑的工程。
-
-
-
 ## MCP 协议基础
 
 **MCP (Model Context Protocol)** 通过 WebSocket JSON-RPC 调用 Kanzi Studio 插件。
@@ -318,12 +292,12 @@ mcp kz_invoke target=@StateGroup method=DeleteTransition args=["@obj:<StateTrans
 ## 关键类型
 
 | 接口 | 获取方式 | 备注 |
+| StateTransition | StateGroup.get_StateTransitions 或 CreateTransition | 控制状态切换时长/曲线/方向/延迟 |
 |------|----------|------|
 | StateManager | `@type:StateManager` 短名 | ✅ 简洁方式推荐 |
 | StateGroup | `@type:StateGroup` 短名 | ✅ 简洁方式推荐 |
 | State | `@type:State` 短名 | ✅ 简洁方式推荐 |
 | StateObject | `@type:StateObject`（或反射 Assembly.GetType("...StateObject")） | ✅ 都能创建；get_Children 显示为 StatePluginWrapper 是误标，用 get_TargetObjectPath 判别 |
-| StateTransition | StateGroup.get_StateTransitions 或 CreateTransition | 控制状态切换时长/曲线/方向/延迟 |
 
 ## ⚠️ 状态机删除 — 无 API
 

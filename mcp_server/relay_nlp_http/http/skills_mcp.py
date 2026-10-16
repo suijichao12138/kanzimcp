@@ -2,17 +2,18 @@
 # -*- coding: utf-8 -*-
 """skills_mcp.py — Skill MCP 本地处理器（挂载在 kz_mcp_http.py 的 9001 网关）
 
-提供 /kanzi_skill_mcp 端点，让 Copilot 通过 MCP 工具按需查询 skill 内容，
-避免把全部 skill 注入 system prompt（全量 758KB 必超限）。
+提供 /kanzi_skill_mcp 端点，让 Copilot（本地小模型）通过 MCP 工具查询 skill 内容。
 
-数据源：deployer 网页维护的独立 skill 仓库（--skills-dir 指定，
-默认 <部署根>/data/skills）。与 nlp_worker 的 skill 完全隔离。
+**设计原则（2026-10-16 重构，适配小模型）**：
+- 工具只有 3 个，小模型不用做复杂工具选择
+- skill 拆成「完整任务单元」（读完全文能照做一件事），get_skill 一次返回完整小 skill，
+  模型不用串联碎片、不用反复查 docmcp
+- search_property 数据源 = 合并全量属性文件（离线本地查，秒回，不占 docmcp 上下文）
 
 工具：
-  list_skills()              — 所有 skill 名 + description + 文件数（~3KB）
-  search_property(query,limit?) — 在 quickref/全量属性里搜属性，返回匹配行（宽容匹配）
-  get_skill_summary(name)    — 某 skill 的 description + 章节标题（~1KB）
-  read_skill_section(name, heading) — 读某 skill 指定章节（按段返回，控制大小）
+  search_property(query, limit?) — 属性查询：在合并全量属性库里搜，返回匹配行
+  list_skills()                   — skill 说明：所有 skill 名 + 一句话用途 + 大小
+  get_skill(name)                 — 返回某 skill 的完整内容（小 skill 3-8KB，一次拿全）
 
 协议：遵循 MCP JSON-RPC（initialize / tools/list / tools/call / ping），
 由 kz_mcp_http.py 的 _handle_jsonrpc_skills 调用。
@@ -38,7 +39,7 @@ class SkillIndex:
     def __init__(self, skills_dir: str | Path):
         self.skills_dir = Path(skills_dir)
         self._lock = threading.Lock()
-        self._cache = None          # (mtime_sig, data)
+        self._sig = ""
         self._data = None
 
     def _mtime_sig(self) -> str:
@@ -53,9 +54,9 @@ class SkillIndex:
             return ""
 
     def _load(self) -> dict:
-        """扫描并构建索引。返回 {skills:[...], properties:[...], chapters:[...]}"""
+        """扫描并构建索引。返回 {skills:[...], properties:[...]}"""
         root = self.skills_dir
-        skills, properties, chapters = [], [], []
+        skills, properties = [], []
         if root.exists():
             for skill_dir in sorted(root.iterdir()):
                 if not skill_dir.is_dir():
@@ -74,27 +75,26 @@ class SkillIndex:
                     "name": skill_dir.name,
                     "description": desc,
                     "size": md.stat().st_size,
-                    "files": files,
                     "file_count": len(files),
                     "path": skill_dir.as_posix(),
                 })
-                # 章节（## 标题）
-                for m in re.finditer(r"^##\s+(.+)$", text, re.M):
-                    chapters.append({
-                        "skill": skill_dir.name,
-                        "heading": m.group(1).strip(),
-                    })
-                # 属性行：quickref 的 `| UI名 | 绑定写法 | 说明 |`（绑定写法可能带 ✅）
+                # 属性行：`| UI名 | 说明 |` 或 `| UI名 | 绑定写法 | 说明 |`（quickref/合并全量版）
                 for m in re.finditer(
-                        r"^\|\s*`([^`]+)`\s*\|\s*(`[^`]*`\s*[^|]*?)\s*\|\s*([^|]*?)\s*\|\s*$",
-                        text, re.M):
+                        r"^\|\s*`([^`]+)`\s*\|\s*(.+?)\s*\|", text, re.M):
+                    ui = m.group(1).strip()
+                    rest = m.group(2).strip()
+                    # 尝试分离绑定写法（含 `{...}` 的单元格）与说明
+                    bind, desc2 = "", rest
+                    bm = re.match(r"^`([^`]+)`\s*(.*)$", rest)
+                    if bm and "{" in bm.group(1):
+                        bind, desc2 = bm.group(1), bm.group(2).strip()
                     properties.append({
-                        "ui_name": m.group(1).strip(),
-                        "binding": m.group(2).strip(),
-                        "desc": m.group(3).strip(),
+                        "ui_name": ui,
+                        "binding": bind,
+                        "desc": desc2,
                         "skill": skill_dir.name,
                     })
-        return {"skills": skills, "properties": properties, "chapters": chapters}
+        return {"skills": skills, "properties": properties}
 
     def data(self) -> dict:
         """带缓存的索引数据。"""
@@ -140,11 +140,9 @@ def _normalize_query(q: str) -> list[str]:
     if not q:
         return []
     terms = {q.lower()}
-    # 中文 → 英文同义词
     for zh, en in _ZH_SYNONYMS.items():
         if zh in q:
             terms.add(en)
-    # 拆空格分多个词
     for w in re.split(r"[\s,，/]+", q.lower()):
         if w:
             terms.add(w)
@@ -157,7 +155,7 @@ def _score_property(prop: dict, terms: list[str]) -> int:
     for t in terms:
         if t in ui:
             score += 10
-        if t in bind:
+        if bind and t in bind:
             score += 8
         if t in desc:
             score += 3
@@ -175,7 +173,6 @@ def list_skills(index: SkillIndex) -> dict:
         skills.append({
             "name": s["name"],
             "description": s["description"],
-            "file_count": s["file_count"],
             "size": s["size"],
         })
     return {"skills": skills, "count": len(skills)}
@@ -188,9 +185,14 @@ def search_property(index: SkillIndex, query: str, limit: int = 5) -> dict:
         return {"query": query, "matches": [], "total": 0,
                 "hint": "请输入要查的属性关键词，如 width / font size / text color"}
     scored = []
+    seen = set()
     for prop in index.data()["properties"]:
         s = _score_property(prop, terms)
         if s > 0:
+            key = (prop["ui_name"], prop["skill"])
+            if key in seen:
+                continue
+            seen.add(key)
             scored.append((s, prop))
     scored.sort(key=lambda x: -x[0])
     matches = [{
@@ -206,71 +208,38 @@ def search_property(index: SkillIndex, query: str, limit: int = 5) -> dict:
     return {"query": query, "matches": matches, "total": len(scored)}
 
 
-def get_skill_summary(index: SkillIndex, name: str) -> dict:
-    data = index.data()
-    skill = next((s for s in data["skills"] if s["name"] == name), None)
-    if not skill:
-        return {"found": False, "hint": f"skill 不存在: {name}。可用 list_skills 查看全部。"}
-    headings = [c["heading"] for c in data["chapters"] if c["skill"] == name]
-    return {
-        "found": True,
-        "name": skill["name"],
-        "description": skill["description"],
-        "file_count": skill["file_count"],
-        "size": skill["size"],
-        "chapters": headings,
-    }
-
-
-def read_skill_section(index: SkillIndex, name: str, heading: str, max_chars: int = 4000) -> dict:
-    """读某 skill 指定章节（模糊匹配标题，返回该章节正文，控制大小）。"""
-    max_chars = max(500, min(int(max_chars or 4000), 12000))
+def get_skill(index: SkillIndex, name: str, max_chars: int = 32000) -> dict:
+    """返回某 skill 的完整内容。skill 已拆成小单元（3-8KB），一次拿全不用串联。"""
+    max_chars = max(2000, min(int(max_chars or 32000), 60000))
     root = index.skills_dir / name
     md = root / "SKILL.md"
     if not md.exists():
-        return {"found": False, "hint": f"skill 不存在: {name}"}
+        return {"found": False, "hint": f"skill 不存在: {name}。用 list_skills 查看全部。"}
     try:
         text = md.read_text(encoding="utf-8", errors="replace")
     except Exception as e:                                   # noqa: BLE001
         return {"found": False, "hint": f"读取失败: {e}"}
-
-    # 匹配章节（支持子串）
-    target = heading.strip().lower()
-    sections = []
-    starts = [m.start() for m in re.finditer(r"^##\s+.+$", text, re.M)]
-    bounds = starts[1:] + [len(text)]
-    for i, st in enumerate(starts):
-        sec = re.search(r"^##\s+(.+)$", text[st:bounds[i]], re.M)
-        if not sec:
-            continue
-        sec_heading = sec.group(1).strip()
-        if target in sec_heading.lower() or sec_heading.lower() in target:
-            sections.append((st, bounds[i], sec_heading))
-
-    if not sections:
-        return {"found": False, "hint": f"未找到章节「{heading}」。可用 get_skill_summary 查看全部章节。"}
-
-    best = max(sections, key=lambda x: x[1] - x[0])
-    body = text[best[0]:best[1]].strip()
-    if len(body) > max_chars:
-        body = body[:max_chars] + "\n…（已截断，如需更多可缩小范围）"
-    return {"found": True, "skill": name, "heading": best[2], "content": body}
+    truncated = len(text) > max_chars
+    if truncated:
+        text = text[:max_chars] + "\n…（已截断，skill 应是小单元，若仍需更多请联系维护）"
+    return {
+        "found": True,
+        "name": name,
+        "size": len(text),
+        "truncated": truncated,
+        "content": text,
+    }
 
 
 # ══════════════════════ MCP 协议层 ══════════════════════
 
 TOOLS = [
     {
-        "name": "list_skills",
-        "description": "列出独立 skill 仓库里的所有 skill（名称、用途、文件数）。需要知道有哪些 skill 可用时调用。",
-        "inputSchema": {"type": "object", "properties": {}},
-    },
-    {
         "name": "search_property",
-        "description": "搜索 Kanzi 属性表（quickref + 全量属性版），返回匹配的属性行（UI 面板名、绑定表达式写法、说明）。"
-                       "需要查任何 Kanzi 属性的绑定写法/面板名称时调用本工具，不要直接读取 skill 文件。"
-                       "用法：传你想查的属性关键词，如 'actual width'、'font size'、'text color'，中英文都行。"
-                       "查不到时换更短的关键词再试（如 'width' 而非 'actual layout width'）。",
+        "description": "搜索 Kanzi 属性库（离线全量），返回匹配的属性行（UI 面板名、绑定写法、说明）。"
+                       "需要查任何 Kanzi 属性的绑定写法/面板名称时调用本工具，中英文关键词都行，"
+                       "如 'actual width'、'字体'、'text color'。查不到时换更短的关键词再试。"
+                       "只查属性用这个，不要读属性文件。",
         "inputSchema": {"type": "object",
                         "properties": {
                             "query": {"type": "string", "description": "属性关键词，如 width / font size / 实际宽度"},
@@ -279,23 +248,21 @@ TOOLS = [
                         "required": ["query"]},
     },
     {
-        "name": "get_skill_summary",
-        "description": "获取某 skill 的描述和章节标题列表。需要了解某个 skill 覆盖什么内容时调用，比读整个文件省上下文。",
-        "inputSchema": {"type": "object",
-                        "properties": {"name": {"type": "string", "description": "skill 名称，如 kanzi-ui"}},
-                        "required": ["name"]},
+        "name": "list_skills",
+        "description": "列出全部 skill（名称、一句话用途、大小）。不知道某个操作该读哪个 skill，"
+                       "或想了解有哪些能力时调用。",
+        "inputSchema": {"type": "object", "properties": {}},
     },
     {
-        "name": "read_skill_section",
-        "description": "读取某 skill 的指定章节内容（按标题匹配，返回该段正文，控制大小）。"
-                       "需要某 skill 的操作步骤细节时调用，不要整读整个 SKILL.md。",
+        "name": "get_skill",
+        "description": "返回某 skill 的完整内容（已拆成小单元，一次拿全，上限 32KB）。"
+                       "要执行某个操作（建节点/建材质/做绑定/本地化/动画等）时，先 list_skills 找到 skill 名，"
+                       "再调本工具拿完整步骤，照着做。不要反复查其他文档。",
         "inputSchema": {"type": "object",
                         "properties": {
-                            "name": {"type": "string", "description": "skill 名称"},
-                            "heading": {"type": "string", "description": "章节标题（支持模糊匹配），如 '创建节点'"},
-                            "max_chars": {"type": "integer", "description": "返回内容上限，默认 4000"},
+                            "name": {"type": "string", "description": "skill 名称，如 kanzi-node-create"},
                         },
-                        "required": ["name", "heading"]},
+                        "required": ["name"]},
     },
 ]
 
@@ -315,7 +282,7 @@ class SkillsMcpHandler:
             return {"jsonrpc": "2.0", "id": rid, "result": {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {"tools": {"listChanged": False}},
-                "serverInfo": {"name": "kanzi-skill-mcp", "version": "1.0.0"},
+                "serverInfo": {"name": "kanzi-skill-mcp", "version": "2.0.0"},
             }}
         if method == "notifications/initialized":
             return None
@@ -338,12 +305,9 @@ class SkillsMcpHandler:
             elif name == "search_property":
                 result = search_property(self.index, str(args.get("query", "")),
                                          int(args.get("limit", 5) or 5))
-            elif name == "get_skill_summary":
-                result = get_skill_summary(self.index, str(args.get("name", "")))
-            elif name == "read_skill_section":
-                result = read_skill_section(self.index, str(args.get("name", "")),
-                                            str(args.get("heading", "")),
-                                            int(args.get("max_chars", 4000) or 4000))
+            elif name == "get_skill":
+                result = get_skill(self.index, str(args.get("name", "")),
+                                   int(args.get("max_chars", 20000) or 20000))
             else:
                 return self._error(-32602, f"未知工具: {name}", req)
         except Exception as e:                               # noqa: BLE001
