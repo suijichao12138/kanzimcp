@@ -1,6 +1,6 @@
 ---
 name: kanzi-text-image
-description: Kanzi 文本/图片/前景色/背景色设置 + KzResourceID 资源引用。TextConcept.Text、Node2D.ForegroundBrush/BackgroundBrush、Image2D.Image，含 Resource 资源条目创建。资源创建见 kanzi-resource-create。
+description: Kanzi 文本/图片/前景色/背景色设置 + KzResourceID 资源引用。TextConcept.Text、Node2D.ForegroundBrush/BackgroundBrush、Image2D.Image，含 Resource 资源条目创建。资源创建见 kanzi-resource-brush / kanzi-resource-texture / kanzi-resource-font。
 ---
 
 ---
@@ -137,5 +137,5 @@ mcp kz_invoke target=@objRD method=get_Resources args=[]
 - 资源 ref 每次连接 Studio 动态分配，需重新定位，不能硬编码。
 - **保存用正规路径**：`@studio.get_Commands()` → `GeneratedCommandInvoker` → `SaveProject(@project)`（⚠️ 不要用 `kz_save_project`，那个工具是坏的/残缺的，见 kanzi-save-export skill）。
 
-> 颜色笔刷/纹理/字体等资源创建 → `kanzi-resource-create` skill。
+> 颜色笔刷/纹理/字体等资源创建 → `kanzi-resource-brush` / `kanzi-resource-texture` / `kanzi-resource-font` skill。
 

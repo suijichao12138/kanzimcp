@@ -80,4 +80,4 @@ description: Kanzi 高频属性速查（常驻 system prompt）。布局/文本/
 | `Stack Layout` | 堆栈布局（StackLayout2D），见 kanzi-layout skill |
 | `Text Block` | 文本节点（TextBlock2D），见 kanzi-text skill |
 
-> 完整分组见 `kanzi-properties-quickref` 或合并全量版。
+> 完整分组（含绑定写法）见 `kanzi-properties-all` 合并全量版。

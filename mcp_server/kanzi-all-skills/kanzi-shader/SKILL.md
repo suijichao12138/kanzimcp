@@ -212,5 +212,5 @@ kz_invoke target=@objInvoker method=SaveProject args=["@project"]
 
 - 材质笔刷三层完整流程（含双 shader 源码示例）→ `kanzi-material-brush`
 - 绑定表达式 / CreateBinding → `kanzi-binding`
-- 节点创建 / 属性设置 / `@color:` 标识符 → `kanzi-ui`
+- 节点创建 / 属性设置 / `@color:` 标识符 → `kanzi-node-create` / `kanzi-prop-set`
 - 保存/导出 → `kanzi-save-export`

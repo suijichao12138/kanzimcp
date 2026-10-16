@@ -5,7 +5,7 @@ description: Kanzi Studio 动态数据绑定创建。CreateBinding 的 Property/
 
 # Kanzi 数据绑定
 
-> 📖 **属性查询指引**：具体属性的绑定表达式写法（属性名去空格驼峰、路径写法）统一查 **`kanzi-properties-quickref`** skill（常用属性速查，每个属性都带 `UI 属性名 | 绑定写法 | 说明` 三列）。查不到的冷门属性再去 `kanzi-properties-*` 全量版。绑定表达式语法本身见本 skill 的「绑定表达式完整规则」章节。
+> 📖 **属性查询指引**：具体属性的绑定表达式写法（属性名去空格驼峰、路径写法）统一查 **`kanzi-properties-all`**（合并全量版，含绑定写法）+ 常驻 **`kanzi-properties-highfreq`**（39 高频属性）。绑定表达式语法本身见本 skill 的「绑定表达式完整规则」章节。
 
 ## MCP 协议基础
 

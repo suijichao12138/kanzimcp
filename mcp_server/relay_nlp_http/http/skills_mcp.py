@@ -185,15 +185,23 @@ def search_property(index: SkillIndex, query: str, limit: int = 5) -> dict:
         return {"query": query, "matches": [], "total": 0,
                 "hint": "请输入要查的属性关键词，如 width / font size / text color"}
     scored = []
-    seen = set()
+    best = {}
     for prop in index.data()["properties"]:
         s = _score_property(prop, terms)
-        if s > 0:
-            key = (prop["ui_name"], prop["skill"])
-            if key in seen:
-                continue
-            seen.add(key)
-            scored.append((s, prop))
+        if s <= 0:
+            continue
+        key = (prop["ui_name"], prop["skill"])
+        cur = best.get(key)
+        if cur is None:
+            best[key] = (s, prop)
+        else:
+            cs, cp = cur
+            # 同一 (UI名, skill)：优先保留有绑定写法的条目（quickref 合并版）
+            if prop["binding"] and not cp["binding"]:
+                best[key] = (s, prop)
+            elif prop["binding"] == cp["binding"] and s > cs:
+                best[key] = (s, prop)
+    scored = [(s, p) for s, p in best.values()]
     scored.sort(key=lambda x: -x[0])
     matches = [{
         "ui_name": p["ui_name"],

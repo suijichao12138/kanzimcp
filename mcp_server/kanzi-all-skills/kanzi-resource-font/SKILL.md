@@ -76,6 +76,6 @@ mcp kz_invoke target=@obj5784 method=get_Children
 
 ## 相关
 
-- 节点创建/属性设置/文本图片颜色设置 → `kanzi-ui` skill（本 skill 的母体）
+- 节点创建/属性设置/文本图片颜色设置 → `kanzi-node-create` / `kanzi-prop-set` skill（本 skill 的母体）
 - 保存/导出 → `kanzi-save-export` skill
-- `@color:` / `@list:` / `@type:` / `@enum:` 等 v4 参数标识符 → `kanzi-ui` skill 文末总表
+- `@color:` / `@list:` / `@type:` / `@enum:` 等 v4 参数标识符 → `kanzi-studio-mcp` skill（v4 参数标识符总表）

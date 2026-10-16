@@ -198,7 +198,7 @@ kz_invoke target=@objInvoker method=SaveProject args=["@project"]
 
 ## 相关
 
-- 颜色笔刷 / 纹理 / 字体等其它资源创建 → `kanzi-resource-create` skill
-- 节点创建/属性设置 → `kanzi-ui` skill
+- 颜色笔刷 / 纹理 / 字体等其它资源创建 → `kanzi-resource-brush` / `kanzi-resource-texture` / `kanzi-resource-font` skill
+- 节点创建/属性设置 → `kanzi-node-create` / `kanzi-prop-set` skill
 - 保存/导出 → `kanzi-save-export` skill
-- `@color:` / `@list:` / `@type:` / `@enum:` 等参数标识符 → `kanzi-ui` skill 文末总表
+- `@color:` / `@list:` / `@type:` / `@enum:` 等参数标识符 → `kanzi-studio-mcp` skill（v4 参数标识符总表）
