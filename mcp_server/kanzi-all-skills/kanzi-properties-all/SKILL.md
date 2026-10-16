@@ -2436,8 +2436,8 @@ description: Kanzi 全部节点属性合并版（离线数据源）。search_pro
 | UI 属性名 | 绑定写法 | 说明 |
 |-----------|---------|------|
 | `Is Value Changing` | `{@../Range.IsValueChanging}` ✅ | Whether the value is currently changing. |
-| `Maximum Value` | `{@../Range.Maximum}` ✅ | The maximum value that the range allows. |
-| `Minimum Value` | `{@../Range.Minimum}` ✅ | The minimum value that the range allows. |
+| `Maximum Value` | `{@../RangeConcept.Maximum}` ✅ | The maximum value that the range allows. |
+| `Minimum Value` | `{@../RangeConcept.Minimum}` ✅ | The minimum value that the range allows. |
 | `Normalized Value` | `{@../Range.NormalizedValue}` ✅ | The current value normalized to range [0, 1]. |
 | `Step Value` | `{@../Range.Step}` ✅ | The minimum amount that the value of the range can change at a time. |
 | `Value` | `{@../Range.Value}` ✅ | The current value. To update this property with a binding, use a to-source or two-way binding. |
@@ -2504,7 +2504,7 @@ _（该分组为节点/资源类型，无直接属性，见对应节点章节）
 
 | UI 属性名 | 绑定写法 | 说明 |
 |-----------|---------|------|
-| `Word Wrap` | `{@../TextBlock2D.WordWrap}` ✅ | Sets whether to break long lines into multiple lines to make the text fit within the boundaries of the Text Block node. |
+| `Word Wrap` | `{@../TextBlockConcept.WordWrap}` ✅ | Sets whether to break long lines into multiple lines to make the text fit within the boundaries of the Text Block node. |
 
 ## Text Block 3D
 
@@ -2522,7 +2522,7 @@ _（该分组为节点/资源类型，无直接属性，见对应节点章节）
 | `Horizontal Padding` | `{@../TextConcept.HorizontalPadding}` ✅ | Sets the padding spaces between the content and the left and right boundaries of the Text node. |
 | `Overflow` | `{@../TextConcept.Overflow}` ✅ | Sets the characters that represent the truncated text when the text does not fit in this node. The default value is ‘…’. By default, Kanzi truncates the text at… |
 | `Remove Side Bearings` | `{@../TextConcept.RemoveSideBearings}` ✅ | Whether to position the leftmost characters of left-aligned text and rightmost characters of right-aligned text exactly within the boundary of the text node. |
-| `Text` | `{@../TextBlock2D.Text}` ✅ | Sets the text content that the text node renders. To create a line break press Shift+Enter. |
+| `Text` | `{@../TextConcept.Text}` ✅ | Sets the text content that the text node renders. To create a line break press Shift+Enter. |
 | `Text Horizontal Alignment` | `{@../TextConcept.TextHorizontalAlignment}` ✅ | Sets the horizontal alignment of the text. |
 | `Text Vertical Alignment` | `{@../TextConcept.TextVerticalAlignment}` ✅ | Sets the vertical alignment of the text. |
 | `Truncation` | `{@../TextConcept.Truncation}` ✅ | Sets how Kanzi truncates text when either Truncation or Overflow property is set and the text does not fit in this node: * None disables text truncation. * At c… |
@@ -2580,10 +2580,10 @@ _（该分组为节点/资源类型，无直接属性，见对应节点章节）
 | `Character Spacing` | `{@../TextBlock2D.CharacterSpacing}` ✅ | Sets the character spacing in pixels. |
 | `Fixed Character Width` | `{@../TextConcept.FixedCharacterWidth}` ✅ | When set, overrides the font advance widths to make each character take a fixed amount of space specified in pixels. |
 | `Font Color` | `{@../TextConcept.FontColor}` ✅ | Sets the color of the text in a 3D text node. |
-| `Font Family` | `{@../TextBlock2D.FontFamily}` ✅ | The font family used to render the text. |
+| `Font Family` | `{@../Node.FontFamily}` ✅ | The font family used to render the text. |
 | `Font Hinting Preference` | `{@../TextConcept.FontHintingPreference}` ✅ | Sets the hinting preference of the font. * No hinting: Render text without hinting the outlines of glyphs. * Native hinting: Prefer native hinter of the font ov… |
 | `Font Material` | `{@../TextConcept.FontMaterial}` ✅ | Sets the material whose shader is used to render the text. The shader must use the ContentTexture uniform which is automatically filled with glyph data. |
-| `Font Size` | `{@../TextBlock2D.FontSize}` ✅ | Sets the size of the font in pixels. |
+| `Font Size` | `{@../FontStyleConcept.Size}` ✅ | Sets the size of the font in pixels. |
 | `Font Style` | `{@../TextConcept.FontStyle}` ✅ | Sets the style of the font. |
 | `Font Weight` | `{@../TextConcept.FontWeight}` ✅ | Sets the weight of the font. |
 | `Fractional Character Width` | `{@../TextConcept.FractionalCharacterWidth}` ✅ | Sets whether Kanzi uses fractional or rounded character widths to lay out text. In most cases fractional widths provide the best result. However, with small fon… |
