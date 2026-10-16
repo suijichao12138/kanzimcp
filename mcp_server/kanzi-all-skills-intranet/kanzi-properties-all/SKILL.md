@@ -2435,12 +2435,12 @@ description: Kanzi 全部节点属性合并版（离线数据源）。search_pro
 
 | UI 属性名 | 绑定写法 | 说明 |
 |-----------|---------|------|
-| `Is Value Changing` | `{@../Range.IsValueChanging}` ✅ | Whether the value is currently changing. |
+| `Is Value Changing` | `{@../RangeConcept.IsValueChanging}` ✅ | Whether the value is currently changing. |
 | `Maximum Value` | `{@../RangeConcept.Maximum}` ✅ | The maximum value that the range allows. |
 | `Minimum Value` | `{@../RangeConcept.Minimum}` ✅ | The minimum value that the range allows. |
-| `Normalized Value` | `{@../Range.NormalizedValue}` ✅ | The current value normalized to range [0, 1]. |
-| `Step Value` | `{@../Range.Step}` ✅ | The minimum amount that the value of the range can change at a time. |
-| `Value` | `{@../Range.Value}` ✅ | The current value. To update this property with a binding, use a to-source or two-way binding. |
+| `Normalized Value` | `{@../RangeConcept.NormalizedValue}` ✅ | The current value normalized to range [0, 1]. |
+| `Step Value` | `{@../RangeConcept.Step}` ✅ | The minimum amount that the value of the range can change at a time. |
+| `Value` | `{@../RangeConcept.Value}` ✅ | The current value. To update this property with a binding, use a to-source or two-way binding. |
 
 ## Render Target
 
@@ -2577,7 +2577,7 @@ _（该分组为节点/资源类型，无直接属性，见对应节点章节）
 
 | UI 属性名 | 绑定写法 | 说明 |
 |-----------|---------|------|
-| `Character Spacing` | `{@../TextBlock2D.CharacterSpacing}` ✅ | Sets the character spacing in pixels. |
+| `Character Spacing` | `{@../FontStyleConcept.CharacterSpacing}` ✅ | Sets the character spacing in pixels. |
 | `Fixed Character Width` | `{@../TextConcept.FixedCharacterWidth}` ✅ | When set, overrides the font advance widths to make each character take a fixed amount of space specified in pixels. |
 | `Font Color` | `{@../TextConcept.FontColor}` ✅ | Sets the color of the text in a 3D text node. |
 | `Font Family` | `{@../Node.FontFamily}` ✅ | The font family used to render the text. |
