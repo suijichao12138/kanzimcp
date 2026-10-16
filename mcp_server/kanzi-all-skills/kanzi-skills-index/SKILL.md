@@ -90,5 +90,27 @@ skill MCP 提供 **3 个工具**（9001 网关 `/kanzi_skill_mcp`）：
 
 1. **只常驻**：index + highfreq（共 ~10KB）。
 2. **一切操作内容走工具**（get_skill 一次拿全小 skill）。
-3. **绝不**整读 `kanzi-properties-all`（207KB）。
+3. **绝不**整读 `kanzi-properties-all`（254KB）。
 4. **绝不**反复调 docmcp / 工具试错 —— 拿不到就换关键词再试一次，或直接问。
+
+## 🚫 命名铁律（所有创建/命名操作通用）
+
+> 所有需要命名的操作 —— **创建节点 / 资源 / 动画 / 别名 / 属性类型 / 本地化条目 / 变量 / 参数** 等 —— 名字必须满足：
+
+1. **只允许**：字母、数字、下划线 `_`、连字符 `-`。
+2. **禁止**特殊字符：`\` `/` `|` `.` `:` `*` `?` `"` `'` `<` `>` 空格 中文 等。
+3. **不能以数字开头**（部分 API 限制）。
+4. **不要用中文命名**（Kanzi 资源名/变量名不支持）。
+
+**错误示例**（一律不能用）：
+- `text/header`（含 `/`）❌
+- `bg.1`（含 `.`）❌
+- `a|b`（含 `|`）❌
+- `C:\\temp`（含 `\\`）❌
+- `标题文本`（中文）❌
+- `new node`（空格）❌
+
+**正确示例**：
+- `text_header` / `bg_1` / `header-text` / `kzGradientType_yy` ✅
+
+> 用 kz_create_node / CreateProjectItem / CreateBrush / CreateNodeAliasEntry 等创建时，`name` / `@string:` 参数都遵守此规则。

@@ -2,6 +2,11 @@
 name: kanzi-resource-brush
 description: Kanzi 创建颜色笔刷（Color Brush）：@project.CreateBrush + @color:，两步流程，关键坑。
 ---
+## 🚫 命名铁律（创建前必读）
+
+> 创建任何东西（节点/资源/动画/别名/条目）时，**名字只允许字母、数字、下划线 `_`、连字符 `-`**。
+> **禁止**特殊字符：`\` `/` `|` `.` `:` `*` `?` `"` `'` `<` `>` 空格、中文。
+> 不要以数字开头。错误：`text/header` `bg.1` `a|b` `C:\temp` `标题文本` `new node`；正确：`text_header` `bg_1` `header-text`。
 
 ## 一、创建颜色笔刷（Color Brush）
 

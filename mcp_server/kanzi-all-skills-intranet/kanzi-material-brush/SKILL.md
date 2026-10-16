@@ -2,6 +2,11 @@
 name: kanzi-material-brush
 description: Kanzi Studio 创建「参数化渐变材质笔刷」的完整流程（Material + MaterialType + MaterialBrush 三层关联，含顶点/片元双着色器、uniform 属性、binding）。2026-08-11 完整实测打通。适用于 HMI 工程要新建一个带红→黄（或任意两色）渐变的可复用材质刷。所有命令走中继桥（ws://123.57.85.81:58080，kz_invoke）。
 ---
+## 🚫 命名铁律（创建前必读）
+
+> 创建任何东西（节点/资源/动画/别名/条目）时，**名字只允许字母、数字、下划线 `_`、连字符 `-`**。
+> **禁止**特殊字符：`\` `/` `|` `.` `:` `*` `?` `"` `'` `<` `>` 空格、中文。
+> 不要以数字开头。错误：`text/header` `bg.1` `a|b` `C:\temp` `标题文本` `new node`；正确：`text_header` `bg_1` `header-text`。
 
 # Kanzi 创建材质笔刷（参数化渐变）
 

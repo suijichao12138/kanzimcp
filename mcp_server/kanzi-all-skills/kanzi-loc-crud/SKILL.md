@@ -2,6 +2,11 @@
 name: kanzi-loc-crud
 description: Kanzi 本地化 CRUD（首选 v13 kz_loc_entry_*）：新增/更新 text 条目、字体资源引用条目、增删语言列。含正确构造函数。
 ---
+## 🚫 命名铁律（创建前必读）
+
+> 创建任何东西（节点/资源/动画/别名/条目）时，**名字只允许字母、数字、下划线 `_`、连字符 `-`**。
+> **禁止**特殊字符：`\` `/` `|` `.` `:` `*` `?` `"` `'` `<` `>` 空格、中文。
+> 不要以数字开头。错误：`text/header` `bg.1` `a|b` `C:\temp` `标题文本` `new node`；正确：`text_header` `bg_1` `header-text`。
 
 ## 🥇 首选：v13 MCP 工具 `kz_loc_entry_*`（完整 CRUD，2026-08-18 add/set 打通 + 回归）
 

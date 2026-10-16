@@ -2,6 +2,11 @@
 name: kanzi-node-create
 description: Kanzi 节点创建：kz_create_node 创建 EmptyNode2D/TextBlock2D/插件节点/布局节点/九宫格，Prefabs 模板库下创建，删除节点。
 ---
+## 🚫 命名铁律（创建前必读）
+
+> 创建任何东西（节点/资源/动画/别名/条目）时，**名字只允许字母、数字、下划线 `_`、连字符 `-`**。
+> **禁止**特殊字符：`\` `/` `|` `.` `:` `*` `?` `"` `'` `<` `>` 空格、中文。
+> 不要以数字开头。错误：`text/header` `bg.1` `a|b` `C:\temp` `标题文本` `new node`；正确：`text_header` `bg_1` `header-text`。
 
 ## 创建节点
 

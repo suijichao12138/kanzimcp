@@ -2,6 +2,11 @@
 name: kanzi-alias
 description: Kanzi 创建节点别名 Alias：ResourceDictionary.CreateNodeAliasEntry 对象重载，遍历拿节点引用，验证 NodeReferenceBase。
 ---
+## 🚫 命名铁律（创建前必读）
+
+> 创建任何东西（节点/资源/动画/别名/条目）时，**名字只允许字母、数字、下划线 `_`、连字符 `-`**。
+> **禁止**特殊字符：`\` `/` `|` `.` `:` `*` `?` `"` `'` `<` `>` 空格、中文。
+> 不要以数字开头。错误：`text/header` `bg.1` `a|b` `C:\temp` `标题文本` `new node`；正确：`text_header` `bg_1` `header-text`。
 
 ## 🌟 创建别名 Alias（2026-10-13 实测打通）
 
