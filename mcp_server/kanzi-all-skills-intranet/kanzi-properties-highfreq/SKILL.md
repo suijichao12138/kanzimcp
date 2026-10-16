@@ -31,7 +31,10 @@ description: Kanzi 高频属性速查（常驻 system prompt）。布局/文本/
 | `Text Vertical Alignment` | `{@../TextConcept.TextVerticalAlignment}` ✅ | Sets the vertical alignment of the text. |
 | `Font Family` | `{@../TextBlock2D.FontFamily}` ✅ | The font family used to render the text. |
 | `Font Size` | `{@../TextBlock2D.FontSize}` ✅ | Sets the size of the font in pixels. |
-| `Font Color` | `{@../TextConcept.FontColor}` ✅ | Sets the color of the text in a 3D text node. |
+| `Font Color` | `{@../TextConcept.FontColor}` ✅ | ⚠️ **只能给 Text Block 3D 文本设颜色！不能设置 Text Block 2D 的颜色** |
+| `Foreground Brush` | `{@../Node.ForegroundBrush}` ✅ | ⚠️ **Text Block 2D 显示文本的颜色用这个属性设置**（不是 Font Color） |
+
+> ⚠️ **颜色规则（重要）**：**Text Block 2D** 显示文本颜色 → 用 **`Foreground Brush`**；**`Font Color` 只对 Text Block 3D 生效**，不能设置 Text Block 2D 的颜色。
 
 ## 外观：颜色/图片/可见性
 

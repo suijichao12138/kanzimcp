@@ -447,7 +447,7 @@ description: Kanzi 全部节点属性合并版（离线数据源）。search_pro
 | `Focus State` | Reports the focus state of a node: * No focus (0) indicates that the node is not focused. For a focus scope node indicates that none of the nodes in the scope have focus. * Logical focus (1) indicates… |
 | `Focusable` | Indicates whether the node can receive focus. |
 | `Focused` | Indicates whether the node has the key focus. |
-| `Font Color` | Sets the color of the text in a 3D text node. |
+| `Font Color` | ⚠️ 只能给 Text Block 3D 文本设颜色；不能设置 Text Block 2D 的颜色（2D 用 Node2D.ForegroundBrush）。 |
 | `Font Family` | The font family used to render the text. |
 | `Font Hinting Preference` | Sets the hinting preference of the font. * No hinting: Render text without hinting the outlines of glyphs. * Native hinting: Prefer native hinter of the font over the auto-hinter of the rasterizer. * … |
 | `Font Material` | Sets the material whose shader is used to render the text. The shader must use the ContentTexture uniform which is automatically filled with glyph data. |
@@ -1114,7 +1114,7 @@ description: Kanzi 全部节点属性合并版（离线数据源）。search_pro
 | `Focus Order` | Sets the focus chain order of the node within the focus scope. |
 | `Focus State` | Reports the focus state of a node: * No focus (0) indicates that the node is not focused. For a focus scope node indicates that none of the nodes in the scope have focus. * Logical focus (1) indicates… |
 | `Focused` | Indicates whether the node has the key focus. |
-| `Font Color` | Sets the color of the text in a 3D text node. |
+| `Font Color` | ⚠️ 只能给 Text Block 3D 文本设颜色；不能设置 Text Block 2D 的颜色（2D 用 Node2D.ForegroundBrush）。 |
 | `Font Family` | The font family used to render the text. |
 | `Font Hinting Preference` | Sets the hinting preference of the font. * No hinting: Render text without hinting the outlines of glyphs. * Native hinting: Prefer native hinter of the font over the auto-hinter of the rasterizer. * … |
 | `Font Material` | Sets the material whose shader is used to render the text. The shader must use the ContentTexture uniform which is automatically filled with glyph data. |
@@ -1495,7 +1495,7 @@ description: Kanzi 全部节点属性合并版（离线数据源）。search_pro
 | `Export in Asset Package` | When enabled, this item is exported into asset package if this project is saved as one. |
 | `Exposure` | Sets the exposure compensation for the material. The exposure compensation emulates camera exposure by controlling the total amount of light rendered. Use a negative value to darken the rendered image… |
 | `F` | Tonemapping parameter F. |
-| `Font Color` | Sets the color of the text in a 3D text node. |
+| `Font Color` | ⚠️ 只能给 Text Block 3D 文本设颜色；不能设置 Text Block 2D 的颜色（2D 用 Node2D.ForegroundBrush）。 |
 | `Global Ambient Color` | Sets the color that is multiplied automatically with the Ambient property of the materials in the scene. Use the Intensity (I) property field to adjust the exposure of the color. |
 | `Glossiness Factor` | Sets the glossiness of the material: 0 represents a rough, diffuse surface, and 1 represents a smooth, glossy surface. |
 | `Glossiness Texture` | Sets the texture that contains a glossiness map for the material. Kanzi reads the glossiness from the Alpha channel of this texture. Use the Glossiness Factor property to scale the glossiness from thi… |

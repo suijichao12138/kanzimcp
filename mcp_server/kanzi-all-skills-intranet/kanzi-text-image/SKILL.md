@@ -3,12 +3,12 @@ name: kanzi-text-image
 description: Kanzi 文本/图片/前景色/背景色设置 + KzResourceID 资源引用。TextConcept.Text、Node2D.ForegroundBrush/BackgroundBrush、Image2D.Image，含 Resource 资源条目创建。资源创建见 kanzi-resource-brush / kanzi-resource-texture / kanzi-resource-font。
 ---
 
----
-name: kanzi-text-image
-description: Kanzi 文本/图片/前景色/背景色设置 + KzResourceID 资源引用。TextConcept.Text、Node2D.ForegroundBrush/BackgroundBrush、Image2D.Image，含 Resource 资源条目创建。
----
-
 ## 文本 / 图片 / 前景色 / 背景色 设置 + ResourceID 引用原理（2026-08-07 实测打通）
+
+### 🌟 颜色规则（重要）
+
+> **Text Block 2D 显示文本的颜色 → 用 `Node2D.ForegroundBrush` 属性设置**（颜色刷）。
+> **`Font Color` 只能给 Text Block 3D 文本设置颜色，不能设置 Text Block 2D 的颜色**。给 TextBlock2D 设 Font Color 无效。
 
 老隋要求梳理文本、图片、文字前景色、文字背景色四类属性的设置，重点是 **resourceID（资源引用）** 的用法。全部在 Info 下用 4 个测试节点实测：`text`/`text_1`（TextBlock2D）与 `image`/`image_1`（Image2D）。
 
