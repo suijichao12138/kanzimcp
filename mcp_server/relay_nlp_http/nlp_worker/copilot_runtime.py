@@ -226,6 +226,11 @@ class CopilotConfig(StrictModel):
     # 活动刷新式超时阈值(秒): 只要 copilot 还在持续输出/调 MCP就续期,
     # 只有超过 max_idle_seconds 无任何事件才判定真正死寂并超时。
     max_idle_seconds: Annotated[int, Field(ge=1, le=36_000)] = 300
+    # 方案B: 长工具执行中的活性探测地址(kanzi-api-mcp 的 HTTP 端点)。
+    # 工具进行中且超过 max_idle 无事件时, 会 POST kz_health 到这里判断插件是否还活着。
+    # 留空则退回原死寂逻辑(不享受延长)。
+    kanzi_probe_url: str | None = None
+    kanzi_probe_headers: dict[str, str] = Field(default_factory=dict)
     resume_failure: Literal["error", "new"] = "error"
     configuration_change: Literal["error", "new"] = "error"
     enable_session_store: bool = True
@@ -1645,6 +1650,9 @@ class CopilotRuntime:
             _max_tools = int(
                 self.config.compatibility.progress_max_tool_events_before_summary
             )
+            # 方案B: 跟踪当前是否有 MCP 工具执行中。工具进行中不判死寂,
+            # 改由 HTTP 探测 kz_mcp_http 的 kz_health 判断插件是否还活着。
+            _tool_started_ts: float | None = None
 
             def _emit(text: str) -> None:
                 """节流发送: 到时间才发, 间隔内丢弃。同步回调里 fire-and-forget。"""
@@ -1668,13 +1676,18 @@ class CopilotRuntime:
             def on_event(event: Any) -> None:
                 # 任意事件都代表 copilot 仍在活动, 刷新活动时间戳
                 self._last_activity = time.time()
+                # 统一在此声明所有 nonlocal(避免 Python 报
+                # "assigned before nonlocal declaration")
+                nonlocal last_assistant
+                nonlocal _reasoning_shown
+                nonlocal _streaming_shown
+                nonlocal _tool_count
+                nonlocal _tool_started_ts
                 match getattr(event, "data", None):
                     case AssistantMessageData():  # noqa: F841
-                        nonlocal last_assistant
                         last_assistant = event
                     case AssistantReasoningDeltaData():  # noqa: F841
                         # AI 推理/思考过程: 首条反馈一次"正在推理"(节流防刷)
-                        nonlocal _reasoning_shown
                         if not _reasoning_shown:
                             _reasoning_shown = True
                             _emit("🧠 AI 正在推理/理解问题...")
@@ -1683,7 +1696,6 @@ class CopilotRuntime:
                         _emit("📝 开始撰写回复")
                     case AssistantStreamingDeltaData():  # noqa: F841
                         # AI 正在生成回复: 里程碑反馈一次(节流)
-                        nonlocal _streaming_shown
                         if not _streaming_shown:
                             _streaming_shown = True
                             _emit("✍️ 正在生成回复...")
@@ -1702,7 +1714,7 @@ class CopilotRuntime:
                         done.set()
                     case ToolExecutionStartData() as d:  # noqa: F841
                         # 工具提示收敛: 第1个必发, 之后改为按间距汇总(不是每条都发)
-                        nonlocal _tool_count
+                        _tool_started_ts = time.time()
                         _tool_count += 1
                         if _tool_count == 1:
                             _emit(f"🔧 正在执行 {d.tool_name}...")
@@ -1711,6 +1723,7 @@ class CopilotRuntime:
                                 f"🔧 已调用 {_tool_count} 个工具, 持续操作中..."
                             )
                     case ToolExecutionCompleteData() as d:  # noqa: F841
+                        _tool_started_ts = None
                         # 完成不逐条发, 否则太碎; 只发失败的(异常值得用户知道),
                         # 成功留给汇总/里程碑, 避免"✅完成"和"执行"一样刷屏。
                         if not d.success:
@@ -1725,6 +1738,7 @@ class CopilotRuntime:
 
 
             max_idle = float(self.config.copilot.max_idle_seconds)
+
             unsubscribe = session.on(on_event)
             try:
                 await session.send(prompt)
@@ -1734,18 +1748,73 @@ class CopilotRuntime:
                     f"Copilot request failed: {self._safe_error(exc)}"
                 ) from exc
 
-            # 活动刷新式超时循环: 有活动续期, 死寂才超时
+            # 方案B: 工具进行中的活性探测。直接 HTTP 调 kz_mcp_http 的
+            # kanzi-api-mcp 端点发 kz_health, 判断 Kanzi 插件是否还在执行。
+            # 插件忙(busy/active_request_id) → 刷新活动继续等; 空闲 → 才真死寂。
+            _api_url = self.config.copilot.kanzi_probe_url
+            _api_headers = self.config.copilot.kanzi_probe_headers
+
+            async def _probe_kanzi_active() -> bool:
+                """探测 Kanzi 插件活性。返回 True=插件还在忙(该继续等)。"""
+                if not _api_url:
+                    return False  # 未配置探测地址 → 不享受延长, 按原死寂逻辑
+                try:
+                    timeout = httpx.Timeout(8.0)
+                    payload = {
+                        "jsonrpc": "2.0", "id": "nlp-probe", "method": "tools/call",
+                        "params": {"name": "kz_health", "arguments": {}},
+                    }
+                    async with httpx.AsyncClient(timeout=timeout, headers=_api_headers) as client:
+                        r = await client.post(_api_url, json=payload)
+                    if r.status_code != 200:
+                        return False
+                    data = r.json()
+                    # 提取 busy / active_request_id
+                    res = (data or {}).get("result") or {}
+                    if isinstance(res, dict):
+                        if res.get("activeRequestId") or res.get("active_request_id"):
+                            return True
+                        # busy 显式 true → 插件在忙
+                        if res.get("busy") is True or str(res.get("busy")).lower() == "true":
+                            return True
+                    # 结果可能在 content[].text
+                    txt = ""
+                    for c in (res.get("content") or []):
+                        if isinstance(c, dict) and c.get("text"):
+                            txt += c["text"]
+                    if re.search(r"active[_\-]?request[_\-]?id\s*[:=]\s*[A-Za-z0-9\-_]+", txt):
+                        return True
+                    if re.search(r"busy\s*[:=]\s*true", txt, re.I):
+                        return True
+                    return False
+                except Exception:
+                    return False  # 探测失败 → 保守不延长
+
+            # 活动刷新式超时循环: 有活动续期; 工具进行中则探测插件活性;
+            # 只有"非工具期 + 超阈值无事件"或"工具期探测空闲"才判真死寂。
             try:
                 while True:
                     try:
                         await asyncio.wait_for(asyncio.shield(done.wait()), timeout=max_idle)
                         break
                     except TimeoutError:
-                        # 这期间是否有活动? 有则继续等; 无则真死寂
-                        if time.time() - self._last_activity >= max_idle:
-                            raise TimeoutError(
-                                f"Copilot timed out after {max_idle:.0f}s of inactivity"
-                            )
+                        now = time.time()
+                        idle_for = now - self._last_activity
+                        if idle_for < max_idle:
+                            continue
+                        # 达到死寂阈值: 若有工具进行中, 探测插件是否还活着
+                        if _tool_started_ts is not None:
+                            if await _probe_kanzi_active():
+                                # 插件还在执行长工具 → 刷新活动继续等
+                                self._last_activity = time.time()
+                                log.info(
+                                    f"⏳ [{key}] 长工具执行中探测到 Kanzi 活跃, "
+                                    f"已执行 {now - _tool_started_ts:.0f}s, 继续等待"
+                                )
+                                continue
+                        raise TimeoutError(
+                            f"Copilot timed out after {max_idle:.0f}s of inactivity"
+                        )
             except TimeoutError as exc:
                 await session.abort()
                 raise CopilotRuntimeError(

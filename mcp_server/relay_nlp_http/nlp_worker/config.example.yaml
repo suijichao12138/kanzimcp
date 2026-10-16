@@ -30,6 +30,13 @@ copilot:
   # 活动刷新式超时阈值: 只要 copilot 还在持续输出/调 MCP 就续期,
   # 超过此秒数无任何事件才判定死寂并超时(长任务不误报)。
   max_idle_seconds: 300
+  # 方案B(长工具活性探测): 工具执行中超过 max_idle 无事件时, 会 POST kz_health
+  # 到这里判断 Kanzi 插件是否还活着; 插件忙则续期继续等, 避免创建大量状态等
+  # 长工具被误判超时。留空(或注释掉)则退回原死寂逻辑。
+  # ⚠️ 用 kanzistudio_mcp 端点(本地 Studio 插件), 不是 kanzi_api_mcp(官方 API)!
+  kanzi_probe_url: http://127.0.0.1:9001/kanzistudio_mcp
+  kanzi_probe_headers:
+    X-Kanzi-User: suijichao
   resume_failure: error
   configuration_change: error
   enable_session_store: true
