@@ -13,7 +13,7 @@ description: Kanzi Studio 动态数据绑定创建与表达式语法。CreateBin
 
 ### 接入（本机中继桥）
 
-客户端 `kanzi-mcp-client.mjs`（workspace 根目录）：中继 `ws://123.57.85.81:58080`，channel `openclaw-main`，调用 `node kanzi-mcp-client.mjs '<tools/call 参数 JSON>'`。返回 `ref_id = @objN` 自动进缓存，重启 Studio 后编号失效须重新枚举。
+客户端 `kanzi-mcp-client.mjs`（workspace 根目录）：中继 `ws://123.57.85.81:58080`，channel `openclaw-main`，调用 `node kanzi-mcp-client.mjs '<tools/call 参数 JSON>'`。返回 `ref_id = @objN` 自动进缓存；Studio 重启后（**仅人工操作，助手绝不重启 Studio**）编号失效须重新枚举。
 
 ### 基本请求格式
 
@@ -38,7 +38,7 @@ description: Kanzi Studio 动态数据绑定创建与表达式语法。CreateBin
 | 标识符 | 说明 |
 |--------|------|
 | `@project` | 自动注入的当前工程对象（target 与 args 均可用） |
-| `@obj123` / `@obj:123` | 对象缓存引用（`@obj:` 新格式等价，每次连接 Studio 后动态分配，重启后失效） |
+| `@obj123` / `@obj:123` | 对象缓存引用（`@obj:` 新格式等价，每次连接 Studio 后动态分配，Studio 重启（**仅人工**）后失效） |
 | `@string:` / `@int:` / `@float:` / `@bool:` / `@null` / `@enum:` / `@type:` / `@node:` / `@vector:` / `@vector3d:` / `@quaternion:` / `@dict:` | v4 参数标识符（见文末总表） |
 
 ### 对象缓存机制
@@ -180,7 +180,7 @@ mcp({"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"kz_invoke"
 
 ### ⚠️ 必须先 AddProperty
 - CreateBinding 前必须确保目标属性已在节点上（先 AddProperty）
-- Studio 重启后所有 ref 失效，需要重新获取
+- Studio 重启（**仅人工操作，助手绝不重启 Studio**）后所有 ref 失效，需要重新获取
 
 ### ⚠️ 绑定表达式语法 — 斜杠 vs 点号（2026-10-14 文档核对澄清）
 

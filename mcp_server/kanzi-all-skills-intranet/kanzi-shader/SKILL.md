@@ -23,7 +23,7 @@ kz_invoke target=@project method=get_MaterialLibrary   # → Materials 库 @objM
 kz_invoke target=@project method=get_BrushLibrary      # → Brushes 库 @objBrushLib
 ```
 
-> ⚠️ `@objN` 引用每次重连/重启 Studio 都会重新编号，**必须先枚举定位**，勿硬编码。
+> ⚠️ `@objN` 引用每次重连都会重新编号，**必须先枚举定位**，勿硬编码。⚠️ **助手绝不重启 Studio**（会造成未保存内容丢失且断连）。
 
 ---
 

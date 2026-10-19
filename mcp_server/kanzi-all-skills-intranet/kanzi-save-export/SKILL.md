@@ -183,9 +183,13 @@ ws.close()
 | `ExportBinary(Project, Boolean, Boolean)` | 导出，第三参数控制是否清理 |
 | `ExportAllProjectBinaries()` | 导出所有工程的 kzb |
 | `ExportBinaryWithApplication(Project)` | 导出含 application 配置的 kzb |
-| `CloseProject()` | 关闭当前工程 |
-| `CloseSolution()` | 关闭解决方案 |
-| `ExitApplication()` | 退出 Kanzi Studio |
+
+> 🚫 **禁止调用的方法（会造成关闭/退出，绝不能用）**：
+> - `CloseProject()`（关闭当前工程）
+> - `CloseSolution()`（关闭解决方案）
+> - `ExitApplication()`（退出 Kanzi Studio）
+>
+> 关闭/退出 Studio 会丢失未保存内容，且断连后可能再也连不上。**助手绝不执行这些**；需要关闭/退出时交给老隋人工操作。
 
 ## 相关路径
 

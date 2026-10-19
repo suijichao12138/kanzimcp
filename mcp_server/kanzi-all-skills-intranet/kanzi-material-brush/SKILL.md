@@ -21,7 +21,7 @@ kz_invoke target=@project method=get_MaterialLibrary   # → Materials 库 @objM
 kz_invoke target=@project method=get_BrushLibrary      # → Brushes 库 @objBrushLib
 ```
 
-> ⚠️ `@objN` 引用每次重连/重启 Studio 都会重新编号，**必须先枚举定位**，勿硬编码跨连接使用。
+> ⚠️ `@objN` 引用每次重连都会重新编号，**必须先枚举定位**，勿硬编码跨连接使用。⚠️ **助手绝不重启 Studio**（会造成未保存内容丢失且断连）。
 > 定位库用 `get_Children` 后按 `name = Material Types / Materials / Brushes` 匹配。
 
 ---
@@ -197,7 +197,7 @@ kz_invoke target=@objInvoker method=SaveProject args=["@project"]
 6. **默认色设在 Material/Brush 上**（`Set("shader.colorStart", "@color:...")`），不是 MaterialType 上。
 7. **全新建名字，不污染**现有 progressBar / progressBarMaterial / redYellow 等。
 8. **保存走 GeneratedCommandInvoker**（`@studio.get_Commands()` → `SaveProject`），勿用 ExecuteCommand。
-9. **`@objN` 引用每次重连/重启动态编号**，连上必须先枚举定位。
+9. **`@objN` 引用每次重连动态编号**（⚠️ **助手绝不重启 Studio**），连上必须先枚举定位。
 10. **MaterialTypePropertyTypes** = 单个 DynamicClass 对象，用 `AddDynamicPropertyType` 加 colorStart/colorEnd（复用已有的全局 ColorDynamicPropertyType）。
 
 ## 相关

@@ -94,6 +94,7 @@ skill MCP 提供 **3 个工具**（9001 网关 `/kanzi_skill_mcp`）：
 2. **一切操作内容走工具**（get_skill 一次拿全小 skill）。
 3. **绝不**整读 `kanzi-properties-all`（254KB）。
 4. **绝不**反复调 docmcp / 工具试错 —— 拿不到就换关键词再试一次，或直接问。
+5. **🚫 绝不重启 / 关闭 / 退出 Kanzi Studio！** 这些操作会造成未保存内容丢失、且断连后可能再也连不上。**禁止**：重启 Studio、`CloseProject()`、`CloseSolution()`、`ExitApplication()`、杀 Studio 进程。遇到 Studio 卡死/异常 → 停止当前操作、重新枚举 ref 恢复连接；需要真重启/关闭时交给老隋人工处理，不自己操作。
 
 ## 🚫 命名铁律（所有创建/命名操作通用）
 

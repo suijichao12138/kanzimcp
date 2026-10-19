@@ -224,7 +224,7 @@ mcp kz_invoke target=@obj1094 method=Set args=["TextureImage", "@obj1071"]   # �
 invoker.SaveProject("@project")  # ✅（@project 上无 SaveProject，必须走 invoker）
 ```
 
-> **@obj 引用每次连接/重启动态重新编号**：连上后必须用 get_FontFamilyLibrary / get_FontDirectory / get_Children 重新枚举定位。
+> **@obj 引用每次连接动态重新编号**（⚠️ **助手绝不重启 Studio**）：连上后必须用 get_FontFamilyLibrary / get_FontDirectory / get_Children 重新枚举定位。
 > **@list: 支持任意集合属性**（不只 FontFiles）：凡文档要求传 List<T> 的参数，都能用 `@list:类型名@obj1,@obj2` 构造。
 
 ---

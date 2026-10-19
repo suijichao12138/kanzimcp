@@ -141,7 +141,7 @@ mcp({"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"kz_invoke"
 
 | 错误信息 | 原因 | 解决 |
 |----------|------|------|
-| `对象引用 '@objXXX' 不存在或已失效` | ref 未缓存或 Studio 重启过 | 重新触发缓存（调一次 get_Name 等方法） |
+| `对象引用 '@objXXX' 不存在或已失效` | ref 未缓存或 Studio 重启过（**仅人工**，助手绝不重启） | 重新触发缓存（调一次 get_Name 等方法） |
 | `The given value "@objXXX" was not a valid value` | ResourceReference 属性传的 @obj 未缓存 | 先 `get_Name` 触发缓存再 Set |
 | `不支持的节点类型或方法` | kz_create_node/kz_delete_node 在新版插件中不可用 | 当前版本可用；如不可用则用 kz_invoke 替代 |
 

@@ -132,7 +132,7 @@ print(urllib.request.urlopen(req, timeout=60).read().decode())
 
 | 标识符 | 作用 | 示例 |
 |--------|------|------|
-| `@objN` / `@obj:N` | 对象缓存引用（**先调一次如 get_Name 触发缓存**；Studio 重启失效） | `@obj238` |
+| `@objN` / `@obj:N` | 对象缓存引用（**先调一次如 get_Name 触发缓存**；Studio 重启（**仅人工**）失效） | `@obj238` |
 | `@node:/path` | 节点路径（target/args 均可） | `@node:/Screens/.../text` |
 | `@project` / `@studio` / `@projectItem` | 内置对象，自动注入 | `@project` |
 | `@proj:<工程名>[/路径]` | 指定工程对象/路径（v12） | `@proj:hmi-alarm/Prefabs/warning` |

@@ -16,7 +16,7 @@ description: Kanzi Studio 状态机创建/配置。StateManager、StateGroup、S
 
 ### 接入（本机中继桥）
 
-客户端 `kanzi-mcp-client.mjs`（workspace 根目录）：中继 `ws://123.57.85.81:58080`，channel `openclaw-main`，调用 `node kanzi-mcp-client.mjs '<tools/call 参数 JSON>'`。返回 `ref_id = @objN` 自动进缓存，重启 Studio 后编号失效须重新枚举。
+客户端 `kanzi-mcp-client.mjs`（workspace 根目录）：中继 `ws://123.57.85.81:58080`，channel `openclaw-main`，调用 `node kanzi-mcp-client.mjs '<tools/call 参数 JSON>'`。返回 `ref_id = @objN` 自动进缓存，Studio 重启后（**仅人工操作**）编号失效须重新枚举。
 
 ### 基本请求格式
 
@@ -41,7 +41,7 @@ description: Kanzi Studio 状态机创建/配置。StateManager、StateGroup、S
 | 标识符 | 说明 |
 |--------|------|
 | `@project` | 自动注入的当前 Kanzi 工程对象（target 与 args 均可用） |
-| `@obj123` / `@obj:123` | 对象缓存引用（`@obj:` 新格式等价，每次连接 Studio 后动态分配，重启后失效） |
+| `@obj123` / `@obj:123` | 对象缓存引用（`@obj:` 新格式等价，每次连接 Studio 后动态分配，Studio 重启（**仅人工**）后失效） |
 | `@type:名字` | 用干净类型短名创建（如 `@type:StateManager` / `@type:StateGroup` / `@type:State`） |
 | `@obj:parent` | 创建时的 parent 参数（引用父对象） |
 | `@string:` / `@enum:` / `@null` / `@node:` 等 | v4 参数标识符（见文末总表） |
@@ -334,8 +334,8 @@ mcp({"jsonrpc":"2.0","id":"4","method":"tools/call","params":{"name":"kz_invoke"
 
 | 错误信息 | 原因 | 解决 |
 |----------|------|------|
-| Kanzi Studio 卡死，所有 API 返回空 | BeginBatchModification 无对应的 CommitBatchModification | 重启 Studio |
+| Kanzi Studio 卡死，所有 API 返回空 | BeginBatchModification 无对应的 CommitBatchModification | **不要重启 Studio！** 停止当前批量操作，重新枚举 ref 恢复连接；如必须人工干预，请老隋处理 |
 | 子项看起来像 StatePluginWrapper，怀疑不是 StateObject | 只看了 get_Children 的 type 字段 | 用 `get_TargetObjectPath` 判别：能返回 `.` 就是 StateObject，确非根 State |
-| ref 不存在 | Studio 重启过 | 重新获取所有 ref |
+| ref 不存在 | Studio 重启过（**仅人工**） | 重新获取所有 ref |
 
 > 调试工具（kz_list_refs / kz_ref_methods / kz_ref_properties）和 v4 参数标识符总表 → `kanzi-studio-mcp` skill。

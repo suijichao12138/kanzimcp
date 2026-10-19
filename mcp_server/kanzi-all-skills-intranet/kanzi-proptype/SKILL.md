@@ -11,7 +11,7 @@ description: Kanzi 创建自定义属性类型（Property Types / DynamicPropert
 r = mcp({"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"@project","method":"get_PropertyTypeLibrary","args":[]}}})
 # 返回 ref_id = @obj2
 
-ptlib = "@obj2"  # 每次重启 Studio 后需要重新获取
+ptlib = "@obj2"  # 每次 Studio 重启（仅人工操作，助手绝不重启）后需要重新获取
 ```
 
 ### 1. 创建 String / Text 属性（v4 实测通过）
