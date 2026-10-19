@@ -1,6 +1,6 @@
 ---
 name: kanzi-resource-create
-description: Kanzi 创建 Resource 资源条目（ResourceDictionary + CreateResourceEntry）。在节点/页面创建资源条目（颜色刷/图片等），resourceID 的 @string 前缀坑。不含节点上设置资源引用（那是 kanzi-text-image / kanzi-resource-set）。
+description: Kanzi 创建 Resource 资源条目（ResourceDictionary + CreateResourceEntry）。在节点/页面创建资源条目（颜色刷/图片等），resourceID 的 @string 前缀坑。不含节点上设置资源引用（那是 kanzi-resource-set）。
 ---
 
 # 创建 Resource 资源条目（在节点/页面创建资源条目）

@@ -158,7 +158,7 @@ kz_create_node parent=/Screens/Screen/RootPage type=NinePatchImage2D name=bg_9sl
 - 9 块图（ResourceReference，引用图片）：`NinePatchImage2D.ImageTopLeft/Top/TopRight/Left/Center/Right/BottomLeft/Bottom/BottomRight`
 - 拉伸类型：`NinePatchImage2D.StretchTypeTop/Bottom/Left/Right/Center`
 - 图片引用暂不填时，只建节点即可（9 块属性已自带上）。
-- 以后设图用 `set_Item(属性, KzResourceID:xxx 或 @obj图片)`。
+- **设图（赋图片资源）→ `kanzi-resource-set` skill**（KzResourceID/图片资源引用设置）。
 
 > 布局节点（StackLayout2D 等）→ `kanzi-layout` skill。
 > 属性增删改查 → `kanzi-prop-set` skill。

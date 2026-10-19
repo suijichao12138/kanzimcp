@@ -41,7 +41,7 @@ skill MCP 提供 **3 个工具**（9001 网关 `/kanzi_skill_mcp`）：
 | 创建节点（EmptyNode2D/TextBlock2D/插件节点/九宫格） | `kanzi-node-create` |
 | 布局节点（StackLayout2D 方向/创建） | `kanzi-layout` |
 | 属性添加/设置/删除（set_Item/AddProperty） | `kanzi-prop-set` |
-| 文本/图片/前景/背景色设置 | `kanzi-text-image` |
+| 文本内容/排版（TextBlock2D 配置） | `kanzi-textblock` |
 | TextBlock2D 完整配置 | `kanzi-textblock` |
 | 自定义属性类型（Property Types） | `kanzi-proptype` |
 | 变换定位（RenderTransformation） | `kanzi-transform` |
@@ -72,7 +72,7 @@ skill MCP 提供 **3 个工具**（9001 网关 `/kanzi_skill_mcp`）：
 | **创建** 颜色笔刷 | `kanzi-resource-brush` |
 | **创建** 纹理 | `kanzi-resource-texture` |
 | **创建** 字体 | `kanzi-resource-font` |
-| **设置** 节点上的资源引用（ForegroundBrush/Image 等赋资源） | `kanzi-text-image` |
+| **设置** 节点上的资源引用（前景/背景色/图片/字体/状态机） | `kanzi-resource-set` |
 | 渐变材质笔刷三层 | `kanzi-material-brush` |
 | Shader 操作 | `kanzi-shader` |
 
@@ -128,7 +128,7 @@ skill MCP 提供 **3 个工具**（9001 网关 `/kanzi_skill_mcp`）：
 
 1. **创建 resource**（颜色刷/纹理/字体/资源条目）→ 用 `kanzi-resource-create` / `kanzi-resource-brush` / `kanzi-resource-texture` / `kanzi-resource-font`。
    - 创建是 `CreateBrush` / `CreateProjectItem` / `CreateResourceEntry` 这类**工厂方法**。
-2. **设置 resource 引用**（把已创建的 resource 赋给节点的 ForegroundBrush/Image 等属性）→ 用 `kanzi-text-image`。
+2. **设置 resource 引用**（把已创建的 resource 赋给节点的 ForegroundBrush/Image/FontFamily/StateManager 等）→ 用 `kanzi-resource-set`。
    - 设置是 `set_Item` / `Set` 这类**赋值**，值用 `@obj<引用>` 或 `KzResourceID:xxx`。
 3. **绝不在创建节点的 skill（kanzi-node-create）里做 resource 操作**；创建节点只建节点骨架。
 4. **绝不在创建 resource 的 skill（kanzi-resource-*）里做设置**；各管各的。
