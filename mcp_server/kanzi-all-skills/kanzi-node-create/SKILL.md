@@ -137,10 +137,23 @@ kz_create_node parent=/Screens/Screen/RootPage type=NinePatchImage2D name=bg_9sl
 > ⚠️ 不存在的名：`Node9Slice2D` / `Image9Slice2D` / `NinePatchImage`（都报“不支持的节点类型”）。真名只有 `NinePatchImage2D`。
 
 ### 该节点自带属性（无需 AddProperty，创建即带）
-- 9 块图（ResourceReference，引用图片）：`NinePatchImage2D.ImageTopLeft/Top/TopRight/Left/Center/Right/BottomLeft/Bottom/BottomRight`
+- 9 块图：`NinePatchImage2D.ImageTopLeft/Top/TopRight/Left/Center/Right/BottomLeft/Bottom/BottomRight`
 - 拉伸类型：`NinePatchImage2D.StretchTypeTop/Bottom/Left/Right/Center`
-- 图片引用暂不填时，只建节点即可（9 块属性已自带上）。
-- **设图（赋图片资源）→ `kanzi-resource-set` skill**（KzResourceID/图片资源引用设置）。
+- 图片暂不填时，只建节点即可（9 块属性已自带上）。
+- **设图 → `kanzi-prop-set` skill**（直接设置图片，见「图片 / 九宫格设置」）。
 
 > 布局节点（StackLayout2D 等）→ `kanzi-layout` skill。
 > 属性增删改查 → `kanzi-prop-set` skill。
+
+## 删除节点
+
+```python
+# 按路径删除节点（含子节点）
+mcp({"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"kz_delete_node","arguments":{"node_path":"/Screens/Screen/RootPage/Info/warning/text"}}})
+```
+
+> ⚠️ 若 `kz_delete_node` 不可用（新版插件报“不支持的节点类型或方法”）→ 用 `kz_invoke` 调节点的 `Delete()` 方法：
+> ```python
+> mcp kz_invoke target=@节点 method=Delete args=[]
+> ```
+> ⚠️ 注意：`Delete()` 删除的是整个项目项（含子层级），确认目标再删；误删无法撤销。

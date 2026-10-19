@@ -30,16 +30,6 @@ bridge 支持多工程操作。默认 `@project` 指向 ActiveProject，可在�
 - 全程 **ActiveProject 不变**（方案 A 承诺），不打扰你在 Studio 正编辑的工程。
 
 
-
-## 接入（内网 HTTP MCP）
-
-通过内网 HTTP MCP server（`relay_nlp_http/kz_mcp_http.py`）连接 Kanzi Studio，直接调用 MCP 工具，无需本地客户端脚本。
-
-- **HTTP MCP**：`http://10.10.118.152:9001/mcp`（请求头 `X-Kanzi-User: <用户名>`，白名单见 users.json，如 `suijichao`）
-- **中继通道**：`ws://10.10.118.152:58080/<用户名>`（relay_multi 监听 58080，路径决定连哪台 Kanzi，须与 kz_mcp_http.py 一致）
-- 依赖 MCP 工具：`kz_enum_all_windows`、`kz_screenshot_preview`（由 Kanzi 端插件暴露；若内网 Kanzi 端未暴露，需在 Kanzi 端插件或 kz_mcp_http.py 中补充）。
-
-
 ## 完整流程（两步）
 
 ```python

@@ -52,16 +52,12 @@ skill MCP 提供 **3 个工具**（9001 网关 `/kanzi_skill_mcp`）：
 ### 绑定/数据
 | 任务 | skill 名 |
 |------|---------|
-| 创建/修改/查询/删除绑定 | `kanzi-binding` |
-| 绑定表达式完整语法（运算符/函数） | `kanzi-binding-expr` |
+| 创建/修改/查询/删除绑定 + 表达式语法 | `kanzi-binding` |
 
 ### 动画/状态/触发
 | 任务 | skill 名 |
 |------|---------|
-| 读动画数据（定位库/读属性/字段） | `kanzi-anim-read` |
-| 创建动画对象 + 完整流程 | `kanzi-anim-create` |
-| 动画播放器 + 启停 | `kanzi-anim-player` |
-| 关键帧 + 动画组 | `kanzi-anim-clips` |
+| 动画全流程（读/创建/关键帧/播放器/启停） | `kanzi-animation` |
 | 状态机（创建/过渡） | `kanzi-state-manager` |
 | 触发器（条件/动作） | `kanzi-trigger` |
 
@@ -69,19 +65,16 @@ skill MCP 提供 **3 个工具**（9001 网关 `/kanzi_skill_mcp`）：
 | 任务 | skill 名 |
 |------|---------|
 | **创建** Resource 资源条目（ResourceDictionary+CreateResourceEntry） | `kanzi-resource-create` |
-| **创建** 颜色笔刷 | `kanzi-resource-brush` |
-| **创建** 纹理 | `kanzi-resource-texture` |
-| **创建** 字体 | `kanzi-resource-font` |
-| **设置** 节点上的资源引用（前景/背景色/图片/字体/状态机） | `kanzi-resource-set` |
+| **创建** 素材（颜色笔刷/纹理/字体） | `kanzi-asset-create` |
+| **设置** 节点上的资源引用（前景/背景色/字体/状态机） | `kanzi-resource-set` |
+| 图片/九宫格设置（Image2D.Image/9 块图，在属性设置里） | `kanzi-prop-set` |
 | 渐变材质笔刷三层 | `kanzi-material-brush` |
 | Shader 操作 | `kanzi-shader` |
 
 ### 本地化
 | 任务 | skill 名 |
 |------|---------|
-| 本地化 CRUD（增删改查） | `kanzi-loc-crud` |
-| 本地化读取（ExportTranslations） | `kanzi-loc-read` |
-| 本地化删表+建表 | `kanzi-loc-delete` |
+| 本地化全流程（读/CRUD/删表建表） | `kanzi-localization` |
 
 ### 工程/工具
 | 任务 | skill 名 |
@@ -122,14 +115,17 @@ skill MCP 提供 **3 个工具**（9001 网关 `/kanzi_skill_mcp`）：
 
 > 用 kz_create_node / CreateProjectItem / CreateBrush / CreateNodeAliasEntry 等创建时，`name` / `@string:` 参数都遵守此规则。
 
-## 🚫 Resource 使用约束（创建 vs 设置，必须分开！）
+## 🚫 资源引用写法（两种，别混！）
 
-> **最容易搞混的地方，务必遵守**：
+| 你要引用的是… | 写法 | 示例 |
+|---|---|---|
+| **素材/资源对象**（brush/纹理/字体/状态机，先用 get_Children 拿到它的引用） | `@obj<引用>` | `args=["Node2D.ForegroundBrush", "@obj5736"]` |
+| **Resource 条目**（ResourceDictionary 里用 resourceID 注册的条目） | `KzResourceID:资源名` | `args=["Node2D.ForegroundBrush", "KzResourceID:FFFFFF"]` |
 
-1. **创建 resource**（颜色刷/纹理/字体/资源条目）→ 用 `kanzi-resource-create` / `kanzi-resource-brush` / `kanzi-resource-texture` / `kanzi-resource-font`。
-   - 创建是 `CreateBrush` / `CreateProjectItem` / `CreateResourceEntry` 这类**工厂方法**。
-2. **设置 resource 引用**（把已创建的 resource 赋给节点的 ForegroundBrush/Image/FontFamily/StateManager 等）→ 用 `kanzi-resource-set`。
-   - 设置是 `set_Item` / `Set` 这类**赋值**，值用 `@obj<引用>` 或 `KzResourceID:xxx`。
-3. **绝不在创建节点的 skill（kanzi-node-create）里做 resource 操作**；创建节点只建节点骨架。
-4. **绝不在创建 resource 的 skill（kanzi-resource-*）里做设置**；各管各的。
-5. 拿不准「这个操作是创建还是设置」→ 先 `list_skills()` 看描述，再 `get_skill` 对应 skill。
+> ⚠️ 前缀拼写：是 `KzResourceID:`，不是 `resourceID:` / `resource:`（少 `Kz` 会失败）。
+
+### 对应的 skill
+- 创建 Resource 条目（ResourceDictionary+CreateResourceEntry）→ `kanzi-resource-create`
+- 设置 Resource 引用（用 KzResourceID）→ `kanzi-resource-set`
+- 创建素材（brush/纹理/字体）→ `kanzi-asset-create`
+- 图片/九宫格设置（直接设图，不涉及引用）→ `kanzi-prop-set`

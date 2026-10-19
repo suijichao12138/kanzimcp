@@ -1,6 +1,6 @@
 ---
 name: kanzi-prop-set
-description: Kanzi 属性增删改查：set_Item/get_Item/AddProperty/RemoveProperty、批量操作、查询、中文Unicode值设置、常见错误处理。
+description: Kanzi 属性增删改查：set_Item/get_Item/AddProperty/RemoveProperty、批量操作、查询、中文Unicode值设置、常见错误处理。含图片/九宫格设置（Image2D.Image、NinePatchImage2D.Image*）。
 ---
 
 ## 核心原则
@@ -144,3 +144,44 @@ mcp({"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"kz_invoke"
 | `对象引用 '@objXXX' 不存在或已失效` | ref 未缓存或 Studio 重启过 | 重新触发缓存（调一次 get_Name 等方法） |
 | `The given value "@objXXX" was not a valid value` | ResourceReference 属性传的 @obj 未缓存 | 先 `get_Name` 触发缓存再 Set |
 | `不支持的节点类型或方法` | kz_create_node/kz_delete_node 在新版插件中不可用 | 当前版本可用；如不可用则用 kz_invoke 替代 |
+
+
+## 图片 / 九宫格设置
+
+> 给 Image2D / 九宫格节点**直接设置图片**（图片路径/图片名），不涉及资源概念。节点创建见 `kanzi-node-create`。
+
+### Image2D 节点设置图片
+
+```python
+# Image2D.Image 属性（Image2D 节点自带，无需 AddProperty）
+# 方式1：直接给图片路径（Textures 库里的图片）
+mcp kz_invoke target=@image_1 method=set_Item args=["Image2D.Image", "Textures/adas/green_sig_num"]
+# 方式2：直接给图片名
+mcp kz_invoke target=@image_1 method=set_Item args=["Image2D.Image", "green_sig_num"]
+```
+
+### 九宫格节点设置 9 块图片
+
+> 九宫格节点创建见 `kanzi-node-create`（类型 NinePatchImage2D）。9 块图属性创建节点时就自带（无需 AddProperty），直接设图片即可。
+
+```python
+# 9 块图属性：ImageTopLeft/Top/TopRight/Left/Center/Right/BottomLeft/Bottom/BottomRight
+# 方式1：直接给图片路径（Textures 库里的图片）
+mcp kz_invoke target=@bg_9slice method=set_Item args=["NinePatchImage2D.ImageTopLeft", "Textures/adas/green_sig_num"]
+# 方式2：直接给图片名
+mcp kz_invoke target=@bg_9slice method=set_Item args=["NinePatchImage2D.ImageCenter", "center_tex"]
+# 其余 7 块同理（Top/TopRight/Left/Right/BottomLeft/Bottom/BottomRight）
+```
+
+### 图片来源（Textures 库）
+
+```python
+# Textures 库 → 子库 → 图片（拿路径/名字）
+mcp kz_invoke target=@project method=get_Children   # 找 "Textures" 行 → 库引用
+mcp kz_invoke target=<Textures库> method=get_Children  # 子库 → 子库引用
+mcp kz_invoke target=<子库> method=get_Children     # → green_sig_num（get_Path = Textures/adas/green_sig_num）
+# 注意：图片引用每次连接 Studio 动态分配，需重新定位，不能硬编码
+```
+
+> 创建纹理/图片 → `kanzi-asset-create` skill。
+> 设置颜色/字体等资源引用 → `kanzi-resource-set` skill。

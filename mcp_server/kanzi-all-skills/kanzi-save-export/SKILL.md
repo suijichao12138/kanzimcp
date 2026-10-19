@@ -30,7 +30,6 @@ bridge 支持多工程操作。默认 `@project` 指向 ActiveProject，可在�
 - 全程 **ActiveProject 不变**（方案 A 承诺），不打扰你在 Studio 正编辑的工程。
 
 
-
 > ⚠️ **不要用 `kz_save_project` 工具保存！** 该工具分派到 `SaveProject()` 内部找 `Save` 方法反射不到（@project 包装类型无公开 Save），落到 `ExecuteCommand("Save")` fallback 又反射不到 `ExecutePluginCommand`，报 "找不到 ExecutePluginCommand"。**正确保存方式如下（通过 GeneratedCommandInvoker）**。
 
 ## 概述

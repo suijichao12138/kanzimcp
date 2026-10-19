@@ -1,6 +1,6 @@
 ---
 name: kanzi-textblock
-description: Kanzi TextBlock2D 文本排版配置：创建文本节点、文本内容 TextConcept.Text、字号 FontStyleConcept.Size、对齐/换行/字距、自定义属性。字体/颜色/图片等资源引用设置见 kanzi-resource-set。
+description: Kanzi TextBlock2D 文本排版配置：创建文本节点、文本内容 TextConcept.Text、字号 FontStyleConcept.Size、对齐/换行/字距、自定义属性。字体/颜色设置见 kanzi-resource-set。
 ---
 
 ## TextBlock2D 文本排版配置
@@ -47,4 +47,4 @@ mcp kz_invoke target=@节点 method=AddProperty args=["warning.value"]
 
 > **Text Block 2D 文本颜色 → `Node2D.ForegroundBrush`**（颜色刷，需先 AddProperty）。
 > **`Font Color` 只能给 Text Block 3D，不能设置 Text Block 2D 颜色**。
-> 颜色/字体/图片等**资源引用**的设置 → `kanzi-resource-set` skill。
+> 颜色/字体等的设置 → `kanzi-resource-set` skill。

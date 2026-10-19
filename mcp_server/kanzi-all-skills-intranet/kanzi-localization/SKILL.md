@@ -1,13 +1,147 @@
 ---
-name: kanzi-loc-crud
-description: Kanzi 本地化 CRUD（首选 v13 kz_loc_entry_*）：新增/更新 text 条目、字体资源引用条目、增删语言列。含正确构造函数。
+name: kanzi-localization
+description: Kanzi 本地化全流程：读取（定位表/ExportTranslations 读全表/kz_localized_resources 读字体引用）、CRUD（首选 v13 kz_loc_entry_* 增改删/增删语言列）、删表+建表（低层重建）。含正确构造函数与删除事故警示。
 ---
+
 ## 🚫 命名铁律（创建前必读）
 
-> 创建任何东西（节点/资源/动画/别名/条目）时，**名字禁止特殊字符**：`\` `/` `|` `.` `:` `*` `?` `"` `'` `<` `>` 空格。
+> 创建任何东西（节点/动画/别名/条目）时，**名字禁止特殊字符**：`\` `/` `|` `.` `:` `*` `?` `"` `'` `<` `>` 空格。
 > **允许中文，推荐英文**（中文名可用，但英文更稳妥，避免跨工具编码问题）。
 > 不要以数字开头（部分 API 限制）。
 > 错误：`text/header` `bg.1` `a|b` `C:\temp` `new node`；正确：`text_header` `bg_1` `标题文本` `header-text`。
+
+# Kanzi 本地化全流程
+
+## 🚨 删除事故警示（2026-08-08 血泪教训，务必先读）
+
+> **`Delete()` 删的是整张 LocalizationTable 项，不是单行！** 我在排查删除方法时对表对象调用 `Delete` 返回 `True`，**结果整张表（991 行）被删**——路径 `/Localization/Localization Table` 直接无法解析，`Localization` 库 children 变空。
+>
+> **教训：**
+> 1. **绝不能对自己不明确语义的方法随便调用**，尤其删除类。调任何方法前先确认它作用在什么对象、删什么。
+> 2. `Delete()` 在项目项上 = 删除整个项，危险。v13 删单行用 `kz_loc_entry_delete`（底层 Remove(key,true)），**不能用项目项的 Delete 删单行**。
+> 3. 探测删除方法名时，先在**备份/测试工程**上做，别在真实数据上试。
+> 4. 出事第一时间停写操作、检查 Undo/版本控制恢复，并如实报告。
+
+## 一、定位 Localization Table（底层）
+
+```python
+# 1) @project.get_Children() 里有名为 "Localization" 的库（不是 get_LocalizationLibrary）
+mcp kz_invoke target=@project method=get_Children
+
+# 2) Localization 库 (LocaleLibraryPluginWrapper) 的 children 里有 Localization Table
+mcp kz_invoke target=/Localization method=get_Children
+#   → ref_id=@objXXX, type=LocalizationTablePluginWrapper, name="Localization Table"
+
+# 完整路径定位表
+LT="/Localization/Localization Table"
+```
+
+> ⚠️ `@project` 上**没有** `get_LocalizationLibrary`（不存在）；Localization 库是 children 里的普通库。
+
+## 二、读取（ExportTranslations 读全表 + kz_localized_resources 读字体引用）
+
+### ⭐ 核心读取通道：ExportTranslations()（2026-08-08 实测打通）
+
+**最关键的教训：`Localization Table.get_Children()` 返回空（len=0）是误导——它不代表没数据！**
+**正确的枚举方式是 `ExportTranslations()`**（反编译老隋 ExcelPlugin 里的 MemberRef 引用发现的）。
+
+```python
+# 1) 枚举所有行 —— 返回 LocalizationTableRow 列表（海量，实测 cluster_hmi = 991 行）
+t = kz_invoke target=/Localization/Localization Table method=ExportTranslations args=[]
+#   → 每行一个: ref_id=@objNNN, type=LocalizationTableRow
+
+# 2) 每行读 key（资源名）
+kz_invoke target=@行Ref method=get_ResourceName args=[]
+#   → ✅ 结果: 1196   （key，如 "1196"/"131"/"2091"_1"）
+
+# 3) 每行读翻译 —— 返回多个 KeyValuePair<string,string>（一个语言一个）
+kz_invoke target=@行Ref method=get_Translations args=[]
+#   → 每个: ref_id=@objNNN, type=KeyValuePair`2, name=[en, xxx]
+
+# 4) 每个 KeyValuePair 读语言码 + 翻译文本
+kz_invoke target=@KVPRef method=get_Key args=[]     # → ✅ 结果: en / zh-CHS
+kz_invoke target=@KVPRef method=get_Value args=[]   # → ✅ 结果: 翻译文本
+# 也可 ToString() → [en, Stop vehicle immediately and move away.]
+```
+
+### 完整读取链路（实测代码）
+```python
+# 枚举行
+t=call("Localization/Localization Table","ExportTranslations",[])
+row_refs=list(set(re.findall(r'ref_id = (@obj\d+)\n▪ type = LocalizationTableRow', t)))
+# 每行
+for row in row_refs:
+    key=call(row,"get_ResourceName",[])
+    trans=call(row,"get_Translations",[])
+    kvps=re.findall(r'ref_id = (@obj\d+)\n▪ type = KeyValuePair', trans)
+    for k in kvps:
+        lang=call(k,"get_Key",[]); val=call(k,"get_Value",[])
+```
+
+### 实测数据（cluster_hmi）
+- **总行数：991 行**（数据量很大，get_Children 空是假象）
+- **语言：`en` + `zh-CHS`** 两种
+- 示例：
+  | key | en | zh-CHS |
+  |---|---|---|
+  | 1196 | Complex environment, drive safely | 环境复杂，请注意安全 |
+  | 131 | Door release motor fault | 车门释放电机故障 |
+  | 2091 | (空) | 请立即控制车辆 |
+  | 2278 | (空) | 请小心驾驶 |
+- 注意：部分 key 的 en 为空、只有 zh-CHS 有值（数据本身如此）
+
+### ⭐ 读取资源/字体引用（v13 `kz_localized_resources`，get_Entries 通道 2026-08-18 打通）
+
+> **ExportTranslations 只拿得到纯文本行（get_Translations 是 string 字典），读不到字体/资源引用。**
+> 要读**字体（FontFamily）等资源引用**，走 `kz_localized_resources` → 内部对象 `ResourceLocalizationItems.LocalizationTable`
+> 上的 **`get_Entries()`**（接口 `ResourceDictionaryInterface` 的显式实现，普通反射/ExportTranslations 看不到）。
+> 这是 V8~V12 一直做不到的，v13 打通。
+
+### 调用
+```json
+{"name":"kz_localized_resources","arguments":{"target":"/Localization/Localization Table"}}
+```
+
+### 返回结构（实测 227 行全表条目）
+每个条目 `ResourceDictionaryEntry`（`Rightware.Kanzi.Tool.Logic.Project.ResourceDictionaryItems.ResourceDictionaryEntry`）：
+
+| 字段 | 含义 |
+|---|---|
+| `key` | resourceName（如 `SourceHanSansSCfontFamily` / `里程`） |
+| `isText` | **True=文本条目**；False=资源条目（字体等） |
+| `isAlias` / `isUrl` | 别名 / URL 标记 |
+| `resourceRef` | ProjectItemReference（资源引用对象 @obj） |
+| `targetRef` / `targetType` / `targetName` | **Target 目标**（字体=FontFamily，targetName=字体名） |
+
+### 字体（FontFamily）读取实测
+```json
+// kz_localized_resources 返回里 key 含 fontFamily 的条目：
+{
+  "key": "SourceHanSansSCfontFamily",
+  "isText": false,               // ← 非文本，所以 get_Translations 读不出！
+  "resourceRef": "@obj13",      // ProjectItemReference
+  "targetRef": "@obj14",
+  "targetType": "FontFamily",
+  "targetFullType": "Rightware.Kanzi.Tool.Logic.Project.ResourceFileItems.FontFamily",
+  "targetName": "SourceHanSansSC_new"   // ← 字体名
+}
+// SourceHanSansSCfontFamily_medium 同样 → targetName=SourceHanSansSC_new
+```
+
+### 与 ExportTranslations 的区别
+| 通道 | 能拿什么 | 不能拿什么 |
+|---|---|---|
+| `ExportTranslations()` → LocalizationTableRow | 每行 key + **纯文本** translations(string字典) | **字体/资源引用**（isText=False 的行读不到） |
+| `get_Entries()` → ResourceDictionaryEntry | 每行 key + **ResourceReference→Target(FontFamily)** + isText/isAlias/isUrl | 直接的翻译文本字典（文本值要走另一个入口） |
+
+### 技术要点（v13 插件实现）
+- 底层：内部对象 `ResourceLocalizationItems.LocalizationTable` 实现 `ResourceDictionaryInterface`（有 `get_Entries` 等）
+- `get_Entries()` → `IEnumerable<ResourceDictionaryEntry>`（所有条目：文本 + 字体 + 资源）
+- `ResourceDictionaryEntry.get_ResourceReference()` → `ProjectItemReference` → `get_Target()` → **FontFamily**
+- 方法为**显式接口实现**（普通 `GetMethod` 看不到），须用 `GetInterfaceMap` 精确调（v13 `TryCallInterfaceGetter`）
+- **安全**：预算保护 + 去重（Seen），绝无递归，不会卡死
+
+## 三、CRUD（首选 v13 `kz_loc_entry_*`）
 
 ## 🥇 首选：v13 MCP 工具 `kz_loc_entry_*`（完整 CRUD，2026-08-18 add/set 打通 + 回归）
 
@@ -168,3 +302,40 @@ node kanzi-mcp-client.mjs '{"name":"kz_loc_entry_delete_language","arguments":{"
 v13 的 `kz_loc_entry_*` **按 key 单个增/改/删**，底层 `SetOrCreate`/`Remove`，**不删整表、不重建**，字体/资源引用天然保留，无需手动备份。
 
 > ⚠️ 但要改的是**真实表**，确认好 target、key、rows 再提交。删单条用 `kz_loc_entry_delete`（绝不用项目项的 `Delete()` 删单行）。
+
+## 四、删表 + 建表（低层重建，高风险）
+
+> 日常增删改查用 `kz_loc_entry_*`（按 key 单个操作，不删表）。**删表/建表**是底层重建技能（删整表重建、实现删行/改字段/重命名），仅在你需要重建整表时用，**高风险、操作真实表，务必先备份/在测试工程验证**。
+
+### 删表：`kz_invoke target=表对象 method=Delete`（危险）
+```python
+# 先定位表对象（ExportTranslations list 或 get_Children 拿 ref），再调用 Delete
+@obj4521.Delete()   # 例：对 LocalizationTablePluginWrapper 调 Delete 返回 True
+# → 整张表项被删：路径 /Localization/xxx 无法解析，Localization 库 children 变空
+```
+> **Delete() = 删整个项目项，不是删行！** 只能在确认数据有备份/可恢复时用。
+
+### 建表：`@project.CreateProjectItem`（关键：参数顺序）
+```python
+# 参数顺序 = [@type:完整类型名, @string:表名, @obj:Localization库]（type→名字→库！）
+# ❌ 我之前写成 [type, 库, 名字] 一直识别不了；正确见下：
+@project.CreateProjectItem(args=[
+  "@type:Rightware.Kanzi.Studio.PluginInterface.LocalizationTable",
+  "@string:新表名",
+  "@obj:XXX"   # get_LocaleLibrary() 拿到的 Localization 库
+])
+# → 返回新表 LocalizationTablePluginWrapper，出现在库 children
+```
+> **参数顺序是最大坑**：`[type, name, lib]` 才对（跟 SingleTexture 等资源同模式）。
+> `@type:` 用**接口全名** `Rightware.Kanzi.Studio.PluginInterface.LocalizationTable`（能 Type.GetType 解析）。
+
+### 完整链路：读全表 → 内存改 → 删旧表 → 建新表 → 写回（实现删行/改字段）
+因为 `ImportTranslations` 写的是**全新构造的行**（3 参 new 随便改 resourceName/defaultText），所以：
+| 想实现 | 做法 | 结果 |
+|---|---|---|
+| 删除行 | 内存里去掉该行 → 重建只写保留行 | ✅ 实测（REC_1 丢了） |
+| 改 defaultText | 新行带新默认文本 → 重建写上 | ✅ 实测（"第二行"→"第二行改过的DT"） |
+| 改 resourceName | 新行用新 key → 重建写上 | ✅ 同理会 |
+| 加/改翻译 | translations 全新构造 | ✅ 实测 |
+> ⚠️ 跨线程报"无法访问对象"是**表面现象**（V7 线程策略），实际仍写入成功，重试/继续即可（读回已验证）。
+> ⚠️ 删除/重建是**高风险**操作（会删整表）——确认好备份再操作；日常单条增删改用 `kz_loc_entry_*`。

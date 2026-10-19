@@ -59,5 +59,5 @@ mcp kz_invoke target=@objRD method=get_Resources args=[]
 - 资源 ref 每次连接 Studio 动态分配，需重新定位，不能硬编码。
 - **保存用正规路径**：`@studio.get_Commands()` → `GeneratedCommandInvoker` → `SaveProject(@project)`（⚠️ 不要用 `kz_save_project`，那个工具是坏的/残缺的，见 kanzi-save-export skill）。
 
-> 颜色笔刷/纹理/字体等资源创建 → `kanzi-resource-brush` / `kanzi-resource-texture` / `kanzi-resource-font` skill。
+> 颜色笔刷/纹理/字体等素材创建 → `kanzi-asset-create` skill。
 

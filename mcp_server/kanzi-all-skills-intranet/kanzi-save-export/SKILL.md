@@ -30,7 +30,6 @@ bridge 支持多工程操作。默认 `@project` 指向 ActiveProject，可在�
 - 全程 **ActiveProject 不变**（方案 A 承诺），不打扰你在 Studio 正编辑的工程。
 
 
-
 > ⚠️ **不要用 `kz_save_project` 工具保存！** 该工具分派到 `SaveProject()` 内部找 `Save` 方法反射不到（@project 包装类型无公开 Save），落到 `ExecuteCommand("Save")` fallback 又反射不到 `ExecutePluginCommand`，报 "找不到 ExecutePluginCommand"。**正确保存方式如下（通过 GeneratedCommandInvoker）**。
 
 ## 概述
@@ -116,9 +115,10 @@ r = mcp({
 ## 完整 Python 示例
 
 ```python
-# 接入：内网 HTTP MCP（relay_nlp_http/kz_mcp_http.py） http://10.10.118.152:9001/mcp，请求头 X-Kanzi-User: <用户名>
-# 中继通道：ws://10.10.118.152:58080/<用户名>；调用 = 直接调 MCP 工具 kz_invoke（参数 {"target":...,"method":...,"args":[...]}）
-# 下面 mcp({...}) 调用 = 对 kz_invoke 工具的一次 MCP tools/call JSON-RPC（底层反射调用参考）。
+# 本机中继桥：通过 ws://123.57.85.81:58080 调用 kz_invoke（客户端 kanzi-mcp-client.mjs）
+# 调用：node kanzi-mcp-client.mjs '{"name":"kz_invoke","arguments":{"target":...,"method":...,"args":[...]}}'
+# 下面 mcp({...}) 调用 = 对中继桥 kz_invoke 工具的一次调用（tools/call JSON-RPC）。
+# 说明：此例保留了手动 tools/call 结构，仅作底层反射调用参考；日常用 kanzi-mcp-client.mjs 只需传 tools/call 参数 JSON。
 
 # 1. 获取命令执行器
 r = mcp({
