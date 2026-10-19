@@ -122,26 +122,8 @@ mcp kz_create_node parent=/Screens/Screen/RootPage/Info type=PluginTextscroll na
 2. 不确定插件类型名时，**先 `get_ComponentTypeLibrary` → `get_Items` 枚举**，认准 `Plugin` 开头的条目名再创建。**不要脑补/猜类型名**（曾多次因脑补枚举/类型名踩坑）。
 3. 插件视觉节点创建后包装类型是 `ComponentNode2DPluginWrapper`。
 
-### 设对齐（Node.HorizontalAlignment / Node.VerticalAlignment，老隋给的枚举表）
-> 对齐是**枚举属性**，设置同样**必须 `@int:`**（与 Direction 同理，不支持 `@enum:`/裸字符串）。枚举值对照表（老隋提供，2026-08-19）：
-
-| 属性 | 枚举项 | MCP 数值 |
-|------|--------|----------|
-| `Node.HorizontalAlignment` | `LEFT` | `@int:0` |
-| `Node.HorizontalAlignment` | `RIGHT` | `@int:1` |
-| `Node.HorizontalAlignment` | `CENTER` | `@int:2` |
-| `Node.HorizontalAlignment` | `STRETCH` | `@int:3` |
-| `Node.VerticalAlignment` | `BOTTOM` | `@int:0` |
-| `Node.VerticalAlignment` | `TOP` | `@int:1` |
-| `Node.VerticalAlignment` | `CENTER` | `@int:2` |
-| `Node.VerticalAlignment` | `STRETCH` | `@int:3` |
-
-```python
-# 水平居中
-kz_invoke target=.../节点 method=set_Item args=["Node.HorizontalAlignment", "@int:2"]  # CENTER
-# 垂直居中
-kz_invoke target=.../节点 method=set_Item args=["Node.VerticalAlignment", "@int:2"]  # CENTER
-```
+### 设对齐（Node.HorizontalAlignment / Node.VerticalAlignment）
+> 创建后如需设对齐 → **`kanzi-prop-set` skill**（枚举属性用 `@int:` 设置，枚举表见那里）。
 
 ## 🌟 九宫格图片（NinePatchImage2D 节点，2026-08-10 实测打通）
 

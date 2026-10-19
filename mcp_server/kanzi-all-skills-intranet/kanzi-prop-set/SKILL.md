@@ -5,6 +5,27 @@ description: Kanzi 属性增删改查：set_Item/get_Item/AddProperty/RemoveProp
 
 ## 核心原则
 
+### 对齐枚举速查（Node.HorizontalAlignment / Node.VerticalAlignment）
+> 对齐是**枚举属性**，设置**必须 `@int:`**（不支持 `@enum:`/裸字符串）。枚举值对照表（老隋提供，2026-08-19）：
+
+| 属性 | 枚举项 | MCP 数值 |
+|------|--------|----------|
+| `Node.HorizontalAlignment` | `LEFT` | `@int:0` |
+| `Node.HorizontalAlignment` | `RIGHT` | `@int:1` |
+| `Node.HorizontalAlignment` | `CENTER` | `@int:2` |
+| `Node.HorizontalAlignment` | `STRETCH` | `@int:3` |
+| `Node.VerticalAlignment` | `BOTTOM` | `@int:0` |
+| `Node.VerticalAlignment` | `TOP` | `@int:1` |
+| `Node.VerticalAlignment` | `CENTER` | `@int:2` |
+| `Node.VerticalAlignment` | `STRETCH` | `@int:3` |
+
+```python
+# 水平居中
+kz_invoke target=.../节点 method=set_Item args=["Node.HorizontalAlignment", "@int:2"]  # CENTER
+# 垂直居中
+kz_invoke target=.../节点 method=set_Item args=["Node.VerticalAlignment", "@int:2"]  # CENTER
+```
+
 ### 设置属性值：kz_invoke set_Item
 
 ```python

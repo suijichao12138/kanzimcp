@@ -1,6 +1,6 @@
 ---
 name: kanzi-resource-font
-description: Kanzi 创建字体（FontFamily）+ 资源定位（找 brush 和图片）。
+description: Kanzi 创建字体（FontFamily）：完整类型名、定位字体相关资源、绑定字体文件 @list:、读回验证。工程里定位 brush/图片/字体引用见 kanzi-resource-set。
 ---
 ## 🚫 命名铁律（创建前必读）
 
@@ -55,18 +55,7 @@ invoker.SaveProject("@project")  # ✅（@project 上无 SaveProject，必须走
 
 ---
 
-## 五、资源定位（在工程里找 brush 和图片）
-
-```python
-# 颜色刷资源：Brushes 库（@obj113）
-mcp kz_invoke target=@obj113 method=get_Children
-# → Color Brush_FFFFFF = @obj5736, Color Brush_000000 = @obj5735
-
-# 图片资源：Textures 库（@obj140）→ 子库 adas（@obj5784）
-mcp kz_invoke target=@obj5784 method=get_Children
-# → green_sig_num = @obj5831 (get_Path = Textures/adas/green_sig_num)
-# 注意：资源 ref 每次连接 Studio 动态分配，需重新定位，不能硬编码
-```
+> **在工程里定位资源（找 brush/图片/字体引用）→ `kanzi-resource-set` skill**（含 Brushes/Textures/Font Families 库定位流程）。
 
 ---
 
