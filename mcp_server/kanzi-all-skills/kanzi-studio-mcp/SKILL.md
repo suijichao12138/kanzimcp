@@ -25,6 +25,44 @@ node /home/suijichao/.openclaw/workspace-kanzimcp/kanzi-mcp-client.mjs '{"name":
 - 相关脚本：`kanzi-mcp-client.mjs`（通用调用）、`kanzi-mcp-list-tools.mjs`（列工具）、`kanzi-shot-save.mjs`（截图落盘）
 - ⚠️ ws 直连是 **client 槽**：同通道里 server（Kanzi 插件）是对方。多 client 并存已支持（2026-09-14 实测）。
 
+### 🔌 脚本单连接铁律（批量/多调用脚本必读！2026-10-19 老隋要求）
+
+**一个脚本只建一次连接，所有调用复用同一连接提交。**
+
+> ⚠️ **崩溃根因（2026-10-19 实测）**：AI 写的批量脚本每次调用都 `Popen` 新进程 → 每次新建 WS 连接 → 循环里每步连接都换 → @obj ref 缓存失效、`BeginBatchModification` 事务跨连接错乱 → **Kanzi Studio 崩溃**。
+
+正确结构（伪代码，单连接复用）：
+
+```python
+import json, websockets, asyncio
+
+async def main():
+    # 1. 只建一次连接（整个脚本复用这一个）
+    async with websockets.connect("ws://123.57.85.81:58080/suijichao") as ws:
+        await ws.send(json.dumps({"role":"client","name":"suijichao"}))
+        # 2. Begin 批量
+        await call(ws, "kz_invoke", {"target":"@project","method":"BeginBatchModification","args":["批量创建"]})
+        # 3. 循环内复用同一连接发 N 次调用（禁止每次重新连接）
+        for name in names:
+            await call(ws, "kz_invoke", {"target":"@project","method":"CreateProjectItem","args":["@type:State", name, parent_ref]})
+        # 4. Commit
+        await call(ws, "kz_invoke", {"target":"@project","method":"CommitBatchModification"})
+
+async def call(ws, tool, args):
+    req = {"jsonrpc":"2.0","id":"req-1","method":"tools/call","params":{"name":tool,"arguments":args}}
+    await ws.send(json.dumps(req, ensure_ascii=False))
+    resp = json.loads(await ws.recv())
+    return resp
+```
+
+**规则**：
+1. **一个脚本 = 一个连接**。整个脚本生命周期只 `connect` 一次，循环/多步调用全部复用同一个 `ws`。
+2. **禁止**：每次调用都 `Popen` 新进程 / 重新 connect / 重新初始化（每次新连接 = 每次 @obj 缓存重排 + batch 状态跨连接）。
+3. **@obj 引用在同连接内连续有效**：本连接里第一次调用返回的 `@objN`，后续调用直接当 target/args 用。
+4. batch（Begin→调用→Commit）**必须在同一连接内完成**，不能 Begin 在连接 A、Commit 在连接 B。
+5. HTTP MCP（方式 B）是**无状态 HTTP**，每次 POST 独立 —— 批量脚本请用方式 A（ws 单连接）或把 batch 三件套放进同一个 Python 进程内连续 POST。
+6. **调用量建议**：单个脚本 mcp 调用**不超过 100 次**；超了把脚本拆成多段分多次跑（每段重新建连），避免单连接过长/超时/拖垮 Studio。
+
 ### 方式 B：HTTP MCP（脚本/其他工具接入用）
 
 ```

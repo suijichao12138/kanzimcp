@@ -64,6 +64,7 @@ mcp({"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"kz_invoke"
 ### 批量操作（必须成对）
 
 批量操作必须在同一 batch 内创建嵌套的项目层级，**BeginBatchModification 和 CommitBatchModification 必须成对出现**，否则 Kanzi Studio 会卡死。
+> 🔌 **单连接铁律**：批量脚本**只建一次连接**，Begin→所有操作→Commit 全部在**同一连接**内完成（禁止每次调用重新连接/新开进程；跨连接会导致 ref 失效、事务错乱、Studio 崩溃）。详见 `kanzi-studio-mcp` 的「脚本单连接铁律」。
 
 ```python
 mcp({"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"@project","method":"BeginBatchModification","args":["描述"]}}})

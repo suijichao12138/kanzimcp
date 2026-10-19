@@ -73,7 +73,11 @@ StateManager (warning State Manager)
 
 ### ✅ v4 简洁创建方式（已实测通过，推荐）
 
-用 `@type:` 类型短名直接创建，无需预取 RuntimeType，然后逐层 `CreateProjectItem`：
+用 `@type:` 类型短名直接创建，无需预取 RuntimeType，然后逐层 `CreateProjectItem`。
+
+> 🔁 **批量操作铁律（老隋要求）**：创建状态机的脚本**必须用 `BeginBatchModification` / `CommitBatchModification` 成对包裹**，把 state/stateobject 的**创建 + 设置**（含但不限于：State 控制属性值、StateObject 的 TargetObjectPath/文本内容）**全部包进同一个 batch**。单一脚本超过 30 次 kz_invoke 调用也必须加。不成对会卡死 Studio。
+> 🔌 **单连接铁律**：批量脚本**只建一次连接**，Begin→所有创建/设置→Commit 全部在**同一连接**内完成。**禁止每次调用重新连接/新开进程**（跨连接会让 @obj ref 失效、batch 事务错乱、Studio 崩溃）。
+> ⚠️ **禁止硬编码 @obj 引用**（如 `@obj2191`）：每次连接/重启编号都会变，必须先从库重新枚举定位目标 parent（如 `get_StateManagerLibrary` → `get_Children` → 找到目标 SG 的当前 ref）。
 
 ```python
 # 1. 获取 StateManagerLibrary 的 ref
@@ -90,6 +94,16 @@ sg_ref = "@obj" + re.search(r'@obj(\d+)', r["result"]["content"][0]["text"]).gro
 
 # 4. 创建 State（parent=SG）
 mcp({"jsonrpc":"2.0","id":"4","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"@project","method":"CreateProjectItem","args":["@type:State","V4TestState","@obj:"+sg_ref[4:]]}}})
+
+# 5. 【同一 batch 内】批量设置 state / stateobject（含但不限于：
+#    State 控制属性值、StateObject 的 TargetObjectPath/文本内容）
+mcp kz_invoke target=<State ref> method=set_Item args=["StateControllerPropertyValue", "@int:0"]
+mcp kz_invoke target=<State ref> method=CreateProjectItem args=["@type:StateObject","V4TestSO","@obj:<State ref>"]
+mcp kz_invoke target=<StateObject ref> method=set_Item args=["StateObject.TargetObjectPath", "@string:."]
+# 全部创建+设置都在 Begin...Commit 之间
+
+# 6. 提交批量（必须成对！）
+mcp kz_invoke target=@project method=CommitBatchModification
 ```
 
 ✅ **实测结果**：`@type:StateManager`/`@type:StateGroup`/`@type:State` 三个短名都能正确创建对应类型（完整层级 SM→Group→State）。
@@ -123,7 +137,8 @@ r = mcp({"jsonrpc":"2.0","id":"6","method":"tools/call","params":{"name":"kz_inv
 # 获取 project 类型，GetProperties 找到 Assembly
 # Assembly.GetType("Rightware.Kanzi.Studio.PluginInterface.StateObject")
 
-# ===== 第3步：批量创建（Begin 和 Commit 必须成对！）=====
+# ===== 第3步：批量创建 + 设置（Begin 和 Commit 必须成对！）=====
+# ⚠️ 单一脚本 >30 次调用必须加 batch；创建状态机必须把 state/stateobject 的创建 + 设置（State 控制属性值、StateObject 的 TargetObjectPath/文本）全部包进同一个 batch
 mcp({"jsonrpc":"2.0","id":"begin","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"@project","method":"BeginBatchModification","args":["创建 warning State Manager"]}}})
 
 # 创建 StateManager（第三参 = StateManagerLibrary 的 ref）
