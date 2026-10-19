@@ -1,7 +1,8 @@
 ---
 name: kanzi-node-create
-description: Kanzi 节点创建：kz_create_node 创建 EmptyNode2D/TextBlock2D/插件节点/布局节点/九宫格，Prefabs 模板库下创建，删除节点。
+description: Kanzi 节点创建：kz_create_node 创建 EmptyNode2D/TextBlock2D/插件节点/九宫格，Prefabs 模板库下创建，删除节点。布局节点见 kanzi-layout。不含属性设置（见 kanzi-prop-set）。
 ---
+
 ## 🚫 命名铁律（创建前必读）
 
 > 创建任何东西（节点/资源/动画/别名/条目）时，**名字禁止特殊字符**：`\` `/` `|` `.` `:` `*` `?` `"` `'` `<` `>` 空格。
@@ -121,35 +122,6 @@ mcp kz_create_node parent=/Screens/Screen/RootPage/Info type=PluginTextscroll na
 2. 不确定插件类型名时，**先 `get_ComponentTypeLibrary` → `get_Items` 枚举**，认准 `Plugin` 开头的条目名再创建。**不要脑补/猜类型名**（曾多次因脑补枚举/类型名踩坑）。
 3. 插件视觉节点创建后包装类型是 `ComponentNode2DPluginWrapper`。
 
-### 🌟 布局节点（StackLayout2D 横向/纵向，2026-08-10 实测打通）
-
-> 在 2D 界面里做横向/纵向自动排布，用 **`StackLayout2D`** 节点（不是 3D 的 `StackLayout3D`）。方向由 `StackLayoutConcept.Direction` 控制。
-
-### 创建（kz_create_node type=StackLayout2D）
-```python
-# 横向布局节点
-kz_create_node parent=/Screens/Screen/RootPage type=StackLayout2D name=layout_h   # → @obj10358
-# 纵向布局节点
-kz_create_node parent=/Screens/Screen/RootPage type=StackLayout2D name=layout_v   # → @obj10359
-```
-
-### 设方向（⚠️ 必须用 @int: 强转整数）
-> `StackLayoutConcept.Direction` 是 **CustomEnum**，枚举值（get_Options 查到）：**X=0(横向) / Y=1(纵向) / Z=2**。
-> ⚠️ **唯一能设成功的方式是 `set_Item` + `@int:` 前缀**。裸 `int`、`@enum:Y`、字符串 `"Y"`、`Set` 方法**全部报错** `cannot be converted to studio internal property value`。
-
-```python
-# layout_h 横向 = X = 0（默认即是 0）
-# layout_v 纵向 = Y = 1 → 必须 @int:1
-kz_invoke target=/Screens/Screen/RootPage/layout_v method=set_Item args=["StackLayoutConcept.Direction", "@int:1"]  # ✅
-# 读回 get_Item → 1 即成功
-kz_invoke target=.../layout_v method=get_Item args=["StackLayoutConcept.Direction"]  # → 1
-```
-
-### 要点
-- 类型 `StackLayout2D`（2D），方向属性是 `StackLayoutConcept.Direction`（不是 `Layout2D.Orientation`）。
-- 方向枚举：X=横向排 / Y=纵向排 / Z。查询用 `get_Properties` 拿 Direction 属性 → `get_Options` 看 KeyValuePair [X,0]/[Y,1]/[Z,2]。
-- 设值铁律：CustomEnum + `set_Item` → **必须 `@int:枚举值`**。
-
 ### 设对齐（Node.HorizontalAlignment / Node.VerticalAlignment，老隋给的枚举表）
 > 对齐是**枚举属性**，设置同样**必须 `@int:`**（与 Direction 同理，不支持 `@enum:`/裸字符串）。枚举值对照表（老隋提供，2026-08-19）：
 
@@ -187,3 +159,6 @@ kz_create_node parent=/Screens/Screen/RootPage type=NinePatchImage2D name=bg_9sl
 - 拉伸类型：`NinePatchImage2D.StretchTypeTop/Bottom/Left/Right/Center`
 - 图片引用暂不填时，只建节点即可（9 块属性已自带上）。
 - 以后设图用 `set_Item(属性, KzResourceID:xxx 或 @obj图片)`。
+
+> 布局节点（StackLayout2D 等）→ `kanzi-layout` skill。
+> 属性增删改查 → `kanzi-prop-set` skill。

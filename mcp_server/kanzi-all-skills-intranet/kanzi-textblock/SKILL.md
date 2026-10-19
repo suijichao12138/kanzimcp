@@ -46,16 +46,6 @@ mcp({"jsonrpc":"2.0","id":"13","method":"tools/call","params":{"name":"kz_invoke
 
 ## ⚠️ 文本颜色规则（重要）
 
-> **Text Block 2D 显示文本的颜色 → 用 `Node2D.ForegroundBrush` 属性设置**（颜色刷，ResourceReference，需先 AddProperty）。
-> **`Font Color` 只能给 Text Block 3D 文本设置颜色，不能设置 Text Block 2D 的颜色**。给 TextBlock2D 设 Font Color 无效。
-
-```python
-# TextBlock2D 设置文本颜色（前景色，颜色刷）：
-# 1. 先 AddProperty ForegroundBrush
-mcp(... method=AddProperty args=["Node2D.ForegroundBrush"])
-# 2. 设颜色刷（Brushes 库里的 Color Brush，或 KzResourceID:颜色名）
-mcp(... method=set_Item args=["Node2D.ForegroundBrush","KzResourceID:FFFFFF"])
-#   或 mcp(... method=set_Item args=["Node2D.ForegroundBrush","@obj<颜色刷引用>"])
-```
-
-> 详细见 `kanzi-text-image` skill（文本/图片/前景/背景色设置完整流程）。
+> **Text Block 2D 文本颜色 → `Node2D.ForegroundBrush`**（颜色刷，需先 AddProperty）。
+> **`Font Color` 只能给 Text Block 3D，不能设置 Text Block 2D 颜色**。
+> 完整设置流程 → `kanzi-text-image` skill。

@@ -1,7 +1,8 @@
 ---
 name: kanzi-state-manager
-description: Kanzi Studio 状态机创建/配置。StateManager、StateGroup、State、StateObject 的完整生命周期。控制属性（ControllerProperty）的设置。
+description: Kanzi Studio 状态机创建/配置。StateManager、StateGroup、State、StateObject 的完整生命周期。控制属性（ControllerProperty）的设置。状态过渡见 StateTransition 章节。
 ---
+
 ## 🚫 命名铁律（创建前必读）
 
 > 创建任何东西（节点/资源/动画/别名/条目）时，**名字禁止特殊字符**：`\` `/` `|` `.` `:` `*` `?` `"` `'` `<` `>` 空格。
@@ -337,49 +338,4 @@ mcp({"jsonrpc":"2.0","id":"4","method":"tools/call","params":{"name":"kz_invoke"
 | 子项看起来像 StatePluginWrapper，怀疑不是 StateObject | 只看了 get_Children 的 type 字段 | 用 `get_TargetObjectPath` 判别：能返回 `.` 就是 StateObject，确非根 State |
 | ref 不存在 | Studio 重启过 | 重新获取所有 ref |
 
-## 调试工具
-
-```python
-# 列出所有缓存引用
-mcp({"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"kz_list_refs","arguments":{}}})
-
-# 查看对象方法
-mcp({"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"kz_ref_methods","arguments":{"target":"@obj123"}}})
-
-# 查看对象接口
-mcp({"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"kz_ref_interfaces","arguments":{"target":"@obj123"}}})
-```
-
-## v4 参数标识符总表（通用，已实测）
-
-### 基础类型
-
-| 标识符 | 作用 | 示例 |
-|--------|------|------|
-| `@string:值` | 强制字符串 | `@string:123` → `"123"` |
-| `@int:` / `@long:` | 强制整数 | `@int:0` |
-| `@float:` / `@double:` / `@decimal:` | 强制浮点 | `@float:36` |
-| `@bool:true` | 强制布尔 | `@bool:true` |
-| `@byte:` / `@char:` | 字节 / 字符 | `@byte:200` |
-| `@null` | 可空参数置 null | `...,"@null"` |
-
-### 引用 / 对象
-
-| 标识符 | 作用 | 示例 |
-|--------|------|------|
-| `@obj:X` | 对象缓存引用（等价 `@objX`，target/args 均可） | `@obj:16` |
-| `@node:/path` | 节点路径（target/args 均可） | `@node:/Screens/.../text` |
-| `@project` / `@studio` | 工程/Studio 对象（args 已修复） | `@project` |
-| `@type:名字` | 类型短名（StateManager/StateGroup/State） | `@type:State` |
-| `@enum:名字` | 精准枚举转换 | `@enum:WHOLE_PROPERTY` |
-| `@dict:k=v,k=v` | 字典 | `@dict:off=0,on=1` |
-
-### 向量
-
-| 标识符 | 作用 | 示例 |
-|--------|------|------|
-| `@vector:x,y` | Vector2 | `@vector:0,0` |
-| `@vector3d:x,y,z` | Vector3 | `@vector3d:0,0,0` |
-| `@quaternion:x,y,z,w` | Vector4 | `@quaternion:0,0,0,1` |
-
-> **规则**：有标识 → 按标识解析；无标识 → 自动猜测兜底。
+> 调试工具（kz_list_refs / kz_ref_methods / kz_ref_properties）和 v4 参数标识符总表 → `kanzi-studio-mcp` skill。

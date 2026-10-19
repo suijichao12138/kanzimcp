@@ -131,22 +131,12 @@ kz_get_raw_ref target=@objNewBI method=get_IsBindingEnabled    # True
 
 ## 5. Material + MaterialBrush 三层关联 + 设默认值
 
-```bash
-# 创建 Material 关联 MaterialType
-kz_invoke target=@project method=CreateProjectItem \
-  args=["@type:Rightware.Kanzi.Studio.PluginInterface.Material",
-        "@string:<新名>", "@objMatLib"]
-kz_invoke target=@objMat method=Set args=["MaterialType", "@objMT2"]
-
-# 创建 MaterialBrush 关联 Material
-kz_invoke target=@project method=CreateBrush \
-  args=["@string:<新名>", "@objBrushLib", "@enum:MATERIAL"]
-kz_invoke target=@objBrush method=Set args=["MaterialBrush.Material", "@objMat"]
-
-# ⚠️ 设 shader 默认值：在 Material/Brush 上 Set("shader.colorXXX")，不是 MaterialType 上！
-kz_invoke target=@objMat method=Set args=["shader.colorStart", "@color:#FFFF0000"]
-kz_invoke target=@objMat method=Set args=["shader.colorEnd",   "@color:#FFFFFF00"]
-```
+> **创建 Material/MaterialBrush/MaterialType 三层关联的完整流程 → `kanzi-material-brush` skill**。
+> shader 场景只需记住关键点：
+> - Material 关联 MaterialType：`Set("MaterialType", @objMT)`
+> - MaterialBrush 关联 Material：`Set("MaterialBrush.Material", @objMat)`
+> - **设 shader 默认值：在 Material/Brush 上 `Set("shader.colorXXX", @color:...)`，不是 MaterialType 上！**
+> - 例：`Set("shader.colorStart", "@color:#FFFF0000")`
 
 ---
 
