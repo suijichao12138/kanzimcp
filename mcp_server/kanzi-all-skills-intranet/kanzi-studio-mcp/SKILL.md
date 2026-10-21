@@ -117,6 +117,23 @@ print(urllib.request.urlopen(req, timeout=60).read().decode())
 - **白名单热更新**：改 `users.json` 保存即生效，**不需要重启** kz_mcp_http.py。
 - **同用户名多客户端**：copilot 与脚本可各自独立连接并存（relay 多 client 并存 + 按 id 定向回传），不再互踢。
 
+## 一.五、刷新工程树 / 刷新 Preview（2026-10-21 老隋要求，阿里云实机验证通过）
+
+> **任何创建完成后必须刷新工程树；任何截图前必须刷新 Preview。** 用 kz_invoke 反射调 `@studio.get_Commands()` 返回的 GeneratedCommandInvoker 对象（不用加专用工具）：
+
+```python
+# 1. 拿 Commands 对象（GeneratedCommandInvoker）
+kz_invoke target=@studio method=get_Commands   # → @objN（每次连接编号变，先拿）
+
+# 2. 刷新工程树（所有创建后必调：节点/模板/属性/状态机/多国语表/纹理/动画/笔刷/资源/别名）
+kz_invoke target=@objN method=SelectProjectItems args=["/Screens/Screen/RootPage/新建节点名"]  # 路径或 @obj 都行
+
+# 3. 刷新 Preview（截图前必调）
+kz_invoke target=@objN method=RestartPreview   # 重启 Preview，刷新后略等再截图
+```
+
+详见 `kanzi-save-export`（GeneratedCommandInvoker 方法表）+ `kanzi-skills-index` 铁律第 8 条 + `kanzi-screenshot`（截图前必刷 Preview）。
+
 ## 二、工具清单（31 个，与插件 tools/list 实际注册一致）
 
 工具名都以 `kz_` 开头。以工具名为准（不按编号）。常用：

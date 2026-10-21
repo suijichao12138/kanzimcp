@@ -183,6 +183,20 @@ ws.close()
 | `ExportBinary(Project, Boolean, Boolean)` | 导出，第三参数控制是否清理 |
 | `ExportAllProjectBinaries()` | 导出所有工程的 kzb |
 | `ExportBinaryWithApplication(Project)` | 导出含 application 配置的 kzb |
+| `RestartPreview()` | **刷新 Preview**（重启 Preview 进程；截图前必须先调它，2026-10-21 老隋要求） |
+| `SelectProjectItems(ProjectItem)` / `SelectProjectItems(string 路径)` | **刷新工程树**：选中工程项（传 @obj 引用或 `/Screens/...` 路径），工程树滚动定位并刷新显示。**所有创建之后必须调它**（2026-10-21 老隋要求，见 index 铁律） |
+| `StartPreview(Project, bool, bool)` / `StopPreview()` | Preview 启停 |
+
+> ✅ **刷新接口用法（反射调用，2026-10-21 阿里云实机验证通过）**：
+> ```python
+> # 1. 拿 Commands 对象（GeneratedCommandInvoker）
+> kz_invoke target=@studio method=get_Commands   # → @objN（每次连接编号变，先拿）
+> # 2. 刷新 Preview（截图前必调）
+> kz_invoke target=@objN method=RestartPreview
+> # 3. 刷新工程树（所有创建完成后必调：节点/模板/属性/状态机/多国语表/纹理/动画/笔刷等）
+> kz_invoke target=@objN method=SelectProjectItems args=["/Screens/Screen/RootPage/新建节点名"]  # 传路径即可
+> # 也可传 @obj 引用（如刚创建返回的 ref）
+> ```
 
 > 🚫 **禁止调用的方法（会造成关闭/退出，绝不能用）**：
 > - `CloseProject()`（关闭当前工程）
