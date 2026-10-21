@@ -44,6 +44,7 @@ from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from session_store import SessionStore
+from task_dispatch import TASK_SKILLS, TaskDispatchConfig
 
 log = logging.getLogger(__name__)
 _ENV_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
@@ -381,6 +382,7 @@ class AppConfig(StrictModel):
     messages: MessageConfig = Field(default_factory=MessageConfig)
     storage: StorageConfig = Field(default_factory=StorageConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
+    task_dispatch: TaskDispatchConfig = Field(default_factory=TaskDispatchConfig)
     config_dir: Path = Field(default=Path("."), exclude=True)
 
     @model_validator(mode="after")
@@ -583,7 +585,12 @@ def _discover_skill_files(entry: SkillEntry) -> list[Path]:
     return found
 
 
-def load_skills(config: SkillsConfig) -> str:
+def load_skills(config: SkillsConfig, include: list[str] | None = None) -> str:
+    """加载启用的 SKILL.md 拼成字符串。
+
+    include: 可选，只加载 skill 目录名（Path 的 name）在此列表内的文件；
+             为 None 加载全部（主会话用）。子会话按类型传 include。
+    """
     discovered: dict[str, Path] = {}
     for entry in config.entries:
         if not entry.enabled:
@@ -596,6 +603,11 @@ def load_skills(config: SkillsConfig) -> str:
     total = 0
     paths = sorted(discovered.values(), key=lambda path: path.as_posix().casefold())
     for path in paths:
+        if include is not None:
+            # 只保留 include 命中的 skill 目录名
+            dirname = path.parent.name if path.parent.name else path.name
+            if dirname not in include and path.name not in include:
+                continue
         try:
             size = path.stat().st_size
         except FileNotFoundError as exc:
@@ -1390,6 +1402,9 @@ class CopilotRuntime:
         self.locks: dict[str, asyncio.Lock] = {}
         self.artifacts = ArtifactManager(config)
         self._secrets = _config_secrets(config)
+        # 任务派发器（子会话池 + task_dispatch 工具；主会话注册该工具）
+        from task_dispatch import TaskDispatcher
+        self.dispatcher = TaskDispatcher(config.task_dispatch, runtime=self)
         self._session_kwargs = self._build_session_kwargs()
         self.config_fingerprint = self._build_fingerprint()
         self._last_activity = time.time()  # 最近一次 copilot 活动时间(供活动刷新式超时)
@@ -1406,9 +1421,16 @@ class CopilotRuntime:
         if not ((1, 0, 11) <= parts < (1, 1, 0)):
             raise ConfigError(f"supported SDK range is >=1.0.11,<1.1; installed {current}")
 
-    def _build_session_kwargs(self) -> dict[str, Any]:
+    def _build_session_kwargs(self, task_type: str | None = None) -> dict[str, Any]:
         copilot = self.config.copilot
-        skills = load_skills(self.config.skills)
+        if task_type:
+            # 子会话：公共 skill（config common_skills）+ 该类型专属 skill（config session_types 优先）
+            include = self.config.task_dispatch.common_skills_for() + self.config.task_dispatch.skills_for(task_type)
+            skills = load_skills(self.config.skills, include=include)
+        else:
+            # 主会话：只加载主会话协议 skill（config main_skills），
+            # 与子会话协议/类型 skill 严格隔离，防止主会话自己执行 Kanzi 操作
+            skills = load_skills(self.config.skills, include=self.config.task_dispatch.main_skills_for())
         prompt = copilot.agent.system_prompt.strip()
         if skills:
             prompt = (
@@ -1440,10 +1462,20 @@ class CopilotRuntime:
             kwargs["excluded_tools"] = copilot.agent.excluded_tools
         if self.config.artifacts.enabled:
             kwargs["tools"] = self.artifacts.build_tools()
+        # 主会话注册 task_dispatch 工具（子会话派发，见 task_dispatch.py）
+        # 子会话（task_type 非 None）不注册 —— 避免子会话再派发
+        if task_type is None and self.config.task_dispatch.enabled:
+            task_tool = self.dispatcher.build_tool()
+            existing = kwargs.get("tools") or []
+            kwargs["tools"] = list(existing) + [task_tool]
         return kwargs
 
-    def _session_kwargs_for(self, session_id: str) -> dict[str, Any]:
-        kwargs = dict(self._session_kwargs)
+    def _session_kwargs_for(self, session_id: str, task_type: str | None = None) -> dict[str, Any]:
+        if task_type:
+            # 子会话：完整重建 kwargs（按类型注入 skill，且不带主会话的 task_dispatch 工具）
+            kwargs = self._build_session_kwargs(task_type=task_type)
+        else:
+            kwargs = dict(self._session_kwargs)
         large_output = self.config.copilot.large_output
         if large_output.enabled:
             directory = _session_files_directory(self.config, session_id)
@@ -1545,12 +1577,22 @@ class CopilotRuntime:
             await self.client.stop()
             self.client = None
 
+    @staticmethod
+    def _task_type_from_key(key: str) -> str | None:
+        """从会话 key 解析任务类型：task:<类型>:<对话> → <类型>；主会话返回 None。"""
+        if key.startswith("task:"):
+            parts = key.split(":")
+            if len(parts) >= 2 and parts[1]:
+                return parts[1]
+        return None
+
     async def _create(self, key: str) -> Any:
         session_id = str(uuid.uuid4())
+        task_type = self._task_type_from_key(key)
         try:
             session = await self._require_client().create_session(
                 session_id=session_id,
-                **self._session_kwargs_for(session_id),
+                **self._session_kwargs_for(session_id, task_type=task_type),
             )
         except Exception as exc:
             raise CopilotRuntimeError(
@@ -1574,9 +1616,10 @@ class CopilotRuntime:
 
     async def _resume(self, key: str, session_id: str) -> Any:
         self.store.set_status(key, "resuming")
+        task_type = self._task_type_from_key(key)
         try:
             session = await self._require_client().resume_session(
-                session_id, **self._session_kwargs_for(session_id)
+                session_id, **self._session_kwargs_for(session_id, task_type=task_type)
             )
         except Exception as exc:
             safe_error = self._safe_error(exc)
@@ -1850,6 +1893,16 @@ class CopilotRuntime:
         if mapping:
             return mapping.session_id
         raise CopilotRuntimeError("Copilot session is not available")
+
+    def key_for_session_id(self, session_id: str) -> str:
+        """由 SDK session_id 反查会话 key（用于 task_dispatch 定位主会话）。"""
+        for key, session in self.sessions.items():
+            if str(getattr(session, "session_id", "")) == session_id:
+                return key
+        mapping = self.store.find_by_session_id(session_id)
+        if mapping:
+            return mapping.conversation_key
+        return "default"
 
     def status(self, key: str) -> str:
         mapping = self.store.get(key)

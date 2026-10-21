@@ -79,6 +79,15 @@ class SessionStore:
             ).fetchone()
         return SessionMapping(**dict(row)) if row else None
 
+    def find_by_session_id(self, session_id: str) -> SessionMapping | None:
+        """按 SDK session_id 反查会话映射（用于 task_dispatch 定位主会话 key）。"""
+        with self._lock:
+            row = self.connection.execute(
+                "SELECT * FROM session_mappings WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+        return SessionMapping(**dict(row)) if row else None
+
     def put(
         self,
         conversation_key: str,

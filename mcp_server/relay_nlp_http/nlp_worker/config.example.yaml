@@ -94,9 +94,21 @@ skills:
   max_file_bytes: 131072
   max_total_bytes: 524288
   entries:
-    # A parent without its own SKILL.md automatically discovers child skills.
+    # ⚠️ task_dispatch 子会话按类型注入 skill：这里必须指向【skill 父目录】
+    #（无自身 SKILL.md 时自动递归发现所有子 skill），否则子会话只能加载到
+    # 单一路径下的 skill。主会话需要注入 kanzi-main-protocol（调度协议）。
+    # 例：
+    # - path: D:\AIBox\kanzimcp\nlp-worker-portable-win-x64\skills
+    #   enabled: true
     - path: ./skills/kanzi-skills-index
       enabled: true
+    # 主会话调度协议（理解→拆任务→task_dispatch 派发→汇总；含顺序执行铁律）
+    - path: ./skills/kanzi-main-protocol
+      enabled: true
+    # 子会话执行协议（由 COMMON_SKILLS 自动注入所有子会话，无需在此配，
+    #  但放在 skill 父目录里才能被 load_skills 发现；此处可不写）
+    # - path: ./skills/kanzi-task-execution-protocol
+    #   enabled: true
     # - path: D:\your-project\.github\skills
     #   enabled: true
     # If a directory has its own SKILL.md, set recursive: true to include children too.
@@ -191,3 +203,38 @@ logging:
   file: ./logs/bridge.log
   max_bytes: 10485760
   backup_count: 5
+
+# ===== 任务派发（主会话 → 子会话按类型隔离执行）=====
+# 2026-10-21 老隋要求：主会话读需求/步骤、生成任务参数落盘，调 task_dispatch 派发
+# 子会话按类型独立（上下文隔离），参数/结果不进主会话上下文。
+task_dispatch:
+  enabled: true
+  # 任务参数文件目录（相对 copilot.working_directory；子会话读取执行）
+  task_dir: ./workfile/tasks
+  # 汇报模式：success_fail_only = 只报成功/失败原因（不回过程）
+  report: success_fail_only
+  # 主会话注入的 skill（调度协议；不配则用代码默认：main-protocol + index + highfreq）
+  main_skills:
+    - kanzi-main-protocol
+    - kanzi-skills-index
+    - kanzi-properties-highfreq
+  # 所有子会话共用的 skill（执行协议；不配则用代码默认：task-execution-protocol + index + studio-mcp + project-switch + highfreq）
+  common_skills:
+    - kanzi-task-execution-protocol
+    - kanzi-skills-index
+    - kanzi-studio-mcp
+    - kanzi-project-switch
+    - kanzi-properties-highfreq
+  # 子会话类型 → 该类型注入的专属 skill（不配则用代码默认表；每个类型再自动叠加 common_skills）
+  session_types:
+    create-node:        [kanzi-node-create, kanzi-layout, kanzi-textblock, kanzi-transform, kanzi-prefab]
+    create-state-machine: [kanzi-state-manager, kanzi-trigger]
+    create-property:    [kanzi-proptype, kanzi-prop-set]
+    create-resource:    [kanzi-resource-create, kanzi-resource-set, kanzi-asset-create]
+    localization:       [kanzi-localization]
+    texture:            [kanzi-asset-create]
+    animation:          [kanzi-animation]
+    binding:            [kanzi-binding]
+    alias:              [kanzi-alias]
+    shader:             [kanzi-shader, kanzi-material-brush]
+    save-export:        [kanzi-save-export]
