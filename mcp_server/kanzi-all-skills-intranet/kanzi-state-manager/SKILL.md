@@ -75,7 +75,7 @@ StateManager (warning State Manager)
 
 用 `@type:` 类型短名直接创建，无需预取 RuntimeType，然后逐层 `CreateProjectItem`。
 
-> 🔁 **批量操作铁律（老隋要求）**：创建状态机的脚本**必须用 `BeginBatchModification` / `CommitBatchModification` 成对包裹**，把 state/stateobject 的**创建 + 设置**（含但不限于：State 控制属性值、StateObject 的 TargetObjectPath/文本内容）**全部包进同一个 batch**。单一脚本超过 30 次 kz_invoke 调用也必须加。不成对会卡死 Studio。
+> 🔁 **批量操作铁律（老隋要求）**：创建状态机的脚本**必须用 `BeginBatchModification` / `CommitBatchModification` 成对包裹**，把 state/stateobject 的**创建 + 设置**（含但不限于：State 控制属性值、StateObject 的 TargetObjectPath/文本内容）**全部包进同一个 batch**。不成对会卡死 Studio。
 > 🔌 **单连接铁律**：批量脚本**只建一次连接**，Begin→所有创建/设置→Commit 全部在**同一连接**内完成。**禁止每次调用重新连接/新开进程**（跨连接会让 @obj ref 失效、batch 事务错乱、Studio 崩溃）。
 > ⚠️ **禁止硬编码 @obj 引用**（如 `@obj2191`）：每次连接/重启编号都会变，必须先从库重新枚举定位目标 parent（如 `get_StateManagerLibrary` → `get_Children` → 找到目标 SG 的当前 ref）。
 
@@ -138,7 +138,7 @@ r = mcp({"jsonrpc":"2.0","id":"6","method":"tools/call","params":{"name":"kz_inv
 # Assembly.GetType("Rightware.Kanzi.Studio.PluginInterface.StateObject")
 
 # ===== 第3步：批量创建 + 设置（Begin 和 Commit 必须成对！）=====
-# ⚠️ 单一脚本 >30 次调用必须加 batch；创建状态机必须把 state/stateobject 的创建 + 设置（State 控制属性值、StateObject 的 TargetObjectPath/文本）全部包进同一个 batch
+# ⚠️ 创建状态机必须把 state/stateobject 的创建 + 设置（State 控制属性值、StateObject 的 TargetObjectPath/文本）全部包进同一个 batch（Begin/Commit 成对）
 mcp({"jsonrpc":"2.0","id":"begin","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"@project","method":"BeginBatchModification","args":["创建 warning State Manager"]}}})
 
 # 创建 StateManager（第三参 = StateManagerLibrary 的 ref）
@@ -208,6 +208,68 @@ mcp({"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"kz_invoke"
 # 设置文本内容
 mcp({"jsonrpc":"2.0","id":"2","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"@obj:1431","method":"set_Item","args":["TextConcept.Text","@string:KzResourceID:1"]}}})
 ```
+
+### 🚨 批量创建状态机脚本规范（2026-10-20 已根治，UI 线程）
+
+> ⚠️ 批量创建 State + StateObject 曾让 Studio 崩，2026-10-20 已通过「状态机调用回 UI 线程」根治（插件改动：kz_invoke 一律走 UI 线程）。以下是背景 + 必须遵守的正确性规则。
+
+#### 🎯 崩溃根因（2026-10-20 KanziStudio 日志确认）—— 非UI线程并发竞态，已修
+
+- 崩溃堆栈：`StateGroup.GetInvalidityReason()` ← UI 线程枚举 StateGroup 集合；`ProjectItemViewModel.SetValidity()` ← 工程树刷新有效性标记；崩在 `System.Windows.Threading`（UI 线程）。
+- **机制**：状态机创建调用跑**非 UI 线程**（v5 提速策略）时，Kanzi 的 UI 线程同时枚举同一个 StateGroup 集合做有效性校验 → 集合被并发修改 → 「集合已修改」未处理异常 → 整个 Studio 崩。
+- **修复（2026-10-20 老隋拍板）**：插件 `KzMCPServerClient` 的 kz_invoke 线程策略改为**一律 `Dispatcher.Invoke` 回 UI 线程**（修改和校验同线程串行，不再并发）。代价：批量创建约慢 2.7 倍（v5b 非UI 11 分钟 → UI 线程 30 分钟），换取稳定。
+- 不需要再 sleep / 分批小跑 / 限次数（那是非UI线程时代的缓解措施，已随修复移除）。
+
+#### ✅ 正确性规则（必须遵守，与线程无关）
+
+1. **State 名必须符合命名铁律 —— 禁止空格/特殊字符（含逗号、句号）！**
+   - ❌ `'21_高压绝缘故障 n请联系经销商'`（空格）、`'22_...，请安全停车 n...，熄火后...'`（空格+逗号）
+   - ✅ `'21_高压绝缘故障请联系经销商'`（无空格无逗号）
+   - 名字来自文本数据时**先清洗**：去掉空格、逗号、句号、`/`、`.`、`:`、`(`、`)`、`&`、`，` 等（只保留中文/数字/下划线/字母）。**写个清洗函数，循环里统一处理，别手写每个名字。**
+
+2. **设置 StateObject 的 TargetObjectPath 用 `set_TargetObjectPath` 方法，且参数必须是合法节点路径！**
+   - ✅ `mcp kz_invoke target=@so_ref method=set_TargetObjectPath args=["@string:."]`（`.` = 指向父 State 对应的目标节点，**skill 实测值**）
+   - ⚠️ **参数不能是裸节点名**（如 `'popup'`）—— 必须是路径格式：`.` 或 `/Screens/Screen/RootPage/popup`。裸名解析不了 → 报错。
+   - ❌ `mcp kz_invoke target=@so_ref method=set_Item args=["StateObject.TargetObjectPath", ...]`（set_Item 属性名不存在 → 报错）
+
+3. **自定义属性（warning.value / warning.level 等）先 `AddProperty` 再 `set_Item`**：
+   ```python
+   mcp kz_invoke target=@st_ref method=AddProperty args=["warning.value"]
+   mcp kz_invoke target=@st_ref method=set_Item args=["warning.value", "@int:21"]
+   mcp kz_invoke target=@so_ref method=AddProperty args=["warning.level"]
+   mcp kz_invoke target=@so_ref method=set_Item args=["warning.level", "@int:2"]
+   ```
+
+4. **Begin/Commit 必须成对 + 单连接**：见 index 第 6/7 条铁律。整批（Begin→创建→设置→Commit）在同一连接内完成。
+
+5. **每次 kz() 调用后必须检查返回，error/❌ 立即停！**（插件崩了返回 error，不检查继续发 = 白打）
+   ```python
+   def kz(target, method, args=None):
+       ... # 原逻辑
+       if "error" in str(text) or "❌" in str(text) or text.strip() == "":
+           print(f"  ❌ {method}@{target} 失败: {str(text)[:80]}")
+           return None   # 或抛异常中断
+       return text
+   # 循环里：
+   r = kz(...)
+   if r is None: break
+   ```
+
+6. **Begin 也要检查返回**：Begin 失败（插件没连上/已崩）就不要再发循环，直接退出。
+
+> 批量脚本正确结构（伪代码）：
+> ```python
+> # 1. 定位 SM/SG（动态枚举，不硬编码 @obj）
+> # 2. 写清洗函数 sanitize(name)，循环统一处理所有 State 名（去空格/逗号/句号等）
+> # 3. Begin（检查返回，失败即退出）
+> # 4. 循环（单连接，无需 sleep）：
+> #      r = CreateProjectItem(State)  →  r None 即 break
+> #      AddProperty + set_Item(控制值)
+> #      r = CreateProjectItem(StateObject)  →  r None 即 break
+> #      set_TargetObjectPath(".")          ← 参数用 . 或完整路径，不是裸名
+> #      AddProperty + set_Item(level)
+> # 5. Commit（finally 里也要尝试 Commit）
+> ```
 
 ## 🧩 StateTransition（状态过渡）创建/删除/属性设置（2026-08-19 实测打通）
 

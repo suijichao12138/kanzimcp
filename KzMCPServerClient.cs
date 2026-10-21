@@ -755,8 +755,14 @@ namespace KzMCPChatPlugin
                     string method = JsonUtils.GetStr(args, "method");
                     var rawArgs = JsonUtils.GetList(args, "args");
                     FireLogSync($"  ↳ kz_invoke: {target}.{method}({string.Join(", ", rawArgs)})");
-                    // 线程策略：状态机相关的创建/设置调用走非UI线程提速，其余反射仍走UI线程
-                    bool offUi = _bridge.ShouldRunOffUiThread(target, method, rawArgs.ToArray());
+                    // 线程策略：2026-10-20 老隋拍板 —— 状态机调用回 UI 线程！
+                    // 原因：状态机调用跑非UI线程时，UI 线程同时枚举 StateGroup 集合做有效性校验
+                    //   （ProjectItemViewModel.SetValidity → GetInvalidityReason），并发改同一集合 →
+                    //   “集合已修改”未处理异常 → 整个 Kanzi Studio 崩溃（见 2026-10-20 崩溃日志）。
+                    // 修复：一律走 UI 线程（与 v4 一致，稳；代价是批量创建约慢 2.7 倍）。
+                    // 恢复 v5b 非UI提速时改回：
+                    //   bool offUi = _bridge.ShouldRunOffUiThread(target, method, rawArgs.ToArray());
+                    bool offUi = false;
                     var invokeResult = _bridge.Invoke(target, method, rawArgs.ToArray(), offUi);
                     FireLogSync($"  ↳ 线程策略: {(offUi ? "非UI线程" : "UI线程")}");
                     return Task.FromResult(FormatInvokeResult(invokeResult));

@@ -61,7 +61,6 @@ async def call(ws, tool, args):
 3. **@obj 引用在同连接内连续有效**：本连接里第一次调用返回的 `@objN`，后续调用直接当 target/args 用。
 4. batch（Begin→调用→Commit）**必须在同一连接内完成**，不能 Begin 在连接 A、Commit 在连接 B。
 5. HTTP MCP（方式 B）是**无状态 HTTP**，每次 POST 独立 —— 批量脚本请用方式 A（ws 单连接）或把 batch 三件套放进同一个 Python 进程内连续 POST。
-6. **调用量建议**：单个脚本 mcp 调用**不超过 100 次**；超了把脚本拆成多段分多次跑（每段重新建连），避免单连接过长/超时/拖垮 Studio。
 
 ### 方式 B：HTTP MCP（脚本/其他工具接入用）
 
