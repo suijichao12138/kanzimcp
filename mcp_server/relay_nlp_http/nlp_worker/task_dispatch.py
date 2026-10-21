@@ -47,6 +47,7 @@ TASK_SKILLS: dict[str, list[str]] = {
 # 所有子会话共用的通用支撑 skill（导航 + 总入口 + 工程切换 + 高频属性 + 子会话执行协议）
 COMMON_SKILLS = [
     "kanzi-task-execution-protocol",  # 子会话执行协议（必装）
+    "kanzi-refresh",                  # 创建后刷新工程树/截图前刷 Preview（执行必用）
     "kanzi-skills-index",
     "kanzi-studio-mcp",
     "kanzi-project-switch",

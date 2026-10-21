@@ -221,6 +221,7 @@ task_dispatch:
   # 所有子会话共用的 skill（执行协议；不配则用代码默认：task-execution-protocol + index + studio-mcp + project-switch + highfreq）
   common_skills:
     - kanzi-task-execution-protocol
+    - kanzi-refresh
     - kanzi-skills-index
     - kanzi-studio-mcp
     - kanzi-project-switch
