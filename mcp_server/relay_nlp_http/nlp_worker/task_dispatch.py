@@ -254,15 +254,17 @@ class TaskDispatcher:
 
         try:
             result = await self.runtime.send(skey, prompt, on_progress=_sub_progress)
-            stripped = result.strip() or "✅ 完成"
-            if stripped.startswith("✅") or stripped.startswith("✔"):
-                await self._emit(f"✅ 子会话完成：{task_type}", kind="event")
-            else:
-                await self._emit(f"❌ 子会话失败：{task_type}", kind="event")
+            stripped = result.strip()
+            if not stripped:
+                # 子会话静默结束(流式已转发、最终无文本): 不猜成败, 交由主会话根据进度判断
+                await self._emit(f"ℹ️ 子会话结束：{task_type}(无最终文本, 见上方进度)", kind="event")
+                return f"✅ {task_type} 子会话执行结束(无最终文本, 具体过程见上方进度消息)"
+            # 原样透传子会话文本 → 主会话自行判断成败(代码不做前缀判断, 避免误判)
+            await self._emit(f"📤 子会话回报：{task_type}", kind="event")
             return stripped
         except Exception as exc:
             await self._emit(f"❌ 子会话异常：{task_type} {exc}", kind="event")
-            return f"❌ 子会话执行失败: {exc}"
+            return f"❌ {task_type} 子会话执行异常: {exc}"
 
     # ---- 工具 ----
     def build_tool(self):
