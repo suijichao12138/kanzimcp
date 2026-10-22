@@ -178,15 +178,20 @@ class TaskDispatcher:
             await self.runtime._create(skey)
             return skey, True
 
-    async def _emit(self, text: str) -> None:
-        """子会话进度/创建/完成消息 → 转发到 relay（nlp_worker 注入的 callback）。"""
+    async def _emit(self, text: str, kind: str = "progress") -> None:
+        """子会话消息 → 转发到 relay（nlp_worker 注入的 callback）。
+
+        kind:
+          - "event"    : 创建/完成/失败/异常 —— 独立飞书消息（必发，不合并）
+          - "progress" : 工具调用进度 —— 合并进滚动进度条（节流不刷屏）
+        """
         cb = getattr(self.runtime, "_progress_callback", None)
         if cb is not None:
             try:
                 if asyncio.iscoroutinefunction(cb):
-                    await cb(text)
+                    await cb(text, kind)
                 else:
-                    cb(text)
+                    cb(text, kind)
             except Exception:  # noqa: BLE001
                 pass
 
@@ -215,9 +220,9 @@ class TaskDispatcher:
 
         # 子会话创建/复用消息（必发）
         if new_session:
-            await self._emit(f"🔧 创建子会话：{task_type}")
+            await self._emit(f"🔧 创建子会话：{task_type}", kind="event")
         else:
-            await self._emit(f"🔁 复用子会话：{task_type}")
+            await self._emit(f"🔁 复用子会话：{task_type}", kind="event")
 
         # 构造给子会话的 prompt：读描述单 → 读数据源取参数 → 生成命令序列 → 分组执行
         spec_lines = [f"任务类型: {task_type}", f"目标: {objective}"]
@@ -244,19 +249,19 @@ class TaskDispatcher:
             "5. 不要复述完整参数/返回值/命令序列。\n"
         )
         async def _sub_progress(text: str) -> None:
-            # 子会话进度转发（send 内部已按 progress_min_interval 节流，不刷屏）
-            await self._emit(f"[{task_type} 子会话] {text}")
+            # 子会话工具调用进度：合并进滚动进度条（send 内部已节流，不刷屏）
+            await self._emit(f"[{task_type} 子会话] {text}", kind="progress")
 
         try:
             result = await self.runtime.send(skey, prompt, on_progress=_sub_progress)
             stripped = result.strip() or "✅ 完成"
             if stripped.startswith("✅") or stripped.startswith("✔"):
-                await self._emit(f"✅ 子会话完成：{task_type}")
+                await self._emit(f"✅ 子会话完成：{task_type}", kind="event")
             else:
-                await self._emit(f"❌ 子会话失败：{task_type}")
+                await self._emit(f"❌ 子会话失败：{task_type}", kind="event")
             return stripped
         except Exception as exc:
-            await self._emit(f"❌ 子会话异常：{task_type} {exc}")
+            await self._emit(f"❌ 子会话异常：{task_type} {exc}", kind="event")
             return f"❌ 子会话执行失败: {exc}"
 
     # ---- 工具 ----

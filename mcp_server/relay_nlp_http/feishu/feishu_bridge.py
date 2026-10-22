@@ -262,6 +262,13 @@ class Bridge:
             log.warning(f"[{self.bot_name}] relay error: {t[:200]}")
             self._reset_round_state()
             await self._reply_feishu(f"❌ {t}")
+        elif msg_type == "event":
+            # 子会话创建/完成等事件消息：独立飞书消息发送（不合并进 progress 滚动条、
+            # 不触发 _done_event、不带"✅完成"前缀）。用于让用户明确看到子会话生命周期。
+            t = str(msg.get("text", ""))
+            if t.strip():
+                log.info(f"[{self.bot_name}] copilot event: {t[:120]}")
+                await self._reply_feishu(t)
         elif msg_type == "progress":
             # 多阶段活动反馈：绝不触发 _done_event(不作为一轮结束、不提前放行第二条)。
             # 单条 ·五行滚动编辑: 维持一条进度消息, 内容保留最近五行, 不刷屏。
