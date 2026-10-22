@@ -158,25 +158,37 @@ class TaskDispatcher:
         return f"task:{task_type}:{conversation_key}"
 
     async def get_sub_session(self, conversation_key: str, task_type: str):
-        """拿（或建）该对话+类型的子会话。"""
+        """拿（或建）该对话+类型的子会话。返回 (session_key, is_new)。"""
         skey = self._session_key(conversation_key, task_type)
         lock = self._locks.setdefault(skey, asyncio.Lock())
         async with lock:
             # runtime.sessions 里有没有现成的
             existing = self.runtime.sessions.get(skey)
             if existing is not None:
-                return skey
+                return skey, False
             # 尝试恢复持久化的
             try:
                 mapping = self.runtime.store.get(skey)
                 if mapping:
                     await self.runtime._resume(skey, mapping.session_id)
-                    return skey
+                    return skey, False
             except Exception:
                 pass
             # 新建（注入该类型 skill 由 runtime 侧处理，见 copilot_runtime）
             await self.runtime._create(skey)
-            return skey
+            return skey, True
+
+    async def _emit(self, text: str) -> None:
+        """子会话进度/创建/完成消息 → 转发到 relay（nlp_worker 注入的 callback）。"""
+        cb = getattr(self.runtime, "_progress_callback", None)
+        if cb is not None:
+            try:
+                if asyncio.iscoroutinefunction(cb):
+                    await cb(text)
+                else:
+                    cb(text)
+            except Exception:  # noqa: BLE001
+                pass
 
     async def dispatch(
         self,
@@ -197,7 +209,15 @@ class TaskDispatcher:
             valid = ", ".join(sorted(self._all_types()))
             return f"❌ 未知任务类型: {task_type}。可用类型: {valid}"
 
-        skey = await self.get_sub_session(conversation_key, task_type)
+        created = await self.get_sub_session(conversation_key, task_type)
+        skey = created[0] if isinstance(created, tuple) else created
+        new_session = created[1] if isinstance(created, tuple) else False
+
+        # 子会话创建/复用消息（必发）
+        if new_session:
+            await self._emit(f"🔧 创建子会话：{task_type}")
+        else:
+            await self._emit(f"🔁 复用子会话：{task_type}")
 
         # 构造给子会话的 prompt：读描述单 → 读数据源取参数 → 生成命令序列 → 分组执行
         spec_lines = [f"任务类型: {task_type}", f"目标: {objective}"]
@@ -223,10 +243,20 @@ class TaskDispatcher:
             "4. 完成后只回报：✅ 成功（新建对象数量+清单路径）或 ❌ 失败（哪步、原因）。\n"
             "5. 不要复述完整参数/返回值/命令序列。\n"
         )
+        async def _sub_progress(text: str) -> None:
+            # 子会话进度转发（send 内部已按 progress_min_interval 节流，不刷屏）
+            await self._emit(f"[{task_type} 子会话] {text}")
+
         try:
-            result = await self.runtime.send(skey, prompt)
-            return result.strip() or "✅ 完成"
+            result = await self.runtime.send(skey, prompt, on_progress=_sub_progress)
+            stripped = result.strip() or "✅ 完成"
+            if stripped.startswith("✅") or stripped.startswith("✔"):
+                await self._emit(f"✅ 子会话完成：{task_type}")
+            else:
+                await self._emit(f"❌ 子会话失败：{task_type}")
+            return stripped
         except Exception as exc:
+            await self._emit(f"❌ 子会话异常：{task_type} {exc}")
             return f"❌ 子会话执行失败: {exc}"
 
     # ---- 工具 ----

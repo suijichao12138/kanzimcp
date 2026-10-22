@@ -1405,9 +1405,15 @@ class CopilotRuntime:
         # 任务派发器（子会话池 + task_dispatch 工具；主会话注册该工具）
         from task_dispatch import TaskDispatcher
         self.dispatcher = TaskDispatcher(config.task_dispatch, runtime=self)
+        # 子会话进度回调（由 nlp_worker 注入，转发到 relay 实时显示子会话创建/完成/进度）
+        self._progress_callback: Any = None
         self._session_kwargs = self._build_session_kwargs()
         self.config_fingerprint = self._build_fingerprint()
         self._last_activity = time.time()  # 最近一次 copilot 活动时间(供活动刷新式超时)
+
+    def set_progress_callback(self, callback: Any) -> None:
+        """注入进度回调（nlp_worker 用：转发子会话创建/完成/进度到 relay）。"""
+        self._progress_callback = callback
 
     @staticmethod
     def validate_sdk_version() -> None:

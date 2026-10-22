@@ -317,6 +317,15 @@ class NLPWorker:
         self.relay = RelayClient(config.relay, self._on_relay_message)
         self.workers: list[asyncio.Task[None]] = []
 
+        # 注入子会话进度回调：子会话创建/完成/工具进度 → relay 实时显示（不刷屏）
+        async def _sub_progress(text: str) -> None:
+            try:
+                await self.relay.send(progress_message(text))
+            except Exception:  # noqa: BLE001
+                log.debug(f"子会话进度转发失败(忽略): {text[:60]}")
+
+        self.copilot.set_progress_callback(_sub_progress)
+
     async def _on_relay_message(self, raw: str) -> None:
         try:
             request = parse_relay_message(raw)
