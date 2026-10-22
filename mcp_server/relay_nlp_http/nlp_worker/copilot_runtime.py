@@ -1679,7 +1679,6 @@ class CopilotRuntime:
             done = asyncio.Event()
             error: Exception | None = None
             last_assistant: Any = None
-            last_tool_content: str | None = None
 
             # ---- 多阶段活动反馈: 绝对串行节流 + 发送闭包 ----
             # on_event 是同步回调, 不能 await, 用 create_task 调度异步发送。
@@ -1729,7 +1728,6 @@ class CopilotRuntime:
                 # 统一在此声明所有 nonlocal(避免 Python 报
                 # "assigned before nonlocal declaration")
                 nonlocal last_assistant
-                nonlocal last_tool_content
                 nonlocal _reasoning_shown
                 nonlocal _streaming_shown
                 nonlocal _tool_count
@@ -1775,13 +1773,6 @@ class CopilotRuntime:
                             )
                     case ToolExecutionCompleteData() as d:  # noqa: F841
                         _tool_started_ts = None
-                        # 记录最后一次工具调用结果(供静默结束兜底): 成功存 content, 失败存 error
-                        _result = getattr(d, "result", None)
-                        if d.success and _result is not None:
-                            last_tool_content = getattr(_result, "content", None) or ""
-                        elif not d.success:
-                            _err = getattr(d, "error", None)
-                            last_tool_content = f"❌ 工具失败: {getattr(_err, 'message', '') or getattr(_err, 'error', '') or d.tool_call_id}"
                         # 完成不逐条发, 否则太碎; 只发失败的(异常值得用户知道),
                         # 成功留给汇总/里程碑, 避免"✅完成"和"执行"一样刷屏。
                         if not d.success:
@@ -1885,18 +1876,7 @@ class CopilotRuntime:
                 raise CopilotRuntimeError(f"Copilot request failed: {self._safe_error(error)}")
             content = getattr(getattr(last_assistant, "data", None), "content", None)
             if not isinstance(content, str) or not content.strip():
-                # 模型调完工具后静默结束（常见：task_dispatch 返回"✅ 子会话完成"后
-                # 模型认为任务达成、不再输出文本 → SessionIdle 触发但无 assistant 文本）。
-                # 此时不误报"no assistant message"：有工具结果则回传工具结果摘要，
-                # 让用户看到实际完成情况（含子会话的 ✅/❌）。
-                if last_tool_content:
-                    log.info(f"[{key}] 本轮仅工具调用后静默结束, 回传工具结果: {last_tool_content[:80]}")
-                    content = last_tool_content
-                elif _tool_count > 0:
-                    log.info(f"[{key}] 本轮仅工具调用后静默结束(无结果文本), 视为已处理")
-                    content = "✅ 已完成"
-                else:
-                    raise CopilotRuntimeError("Copilot returned no assistant message")
+                raise CopilotRuntimeError("Copilot returned no assistant message")
             self.store.set_status(key, "active")
             return content.strip()
 
