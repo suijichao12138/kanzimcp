@@ -40,10 +40,10 @@ skill MCP 提供 **3 个工具**（9001 网关 `/kanzi_skill_mcp`）：
 |------|---------|
 | 创建节点（EmptyNode2D/TextBlock2D/插件节点/九宫格） | `kanzi-node-create` |
 | 布局节点（StackLayout2D 方向/创建） | `kanzi-layout` |
-| 属性添加/设置/删除（set_Item/AddProperty） | `kanzi-prop-set` |
+| 节点添加/设置/删除属性（set_Item/AddProperty） | `kanzi-prop-set` |
 | 文本内容/排版（TextBlock2D 配置） | `kanzi-textblock` |
 | TextBlock2D 完整配置 | `kanzi-textblock` |
-| 自定义属性类型（Property Types） | `kanzi-proptype` |
+| 创建自定义属性类型（Property Types） | `kanzi-proptype` |
 | 变换定位（RenderTransformation） | `kanzi-transform` |
 | Prefab 模板/占位符 | `kanzi-prefab` |
 | 创建别名 Alias | `kanzi-alias` |
