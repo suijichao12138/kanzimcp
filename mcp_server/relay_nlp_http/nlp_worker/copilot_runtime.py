@@ -26,6 +26,7 @@ from copilot import CopilotClient, ModelInfo, RuntimeConnection, ToolInvocation,
 from copilot._jsonrpc import JsonRpcError, ProcessExitedError
 from copilot.generated.session_events import (
     AssistantMessageData,
+    AssistantMessageDeltaData,
     AssistantMessageStartData,
     AssistantReasoningDeltaData,
     AssistantStreamingDeltaData,
@@ -1679,6 +1680,11 @@ class CopilotRuntime:
             done = asyncio.Event()
             error: Exception | None = None
             last_assistant: Any = None
+            # 模型中间文本(流式 delta)累积: 每 progress_min_interval 秒发一次当前累积,
+            # 桥 progress 滚动显示 → 用户实时看到模型中间输出; 最后输出为空也不突兀。
+            _stream_buf: str = ""
+            _stream_last_ts: float = 0.0
+            _stream_emitted: bool = False
 
             # ---- 多阶段活动反馈: 绝对串行节流 + 发送闭包 ----
             # on_event 是同步回调, 不能 await, 用 create_task 调度异步发送。
@@ -1732,9 +1738,27 @@ class CopilotRuntime:
                 nonlocal _streaming_shown
                 nonlocal _tool_count
                 nonlocal _tool_started_ts
+                nonlocal _stream_buf
+                nonlocal _stream_last_ts
+                nonlocal _stream_emitted
                 match getattr(event, "data", None):
                     case AssistantMessageData():  # noqa: F841
                         last_assistant = event
+                    case AssistantMessageDeltaData() as _delta:  # noqa: F841
+                        # 模型中间文本: 累积到 _stream_buf, 每 _min_interval 秒发一次
+                        # 当前累积(progress 滚动显示, 不刷屏不丢内容); 让用户实时看到
+                        # 模型在写什么, 即使最终无 assistant 文本也已看到中间输出。
+                        _dc = getattr(_delta, "delta_content", "") or ""
+                        if _dc:
+                            _stream_buf += _dc
+                            _stream_emitted = True
+                            now = time.time()
+                            if now - _stream_last_ts >= _min_interval:
+                                _stream_last_ts = now
+                                _txt = _stream_buf.strip()
+                                if _txt:
+                                    _emit(f"💬 {_txt}")
+                                    _stream_buf = ""
                     case AssistantReasoningDeltaData():  # noqa: F841
                         # AI 推理/思考过程: 首条反馈一次"正在推理"(节流防刷)
                         if not _reasoning_shown:
@@ -1876,6 +1900,12 @@ class CopilotRuntime:
                 raise CopilotRuntimeError(f"Copilot request failed: {self._safe_error(error)}")
             content = getattr(getattr(last_assistant, "data", None), "content", None)
             if not isinstance(content, str) or not content.strip():
+                # 模型中间文本已实时发到飞书(progress 滚动), 最终无 assistant 文本
+                # 不算失败 —— 用户已看到本轮模型在说什么。返回空由上层转"(完成)"。
+                if _stream_emitted:
+                    log.info(f"[{key}] 本轮流式输出已实时转发, 最终无 assistant 文本(视为完成)")
+                    self.store.set_status(key, "active")
+                    return ""
                 raise CopilotRuntimeError("Copilot returned no assistant message")
             self.store.set_status(key, "active")
             return content.strip()

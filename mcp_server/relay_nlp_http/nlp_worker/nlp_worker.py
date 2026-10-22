@@ -402,7 +402,8 @@ class NLPWorker:
             response,
             self.copilot.session_id(key),
         )
-        await self._send_text(response or "(no output)", request)
+        # response 为空 = 中间输出已实时转发(流式), 最终无文本 → 显示"(完成)"中性提示
+        await self._send_text(response or "(完成)", request)
 
     async def _handle_command(
         self,
