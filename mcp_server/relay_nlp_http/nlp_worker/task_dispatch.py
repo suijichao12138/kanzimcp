@@ -256,9 +256,9 @@ class TaskDispatcher:
             result = await self.runtime.send(skey, prompt, on_progress=_sub_progress)
             stripped = result.strip()
             if not stripped:
-                # 子会话静默结束(流式已转发、最终无文本): 不猜成败, 交由主会话根据进度判断
-                await self._emit(f"ℹ️ 子会话结束：{task_type}(无最终文本, 见上方进度)", kind="event")
-                return f"✅ {task_type} 子会话执行结束(无最终文本, 具体过程见上方进度消息)"
+                # 子会话返回空(静默结束、无最终文本) = 执行失败 (2026-10-22 老隋要求)
+                await self._emit(f"❌ 子会话失败：{task_type}(未返回执行结果)", kind="event")
+                return f"❌ {task_type} 子会话执行失败: 未返回执行结果文本"
             # 原样透传子会话文本 → 主会话自行判断成败(代码不做前缀判断, 避免误判)
             await self._emit(f"📤 子会话回报：{task_type}", kind="event")
             return stripped
