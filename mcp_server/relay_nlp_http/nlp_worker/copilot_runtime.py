@@ -1680,6 +1680,7 @@ class CopilotRuntime:
             done = asyncio.Event()
             error: Exception | None = None
             last_assistant: Any = None
+            last_tool_content: str | None = None
             # 模型中间文本(流式 delta)累积: 每 progress_min_interval 秒发一次当前累积,
             # 桥 progress 滚动显示 → 用户实时看到模型中间输出; 最后输出为空也不突兀。
             _stream_buf: str = ""
@@ -1734,6 +1735,7 @@ class CopilotRuntime:
                 # 统一在此声明所有 nonlocal(避免 Python 报
                 # "assigned before nonlocal declaration")
                 nonlocal last_assistant
+                nonlocal last_tool_content
                 nonlocal _reasoning_shown
                 nonlocal _streaming_shown
                 nonlocal _tool_count
@@ -1797,6 +1799,14 @@ class CopilotRuntime:
                             )
                     case ToolExecutionCompleteData() as d:  # noqa: F841
                         _tool_started_ts = None
+                        # 记录最后一次工具调用结果(供主会话静默结束时兜底回传):
+                        # 成功存 content, 失败存 error 摘要
+                        _result = getattr(d, "result", None)
+                        if d.success and _result is not None:
+                            last_tool_content = getattr(_result, "content", None) or ""
+                        elif not d.success:
+                            _err = getattr(d, "error", None)
+                            last_tool_content = f"❌ 工具失败: {getattr(_err, 'message', '') or getattr(_err, 'error', '') or d.tool_call_id}"
                         # 完成不逐条发, 否则太碎; 只发失败的(异常值得用户知道),
                         # 成功留给汇总/里程碑, 避免"✅完成"和"执行"一样刷屏。
                         if not d.success:
@@ -1902,10 +1912,17 @@ class CopilotRuntime:
             if not isinstance(content, str) or not content.strip():
                 # 模型中间文本已实时发到飞书(progress 滚动), 最终无 assistant 文本
                 # 不算失败 —— 用户已看到本轮模型在说什么。返回空由上层转"(完成)"。
-                if _stream_emitted:
-                    log.info(f"[{key}] 本轮流式输出已实时转发, 最终无 assistant 文本(视为完成)")
+                if _stream_emitted or last_tool_content:
+                    # 模型静默结束：若有最后工具结果则回传(用户能看到子会话实际返回,
+                    # 如"localization 子会话回报文本")；否则视为已流式输出完成。
+                    if last_tool_content:
+                        log.info(f"[{key}] 主会话静默结束, 回传最后工具结果: {last_tool_content[:80]}")
+                        content = last_tool_content
+                    else:
+                        log.info(f"[{key}] 本轮流式输出已实时转发, 最终无 assistant 文本(视为完成)")
+                        content = ""
                     self.store.set_status(key, "active")
-                    return ""
+                    return content
                 raise CopilotRuntimeError("Copilot returned no assistant message")
             self.store.set_status(key, "active")
             return content.strip()

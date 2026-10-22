@@ -260,7 +260,8 @@ class TaskDispatcher:
                 await self._emit(f"❌ 子会话失败：{task_type}(未返回执行结果)", kind="event")
                 return f"❌ {task_type} 子会话执行失败: 未返回执行结果文本"
             # 原样透传子会话文本 → 主会话自行判断成败(代码不做前缀判断, 避免误判)
-            await self._emit(f"📤 子会话回报：{task_type}", kind="event")
+            # 同时把子会话实际返回文本发到飞书(event), 用户直接看到结果, 不依赖主会话转述
+            await self._emit(f"📤 子会话回报：{task_type}\n{stripped[:500]}", kind="event")
             return stripped
         except Exception as exc:
             await self._emit(f"❌ 子会话异常：{task_type} {exc}", kind="event")
