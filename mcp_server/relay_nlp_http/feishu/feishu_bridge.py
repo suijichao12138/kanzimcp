@@ -264,10 +264,15 @@ class Bridge:
             await self._reply_feishu(f"❌ {t}")
         elif msg_type == "event":
             # 子会话创建/完成等事件消息：独立飞书消息发送（不合并进 progress 滚动条、
-            # 不触发 _done_event、不带"✅完成"前缀）。用于让用户明确看到子会话生命周期。
+            # 不触发 _done_event、不带"✅完成"前缀）。同时作为进度条分隔符：
+            # 重置滚动进度状态 → event 之后的工具调用进度【新建一条消息】，
+            # 不再合并到 event 之前的旧滚动条（2026-10-22 老隋要求）。
             t = str(msg.get("text", ""))
             if t.strip():
                 log.info(f"[{self.bot_name}] copilot event: {t[:120]}")
+                self._progress_msg_id = None
+                self._progress_open_id = None
+                self._progress_lines = []
                 await self._reply_feishu(t)
         elif msg_type == "progress":
             # 多阶段活动反馈：绝不触发 _done_event(不作为一轮结束、不提前放行第二条)。
