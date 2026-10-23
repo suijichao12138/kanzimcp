@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nlp_worker 控制台</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <h1>nlp_worker 控制台</h1>
+  <nav id="topnav">
+    <button data-nav="sessions" class="active">会话管理</button>
+    <button data-nav="config">配置修改</button>
+    <button data-nav="env">环境变量</button>
+    <span id="statusbar"></span>
+  </nav>
+</header>
+<main>
+  <!-- 会话管理 -->
+  <section id="view-sessions" class="view active">
+    <div class="toolbar">
+      <button id="btn-refresh">刷新</button>
+      <button id="btn-clear" class="danger">清空全部会话</button>
+      <span id="session-count"></span>
+    </div>
+    <table id="sessions-table">
+      <thead>
+        <tr>
+          <th>类型</th><th>会话 Key</th><th>SDK Session ID</th><th>模型</th>
+          <th>状态</th><th>连接</th><th>创建时间</th><th>更新时间</th>
+          <th>最近错误</th><th>操作</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <!-- 配置修改 -->
+  <section id="view-config" class="view">
+    <aside id="group-nav"></aside>
+    <div id="group-form">
+      <div id="group-title"></div>
+      <div id="group-desc"></div>
+      <form id="config-form"></form>
+    </div>
+  </section>
+
+  <!-- 环境变量 -->
+  <section id="view-env" class="view">
+    <div class="toolbar">
+      <button id="btn-env-refresh">刷新</button>
+      <span id="env-missing"></span>
+    </div>
+    <table id="env-table">
+      <thead>
+        <tr><th>Key</th><th>值</th><th>被 config 引用</th><th>操作</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+    <h3>新增环境变量</h3>
+    <div class="env-add">
+      <input id="env-new-key" placeholder="KEY_NAME" style="width:220px">
+      <input id="env-new-value" placeholder="值" style="width:320px">
+      <button id="btn-env-add">添加</button>
+    </div>
+  </section>
+</main>
+<div id="toast"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

@@ -240,3 +240,10 @@ task_dispatch:
     alias:              [kanzi-alias]
     shader:             [kanzi-shader, kanzi-material-brush]
     save-export:        [kanzi-save-export]
+
+# ===== 网页控制台（会话管理 + 配置修改，随 nlp_worker 同进程启动）=====
+web:
+  enabled: true
+  # 仅本机访问；改 0.0.0.0 或局域网 IP 可被其他机器访问（无鉴权，注意安全）
+  listen_host: 127.0.0.1
+  listen_port: 8400

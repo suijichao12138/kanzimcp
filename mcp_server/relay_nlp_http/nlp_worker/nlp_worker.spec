@@ -16,12 +16,17 @@ datas = [
     *copilot_datas,
     *copy_metadata("github-copilot-sdk"),
     *collect_data_files("certifi"),
+    # 网页控制台前端静态资源
+    (str(project_root / "web" / "static"), "web/static"),
 ]
 binaries = [*copilot_binaries, (str(runtime_source), "runtime")]
 hiddenimports = [
     *copilot_hiddenimports,
     "pydantic_core._pydantic_core",
     "yaml._yaml",
+    "web.server",
+    "web.api",
+    "web.config_groups",
 ]
 
 a = Analysis(

@@ -79,6 +79,14 @@ class SessionStore:
             ).fetchone()
         return SessionMapping(**dict(row)) if row else None
 
+    def list_all(self) -> dict[str, SessionMapping]:
+        """列出全部会话映射（网页控制台会话管理用）。"""
+        with self._lock:
+            rows = self.connection.execute(
+                "SELECT * FROM session_mappings ORDER BY updated_at DESC"
+            ).fetchall()
+        return {row["conversation_key"]: SessionMapping(**dict(row)) for row in rows}
+
     def find_by_session_id(self, session_id: str) -> SessionMapping | None:
         """按 SDK session_id 反查会话映射（用于 task_dispatch 定位主会话 key）。"""
         with self._lock:

@@ -316,6 +316,15 @@ class NLPWorker:
         )
         self.relay = RelayClient(config.relay, self._on_relay_message)
         self.workers: list[asyncio.Task[None]] = []
+        self.web = None
+        # 网页控制台（会话管理 + 配置修改），随本进程内嵌启动
+        if config.web.enabled:
+            try:
+                from web.server import Server as WebServer
+                self.web = WebServer(self)  # self 作为 CTX：config/store/copilot/main_loop
+            except Exception as exc:  # noqa: BLE001
+                log.warning("网页控制台初始化失败(跳过): %s", exc)
+                self.web = None
 
         # 注入子会话消息回调：
         #   kind="event"    → 创建/完成/失败/异常，独立 event 消息（必发，不与工具进度合并）
@@ -444,6 +453,14 @@ class NLPWorker:
     async def run(self) -> None:
         self.store.open()
         await self.copilot.start()
+        if self.web is not None:
+            # 记录主事件循环（web 线程跨线程提交协程用）
+            self.main_loop = asyncio.get_running_loop()
+            ok, info = self.web.start()
+            if not ok:
+                log.warning("网页控制台启动失败: %s", info)
+            else:
+                log.info("网页控制台: %s", info)
         self.workers = [
             asyncio.create_task(self._process_queue(index))
             for index in range(self.config.messages.worker_count)
@@ -459,6 +476,8 @@ class NLPWorker:
             await self.stop()
 
     async def stop(self) -> None:
+        if self.web is not None:
+            self.web.stop()
         await self.relay.stop()
         for worker in self.workers:
             worker.cancel()

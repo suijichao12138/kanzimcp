@@ -373,6 +373,14 @@ class LoggingConfig(StrictModel):
     backup_count: Annotated[int, Field(ge=0, le=100)] = 5
 
 
+class WebConfig(StrictModel):
+    """网页控制台（会话管理 + 配置修改）。随 nlp_worker 同进程内嵌启动。"""
+
+    enabled: bool = True
+    listen_host: str = "127.0.0.1"
+    listen_port: Annotated[int, Field(ge=1, le=65535)] = 8400
+
+
 class AppConfig(StrictModel):
     relay: RelayConfig
     copilot: CopilotConfig
@@ -384,6 +392,7 @@ class AppConfig(StrictModel):
     storage: StorageConfig = Field(default_factory=StorageConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     task_dispatch: TaskDispatchConfig = Field(default_factory=TaskDispatchConfig)
+    web: WebConfig = Field(default_factory=WebConfig)
     config_dir: Path = Field(default=Path("."), exclude=True)
 
     @model_validator(mode="after")
