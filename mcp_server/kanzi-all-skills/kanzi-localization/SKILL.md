@@ -43,7 +43,7 @@ LT="/Localization/Localization Table"
 ### ⭐ 核心读取通道：ExportTranslations()（2026-08-08 实测打通）
 
 **最关键的教训：`Localization Table.get_Children()` 返回空（len=0）是误导——它不代表没数据！**
-**正确的枚举方式是 `ExportTranslations()`**（反编译 ExcelPlugin 里的 MemberRef 引用发现的）。
+**正确的枚举方式是 `ExportTranslations()`**（反编译老隋 ExcelPlugin 里的 MemberRef 引用发现的）。
 
 ```python
 # 1) 枚举所有行 —— 返回 LocalizationTableRow 列表（海量，实测 cluster_hmi = 991 行）
@@ -171,26 +171,26 @@ TBL="/Localization/Localization Table"   # v13 工具 target 都指向它
 ### CRUD 实测示例
 ```bash
 # 查
-HTTP POST http://123.57.85.81:9001/mcp（X-Kanzi-User: suijichao）→ tools/call {"name":"kz_loc_entry_list","arguments":{"target":"/Localization/Localization Table"}}
-HTTP POST http://123.57.85.81:9001/mcp（X-Kanzi-User: suijichao）→ tools/call {"name":"kz_loc_entry_get","arguments":{"target":"/Localization/Localization Table","key":"ECO"}}
+node kanzi-mcp-client.mjs '{"name":"kz_loc_entry_list","arguments":{"target":"/Localization/Localization Table"}}'
+node kanzi-mcp-client.mjs '{"name":"kz_loc_entry_get","arguments":{"target":"/Localization/Localization Table","key":"ECO"}}'
 
 # 增（add，带 defaultText + 各语言 translations，多行）
-HTTP POST http://123.57.85.81:9001/mcp（X-Kanzi-User: suijichao）→ tools/call {"name":"kz_loc_entry_add","arguments":{"target":"/Localization/Localization Table","rows":[{"resourceName":"zz_newkey","type":"text","defaultText":"默认文本","translations":{"en":"hello","zh-CHS":"你好"}}]}}
+node kanzi-mcp-client.mjs '{"name":"kz_loc_entry_add","arguments":{"target":"/Localization/Localization Table","rows":[{"resourceName":"zz_newkey","type":"text","defaultText":"默认文本","translations":{"en":"hello","zh-CHS":"你好"}}]}}'
 # → added=True；add 内部用 new ResourceDictionaryEntry(key, new ProjectItemReference(text,TEXT)) + SetOrCreate
 
 # 改（set，改 defaultText + translations，多行）
-HTTP POST http://123.57.85.81:9001/mcp（X-Kanzi-User: suijichao）→ tools/call {"name":"kz_loc_entry_set","arguments":{"target":"/Localization/Localization Table","rows":[{"resourceName":"zz_newkey","type":"text","defaultText":"改后的默认文本","translations":{"en":"MODIFIED","zh-CHS":"已改"}}]}}
+node kanzi-mcp-client.mjs '{"name":"kz_loc_entry_set","arguments":{"target":"/Localization/Localization Table","rows":[{"resourceName":"zz_newkey","type":"text","defaultText":"改后的默认文本","translations":{"en":"MODIFIED","zh-CHS":"已改"}}]}}'
 # → updated=True；type 保持 text
 
 # 删（delete，多 key）
-HTTP POST http://123.57.85.81:9001/mcp（X-Kanzi-User: suijichao）→ tools/call {"name":"kz_loc_entry_delete","arguments":{"target":"/Localization/Localization Table","keys":["zz_newkey"]}}
+node kanzi-mcp-client.mjs '{"name":"kz_loc_entry_delete","arguments":{"target":"/Localization/Localization Table","keys":["zz_newkey"]}}'
 
 # 增语言列（add language）
-HTTP POST http://123.57.85.81:9001/mcp（X-Kanzi-User: suijichao）→ tools/call {"name":"kz_loc_entry_add_language","arguments":{"target":"/Localization/Localization Table","lang":"de"}}
+node kanzi-mcp-client.mjs '{"name":"kz_loc_entry_add_language","arguments":{"target":"/Localization/Localization Table","lang":"de"}}'
 # → success=True；languageCount / translations 出现新语言列
 
 # 删语言列（delete language）
-HTTP POST http://123.57.85.81:9001/mcp（X-Kanzi-User: suijichao）→ tools/call {"name":"kz_loc_entry_delete_language","arguments":{"target":"/Localization/Localization Table","lang":"de"}}
+node kanzi-mcp-client.mjs '{"name":"kz_loc_entry_delete_language","arguments":{"target":"/Localization/Localization Table","lang":"de"}}'
 # → success=True, found=True；该语言列从 get_Locales 消失；找不到 lang 返回 found=False 且不删任何内容
 ```
 
@@ -225,7 +225,7 @@ HTTP POST http://123.57.85.81:9001/mcp（X-Kanzi-User: suijichao）→ tools/cal
 - 完成后 `kz_loc_entry_delete` 清理测试条目
 - ⚠️ `type:"font"` + `targetRef:"/Font Families/..."`（路径）会失败；必须 `@obj` 裸对象引用
 
-**✅ 保留的真实条目（新增后不删，2026-08-19）：**
+**✅ 保留的真实条目（老隋要求新增后不删，2026-08-19）：**
 新增了一个永久字体引用条目并保留在表里：
 ```json
 {"name":"kz_loc_entry_add","arguments":{"target":"/Localization/Localization Table","rows":[{"resourceName":"ARFontfontFamily","type":"font","targetRef":"@obj40","defaultText":"AR字体"}]}}
@@ -253,7 +253,7 @@ HTTP POST http://123.57.85.81:9001/mcp（X-Kanzi-User: suijichao）→ tools/cal
 - 读任意 key 的 translations 出现新语言 `zz_test`（值为空，新语言未填翻译）
 - 返回 `recordRef`（CreateLocaleCommandRecord 对象引用，可继续 kz_invoke）
 
-**语言码规则：** 语言名称不可重复、必须用缩写（如 `en`/`zh-CHS`/`ar`/`de`）。
+**语言码规则（老隋要求）：** 语言名称不可重复、必须用缩写（如 `en`/`zh-CHS`/`ar`/`de`）。
 
 **实现（KzMCPReflectionBridge.AddLanguage，全反射）：**
 1. `ResolveObject(target)` → wrapper → `GetWrappedItemRaw()` 拿内部 LocalizationTable

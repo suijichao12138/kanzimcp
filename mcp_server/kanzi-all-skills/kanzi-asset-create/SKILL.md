@@ -93,7 +93,7 @@ mcp kz_invoke target=@obj67 method=SaveProject args=["@project"]   # ✅ 保存�
 
 ### ⚠️🌟 最关键的坑：泛型 T 必须用**完整类型名**
 
-推荐用 `CreateProjectItem<SingleTexture>(name, textureLibrary)`。MCP 里泛型 T 用 `@type:` 前缀，**必须是完整类型名**：
+老隋给的是 `CreateProjectItem<SingleTexture>(name, textureLibrary)`。MCP 里泛型 T 用 `@type:` 前缀，**必须是完整类型名**：
 
 | 写法 | 结果 |
 |---|---|
@@ -181,7 +181,7 @@ mcp kz_invoke target=@obj1094 method=Set args=["TextureImage", "@obj1071"]   # �
 # 4. 读回验证：@obj1094.get_Item("TextureImage") → @obj1071
 # 5. 保存：@studio.get_Commands() → SaveProject("@project")
 ```
-> **重名规则**：同一文件夹下不能有同名纹理；重名报 `A child with the name "xxx" already exists`。不同文件夹重名不冲突。创建前可用 `GenerateUniqueChildName(name)` 拿唯一名。
+> **重名规则**（老隋强调）：同一文件夹下不能有同名纹理；重名报 `A child with the name "xxx" already exists`。不同文件夹重名不冲突。创建前可用 `GenerateUniqueChildName(name)` 拿唯一名。
 
 ## 三、创建字体（Font Family）
 

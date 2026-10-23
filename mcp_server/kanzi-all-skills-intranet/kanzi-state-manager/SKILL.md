@@ -411,7 +411,7 @@ mcp({"jsonrpc":"2.0","id":"4","method":"tools/call","params":{"name":"kz_invoke"
 
 | 错误信息 | 原因 | 解决 |
 |----------|------|------|
-| Kanzi Studio 卡死，所有 API 返回空 | BeginBatchModification 无对应的 CommitBatchModification | **不要重启 Studio！** 停止当前批量操作，重新枚举 ref 恢复连接；如必须人工干预，请老隋处理 |
+| Kanzi Studio 卡死，所有 API 返回空 | BeginBatchModification 无对应的 CommitBatchModification | **不要重启 Studio！** 停止当前批量操作，重新枚举 ref 恢复连接；如必须人工干预，请用户处理 |
 | 子项看起来像 StatePluginWrapper，怀疑不是 StateObject | 只看了 get_Children 的 type 字段 | 用 `get_TargetObjectPath` 判别：能返回 `.` 就是 StateObject，确非根 State |
 | ref 不存在 | Studio 重启过（**仅人工**） | 重新获取所有 ref |
 

@@ -80,7 +80,7 @@ mcp kz_create_node parent=/Prefabs type=EmptyNode2D name=xxx
 1. **建节点父路径必须写到「真实 UI 节点」层级**（`/Screens/...` 的真实节点、或 `/Prefabs/<模板名>/<模板内部根>`）。
 2. **停在模板条目**（`/Prefabs/<模板名>`）会建出**幽灵节点**：API 层 `get_Children` 能枚举到、路径能解析，但 **UI 工程树里看不到、同名可再建**。
 3. 嵌套建节点父路径要写**完整层级**，不能漏中间的模板内部根那层。
-4. 判断是否真建成功：**以 Kanzi UI 工程树为准**（或让老隋在 UI 确认），别只看 API 枚举返回值。
+4. 判断是否真建成功：**以 Kanzi UI 工程树为准**（或让用户在 UI 确认），别只看 API 枚举返回值。
 5. `kz_create_node` 本身在 `/Screens/...` 和 `/Prefabs/...` 都能真实建节点；`kz_create_node` 无需区分工程激活与否（多工程 select 到哪个工程就操作哪个）。
 
 ### 🌟 创建插件节点类型（PluginXxx，2026-08-08 实测打通）

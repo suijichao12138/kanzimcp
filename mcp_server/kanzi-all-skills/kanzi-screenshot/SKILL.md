@@ -30,7 +30,7 @@ bridge 支持多工程操作。默认 `@project` 指向 ActiveProject，可在�
 - 全程 **ActiveProject 不变**（方案 A 承诺），不打扰你在 Studio 正编辑的工程。
 
 
-## 🚨 必执行项：截图前必须先刷新 Preview
+## 🚨 必执行项：截图前必须先刷新 Preview（2026-10-21 老隋要求）
 
 > **每次截图之前，必须先刷新 Preview（`Commands.RestartPreview()`）**，否则截到的可能是旧画面（创建节点/改属性后 Preview 未刷新）。**具体步骤见 `kanzi-refresh` skill**（拿 Commands → RestartPreview 两步，刷新后略等再截）。
 

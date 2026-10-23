@@ -14,9 +14,9 @@ description: Kanzi Studio 状态机创建/配置。StateManager、StateGroup、S
 
 **MCP (Model Context Protocol)** 通过 WebSocket JSON-RPC 调用 Kanzi Studio 插件。
 
-### 接入（HTTP MCP）
+### 接入（本机中继桥）
 
-通过 HTTP 端点 `POST http://123.57.85.81:9001/mcp`（Header `X-Kanzi-User: suijichao`，JSON-RPC `tools/call`）连接 Kanzi Studio 插件。返回 `ref_id = @objN` 自动进缓存，Studio 重启后（**仅人工操作**）编号失效须重新枚举。
+客户端 `kanzi-mcp-client.mjs`（workspace 根目录）：中继 `ws://123.57.85.81:58080`，channel `openclaw-main`，调用 `node kanzi-mcp-client.mjs '<tools/call 参数 JSON>'`。返回 `ref_id = @objN` 自动进缓存，Studio 重启后（**仅人工操作**）编号失效须重新枚举。
 
 ### 基本请求格式
 
@@ -75,7 +75,7 @@ StateManager (warning State Manager)
 
 用 `@type:` 类型短名直接创建，无需预取 RuntimeType，然后逐层 `CreateProjectItem`。
 
-> 🔁 **批量操作铁律**：创建状态机的脚本**必须用 `BeginBatchModification` / `CommitBatchModification` 成对包裹**，把 state/stateobject 的**创建 + 设置**（含但不限于：State 控制属性值、StateObject 的 TargetObjectPath/文本内容）**全部包进同一个 batch**。不成对会卡死 Studio。
+> 🔁 **批量操作铁律（老隋要求）**：创建状态机的脚本**必须用 `BeginBatchModification` / `CommitBatchModification` 成对包裹**，把 state/stateobject 的**创建 + 设置**（含但不限于：State 控制属性值、StateObject 的 TargetObjectPath/文本内容）**全部包进同一个 batch**。不成对会卡死 Studio。
 > 🔌 **单连接铁律**：批量脚本**只建一次连接**，Begin→所有创建/设置→Commit 全部在**同一连接**内完成。**禁止每次调用重新连接/新开进程**（跨连接会让 @obj ref 失效、batch 事务错乱、Studio 崩溃）。
 > ⚠️ **禁止硬编码 @obj 引用**（如 `@obj2191`）：每次连接/重启编号都会变，必须先从库重新枚举定位目标 parent（如 `get_StateManagerLibrary` → `get_Children` → 找到目标 SG 的当前 ref）。
 
@@ -217,7 +217,7 @@ mcp({"jsonrpc":"2.0","id":"2","method":"tools/call","params":{"name":"kz_invoke"
 
 - 崩溃堆栈：`StateGroup.GetInvalidityReason()` ← UI 线程枚举 StateGroup 集合；`ProjectItemViewModel.SetValidity()` ← 工程树刷新有效性标记；崩在 `System.Windows.Threading`（UI 线程）。
 - **机制**：状态机创建调用跑**非 UI 线程**（v5 提速策略）时，Kanzi 的 UI 线程同时枚举同一个 StateGroup 集合做有效性校验 → 集合被并发修改 → 「集合已修改」未处理异常 → 整个 Studio 崩。
-- **修复**：插件 `KzMCPServerClient` 的 kz_invoke 线程策略改为**一律 `Dispatcher.Invoke` 回 UI 线程**（修改和校验同线程串行，不再并发）。代价：批量创建约慢 2.7 倍（v5b 非UI 11 分钟 → UI 线程 30 分钟），换取稳定。
+- **修复（2026-10-20 老隋拍板）**：插件 `KzMCPServerClient` 的 kz_invoke 线程策略改为**一律 `Dispatcher.Invoke` 回 UI 线程**（修改和校验同线程串行，不再并发）。代价：批量创建约慢 2.7 倍（v5b 非UI 11 分钟 → UI 线程 30 分钟），换取稳定。
 - 不需要再 sleep / 分批小跑 / 限次数（那是非UI线程时代的缓解措施，已随修复移除）。
 
 #### ✅ 正确性规则（必须遵守，与线程无关）
@@ -304,7 +304,7 @@ args=["@obj:393", null]
 args=["@obj:393", "@obj:395"]
 ```
 
-### 🔀 方向 Direction
+### 🔀 方向 Direction（老隋语义约定！）
 
 - **"谁到谁"（如 0→2）= 单向 UNIDIRECTIONAL**：只作用 StartState→EndState
 - **"两个之间切换"（如 0 和 2 之间）= 双向 BIDIRECTIONAL**：Start⇄End 都生效，**一条过渡即可，勿建两条**
@@ -360,7 +360,7 @@ mcp kz_invoke target=@StateGroup method=DeleteTransition args=["@obj:<StateTrans
 @obj424 = SG.CreateTransition("@obj:393", null)   # StartState=0, EndState=null(任意)
 @obj424.set_Duration("@double:15")                 # 15ms
 
-# 创建 0⇄2 双向（== "0和2之间切换"）
+# 创建 0⇄2 双向（== 老隋"0和2之间切换"）
 @obj425 = SG.CreateTransition("@obj:393", "@obj:395")
 @obj425.set_Duration("@double:20")
 @obj425.set_StartTime("@double:5")

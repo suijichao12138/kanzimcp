@@ -99,7 +99,7 @@ skill MCP 提供 **3 个工具**（9001 网关 `/kanzi_skill_mcp`）：
 5. **🚫 绝不重启 / 关闭 / 退出 Kanzi Studio！** 这些操作会造成未保存内容丢失、且断连后可能再也连不上。**禁止**：重启 Studio、`CloseProject()`、`CloseSolution()`、`ExitApplication()`、杀 Studio 进程。遇到 Studio 卡死/异常 → 停止当前操作、重新枚举 ref 恢复连接；需要真重启/关闭时交给老隋人工处理，不自己操作。
 6. **🔁 批量操作必须成对**：`BeginBatchModification` 和 `CommitBatchModification` **必须成对出现**（不成对会卡死 Studio）。创建状态机的脚本必须把 state/stateobject 的**创建 + 设置**（含但不限于：State 控制属性值、StateObject 的 TargetObjectPath/文本内容）全部包进同一个 batch。
 7. **🔌 脚本必须单连接执行所有调用**：一个脚本**只建一次连接**（一个 WS client 连接/一个进程），**所有调用复用同一连接**提交。**禁止每次调用都重新连接/新开进程/新开连接**（会造成 @obj ref 缓存失效、batch 事务跨连接错乱、触发 Studio 崩溃）。批量脚本的正确结构：`建连接 → BeginBatchModification → 循环内复用同一连接发 N 次调用 → CommitBatchModification → 关闭连接`。
-8. **🔁 创建后必须刷新工程树 + 截图前必须刷新 Preview！****任何创建操作完成后，必须刷新工程树**，否则新建内容在 Kanzi Studio 里不可见。**适用于所有创建**：新建节点、模板（Prefab）、属性、状态机（StateManager/StateGroup/State/StateObject）、多国语表、纹理、动画、笔刷、资源条目、别名等，**创建之后必须 SelectProjectItems**。截图前必须先 RestartPreview。**完整步骤见 `kanzi-refresh` skill**（拿 Commands → SelectProjectItems / RestartPreview）。
+8. **🔁 创建后必须刷新工程树 + 截图前必须刷新 Preview！**（2026-10-21 老隋要求）**任何创建操作完成后，必须刷新工程树**，否则新建内容在 Kanzi Studio 里不可见。**适用于所有创建**：新建节点、模板（Prefab）、属性、状态机（StateManager/StateGroup/State/StateObject）、多国语表、纹理、动画、笔刷、资源条目、别名等，**创建之后必须 SelectProjectItems**。截图前必须先 RestartPreview。**完整步骤见 `kanzi-refresh` skill**（拿 Commands → SelectProjectItems / RestartPreview）。
 
 ## 🚫 命名铁律（所有创建/命名操作通用）
 

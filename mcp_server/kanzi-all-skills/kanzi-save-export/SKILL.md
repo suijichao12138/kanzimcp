@@ -115,9 +115,10 @@ r = mcp({
 ## 完整 Python 示例
 
 ```python
-# HTTP MCP：POST http://123.57.85.81:9001/mcp（Header X-Kanzi-User: suijichao）
-# 调用：JSON-RPC tools/call {"name":"kz_invoke","arguments":{"target":...,"method":...,"args":[...]}}
-# 下面 mcp({...}) 调用 = 对 kz_invoke 工具的一次调用（tools/call JSON-RPC）。
+# 本机中继桥：通过 ws://123.57.85.81:58080 调用 kz_invoke（客户端 kanzi-mcp-client.mjs）
+# 调用：node kanzi-mcp-client.mjs '{"name":"kz_invoke","arguments":{"target":...,"method":...,"args":[...]}}'
+# 下面 mcp({...}) 调用 = 对中继桥 kz_invoke 工具的一次调用（tools/call JSON-RPC）。
+# 说明：此例保留了手动 tools/call 结构，仅作底层反射调用参考；日常用 kanzi-mcp-client.mjs 只需传 tools/call 参数 JSON。
 
 # 1. 获取命令执行器
 r = mcp({
