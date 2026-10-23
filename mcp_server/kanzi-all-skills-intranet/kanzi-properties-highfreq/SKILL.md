@@ -5,7 +5,7 @@ description: Kanzi 高频属性速查（常驻 system prompt）。布局/文本/
 
 # Kanzi 高频属性速查（常驻）
 
-> 老隋圈定的高频属性。**绑定写法列已实测 ✅**。用法：查属性 → 在本表按 UI 名搜 → 拿绑定写法。
+> 高频属性。**绑定写法列已实测 ✅**。用法：查属性 → 在本表按 UI 名搜 → 拿绑定写法。
 > 冷门/没在这里的属性 → 用 skill MCP 的 `search_property` 查全量库，或读 `kanzi-properties-all` 对应分组。
 
 ## 布局与尺寸

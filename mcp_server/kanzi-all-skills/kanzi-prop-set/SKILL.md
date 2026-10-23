@@ -6,7 +6,7 @@ description: Kanzi 属性增删改查：set_Item/get_Item/AddProperty/RemoveProp
 ## 核心原则
 
 ### 对齐枚举速查（Node.HorizontalAlignment / Node.VerticalAlignment）
-> 对齐是**枚举属性**，设置**必须 `@int:`**（不支持 `@enum:`/裸字符串）。枚举值对照表（老隋提供，2026-08-19）：
+> 对齐是**枚举属性**，设置**必须 `@int:`**（不支持 `@enum:`/裸字符串）。枚举值对照表（2026-08-19）：
 
 | 属性 | 枚举项 | MCP 数值 |
 |------|--------|----------|
@@ -112,7 +112,8 @@ mcp({"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"kz_invoke"
 #### 方案二：用 `ensure_ascii=False`
 ```python
 # 请求时让 json.dumps 保留中文原样
-ws.send(json.dumps(req, ensure_ascii=False))
+data = json.dumps(req, ensure_ascii=False).encode()
+urllib.request.urlopen(urllib.request.Request(URL, data=data, headers=HEADERS))
 ```
 
 #### 方案三：使用原始字符串（避免嵌套序列化）

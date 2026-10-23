@@ -1,31 +1,32 @@
 ---
 name: kanzi-studio-mcp
-description: Kanzi Studio MCP 总入口。接入方式（http 端点 + X-Kanzi-User / relay ws 直连）、用脚本调 MCP 的完整流程与坑、31 个工具的确切参数 schema、v4 参数标识符（@type/@int/@string/@enum/@obj/@node/@null/@vector/@transformation2d/@color/@list 等）、target 取值、返回格式。操作 Kanzi Studio 前先读本 skill，再读具体操作的 skill（ui/binding/state-manager/animation/localization/resource-create/trigger/screenshot/save-export）。
+description: Kanzi Studio MCP 总入口。接入方式（http 端点 + X-Kanzi-User）、用脚本调 MCP 的完整流程与坑、31 个工具的确切参数 schema、v4 参数标识符（@type/@int/@string/@enum/@obj/@node/@null/@vector/@transformation2d/@color/@list 等）、target 取值、返回格式。操作 Kanzi Studio 前先读本 skill，再读具体操作的 skill（ui/binding/state-manager/animation/localization/resource-create/trigger/screenshot/save-export）。
 ---
 
 # kanzi-studio-mcp 使用手册（MCP 本身）
 
 > 操作 Kanzi Studio 的总入口。**任何 Kanzi 操作前先读本 skill**，再读对应具体 skill。
 
-## 〇、我有两种接入方式（都实测可用）
+## 〇、接入方式（HTTP MCP）
 
-### 方式 A：relay ws 直连（我当前用的，最方便）
+### 方式 A：HTTP MCP（当前用的）
 
-工作区脚本 `kanzi-mcp-client.mjs` 走这条：
+通过 HTTP 端点 `POST http://123.57.85.81:9001/mcp`（Header `X-Kanzi-User: suijichao`）连接 Kanzi Studio 插件，JSON-RPC `tools/call`。
 
 ```bash
 # 读工程名（验证连接）
-node /home/suijichao/.openclaw/workspace-kanzimcp/kanzi-mcp-client.mjs '{"name":"kz_invoke","arguments":{"target":"@project","method":"get_Name","args":[]}}'
+curl -s -X POST http://123.57.85.81:9001/mcp \
+  -H "Content-Type: application/json" -H "X-Kanzi-User: suijichao" \
+  -d '{"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"@project","method":"get_Name","args":[]}}}'
 # → ✅ 结果: cluster_hmi
 ```
 
-- 地址：`ws://123.57.85.81:58080/suijichao`（**端口 58080；路径段 = 通道名**）
-- **第一条消息必须带 `role`**：`{"role":"client","name":"suijichao"}` —— 否则中继回 `未知角色` / `Server not connected`
-- 之后走 JSON-RPC：`initialize` → `tools/call`
-- 相关脚本：`kanzi-mcp-client.mjs`（通用调用）、`kanzi-mcp-list-tools.mjs`（列工具）、`kanzi-shot-save.mjs`（截图落盘）
-- ⚠️ ws 直连是 **client 槽**：同通道里 server（Kanzi 插件）是对方。多 client 并存已支持（2026-09-14 实测）。
+- **端点**：`http://123.57.85.81:9001/mcp`（等价别名 `/kanzistudio_mcp`）
+- **必带 Header**：`X-Kanzi-User: suijichao`（缺=403，须在 users.json 白名单）
+- **JSON-RPC**：`tools/call`，`id` 唯一
+- 相关脚本：`kanzi-mcp-list-tools.mjs`（列工具）、`kanzi-shot-save.mjs`（截图落盘）
 
-### 🔌 脚本单连接铁律（批量/多调用脚本必读！2026-10-19 老隋要求）
+### 🔌 脚本单连接铁律（批量/多调用脚本必读！）
 
 **一个脚本只建一次连接，所有调用复用同一连接提交。**
 
@@ -34,35 +35,34 @@ node /home/suijichao/.openclaw/workspace-kanzimcp/kanzi-mcp-client.mjs '{"name":
 正确结构（伪代码，单连接复用）：
 
 ```python
-import json, websockets, asyncio
+import json, urllib.request
 
-async def main():
-    # 1. 只建一次连接（整个脚本复用这一个）
-    async with websockets.connect("ws://123.57.85.81:58080/suijichao") as ws:
-        await ws.send(json.dumps({"role":"client","name":"suijichao"}))
-        # 2. Begin 批量
-        await call(ws, "kz_invoke", {"target":"@project","method":"BeginBatchModification","args":["批量创建"]})
-        # 3. 循环内复用同一连接发 N 次调用（禁止每次重新连接）
-        for name in names:
-            await call(ws, "kz_invoke", {"target":"@project","method":"CreateProjectItem","args":["@type:State", name, parent_ref]})
-        # 4. Commit
-        await call(ws, "kz_invoke", {"target":"@project","method":"CommitBatchModification"})
+URL = "http://123.57.85.81:9001/mcp"
+HEADERS = {"Content-Type": "application/json", "X-Kanzi-User": "suijichao"}
 
-async def call(ws, tool, args):
-    req = {"jsonrpc":"2.0","id":"req-1","method":"tools/call","params":{"name":tool,"arguments":args}}
-    await ws.send(json.dumps(req, ensure_ascii=False))
-    resp = json.loads(await ws.recv())
-    return resp
+def call(tool, args, req_id="req-1"):
+    req = {"jsonrpc":"2.0","id":req_id,"method":"tools/call","params":{"name":tool,"arguments":args}}
+    r = urllib.request.Request(URL, data=json.dumps(req).encode(), headers=HEADERS)
+    return json.loads(urllib.request.urlopen(r).read().decode())
+
+def main():
+    # 1. Begin 批量
+    call("kz_invoke", {"target":"@project","method":"BeginBatchModification","args":["批量创建"]})
+    # 2. 循环内逐个调用（同一进程同一 URL，禁止每次重新起进程/重连）
+    for name in names:
+        call("kz_invoke", {"target":"@project","method":"CreateProjectItem","args":["@type:State", name, parent_ref]})
+    # 3. Commit
+    call("kz_invoke", {"target":"@project","method":"CommitBatchModification"})
 ```
 
 **规则**：
-1. **一个脚本 = 一个连接**。整个脚本生命周期只 `connect` 一次，循环/多步调用全部复用同一个 `ws`。
-2. **禁止**：每次调用都 `Popen` 新进程 / 重新 connect / 重新初始化（每次新连接 = 每次 @obj 缓存重排 + batch 状态跨连接）。
+1. **一个脚本 = 一个进程内连续调用**。整个脚本生命周期复用同一个 HTTP 端点（同一进程内 urllib/requests 连续 POST），循环/多步调用全部复用同一进程的 @obj 缓存。
+2. **禁止**：每次调用都 `Popen` 新进程 / 重新初始化（每次新进程 = 每次 @obj 缓存重排 + batch 状态跨进程）。
 3. **@obj 引用在同连接内连续有效**：本连接里第一次调用返回的 `@objN`，后续调用直接当 target/args 用。
 4. batch（Begin→调用→Commit）**必须在同一连接内完成**，不能 Begin 在连接 A、Commit 在连接 B。
-5. HTTP MCP（方式 B）是**无状态 HTTP**，每次 POST 独立 —— 批量脚本请用方式 A（ws 单连接）或把 batch 三件套放进同一个 Python 进程内连续 POST。
+5. HTTP MCP 是**无状态 HTTP**，每次 POST 独立 —— 批量脚本必须把 batch 三件套放进同一个 Python 进程内连续 POST（同进程内 @obj 缓存连续有效）。
 
-### 方式 B：HTTP MCP（脚本/其他工具接入用）
+### HTTP MCP 端点详情（脚本/其他工具接入用）
 
 ```
 POST http://<kz_mcp_http机IP>:9001/mcp
@@ -83,7 +83,7 @@ Header: X-Kanzi-User: <用户名>       ← 必需
 
 | 项 | 位置 | 说明 |
 |----|------|------|
-| **用户名** | HTTP header `X-Kanzi-User: <用户名>` | 必带；缺=403；须在 `users.json` 白名单；不同用户名 = 不同 relay 通道 |
+| **用户名** | HTTP header `X-Kanzi-User: <用户名>` | 必带；缺=403；须在 `users.json` 白名单；不同用户名 = 不同通道 |
 | **请求 id** | JSON-RPC 体里的 `id` | 必带；**同一时刻唯一即可**（数字/字符串都行）；回包按此 id 配对 |
 
 **② 最小可用脚本（Python）**
@@ -115,7 +115,7 @@ print(urllib.request.urlopen(req, timeout=60).read().decode())
   **两层修复（2026-09-14）**：方案A 插件 `JsonUtils.GetRaw` 原样透传 id；方案B http 侧收到 `-1` 时 FIFO 兜底配对。
 - **`isError:true` ≠ 请求丢失**：前者是 Kanzi **真执行后**的业务错误（如方法名不存在），说明链路已通。
 - **白名单热更新**：改 `users.json` 保存即生效，**不需要重启** kz_mcp_http.py。
-- **同用户名多客户端**：copilot 与脚本可各自独立连接并存（relay 多 client 并存 + 按 id 定向回传），不再互踢。
+- **同用户名多客户端**：copilot 与脚本可各自独立连接并存（多 client 并存 + 按 id 定向回传），不再互踢。
 
 ## 一.五、刷新工程树 / 刷新 Preview
 

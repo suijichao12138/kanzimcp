@@ -14,8 +14,8 @@ description: Kanzi Studio Shader 操作 skill（给 nlp/Copilot 用）—— 通
 ## 0. 前置：接入 + 定位库
 
 ```bash
-# 中继桥连接（本 skill 实测走这条）
-ws://123.57.85.81:58080，通道 suijichao，用 client.mjs 调 kz_invoke
+# HTTP MCP 连接
+POST http://123.57.85.81:9001/mcp（Header X-Kanzi-User: suijichao），JSON-RPC tools/call 调 kz_invoke
 
 # 定位三个库
 kz_invoke target=@project method=get_Children          # → Material Types 库 @objMT

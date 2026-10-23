@@ -12,7 +12,7 @@ description: Kanzi 动画全流程：读动画数据（定位库/读属性）、
 
 # Kanzi 动画全流程
 
-## 核心概念：Kanzi 动画分两层（2026-08-06 老隋指正）
+## 核心概念：Kanzi 动画分两层
 
 - **Animation Data**：存放单一关键帧动画。例：`Internal.ctrlState`、`Internal.stateAnimationOpacity`。
 - **Animation Clips**：存放动画组（AnimationClip 容器），可引用多个 Animation Data 下的动画组合成复杂动画。
@@ -33,7 +33,7 @@ mcp kz_invoke target=@project method=get_AnimationLibrary
 # 返回动画组（AnimationClipPluginWrapper）：实验工程 17 个，如 01circle_innerRadius
 ```
 
-### ⚠️ 函数名大小写铁律（2026-08-08 老隋指正，最关键！）
+### ⚠️ 函数名大小写铁律（最关键！）
 
 bridge 的 `kz_invoke` **只认大写 C# 方法名**。写错大小写 = 找不到方法：
 
@@ -85,7 +85,7 @@ Animation_test 上 `Get(属性名)` **实测能读到的属性**：
 
 > ⚠️ `Get("Internal.ctrlState")` 在动画项上会报 not found——`Internal.ctrlState` 是 target property，**不应**直接当动画项属性 Get，要走下节的 target property 路径。
 
-### 读 target property（动画的目标属性）—— 关键路径（2026-08-08 老隋指正）
+### 读 target property（动画的目标属性）—— 关键路径
 
 **`Internal.ctrlState` 是 Animation_test 的 target property 属性值**，正确读取路径：
 
@@ -179,9 +179,9 @@ mcp kz_invoke target=@动画ChildClip method=set_Item args=["AnimationChildClipT
 - `@anim:名称` 是 Kanzi 内部资源引用格式；bridge 原样透传字符串，Studio 侧自动解析成引用对象。
 - 之前试过 `@obj3` / 节点路径 / 纯数字 全部报 "cannot be converted to studio internal property value"——因为那是传对象引用/裸值，不是资源引用。
 
-## ⭐ 创建动画完整流程 + 命名规则（⭐ 2026-08-11 老隋定稿，重建动画/建新动画必看）
+## ⭐ 创建动画完整流程 + 命名规则（重建动画/建新动画必看）
 
-> 老隋要求：**动画名用全名**（带 `Internal.` 前缀），**新建前必须先获取所有动画名**，存在同名就在后边加 `_1`/`_2` 依次叠加。
+> **动画名用全名**（带 `Internal.` 前缀），**新建前必须先获取所有动画名**，存在同名就在后边加 `_1`/`_2` 依次叠加。
 
 ### 命名规则（铁律）
 1. **动画名 = 目标属性的全名**（带 `Internal.` 前缀）。例：目标 `Internal.ctrlState` → 动画名 `Internal.ctrlState`；目标 `Internal.stateAnimationOpacity` → 动画名 `Internal.stateAnimationOpacity`。
@@ -233,7 +233,7 @@ mcp kz_invoke target=@Test组 method=get_Item args=["AnimationDataChildReference
 
 ## ⭐ 动画组引用动画（AnimationDataChildReferences）—— 用 ReparentProjectItem 实现（2026-08-08）
 
-> **之前卡住的核心难点已解决**：让 Animation Clip 引用 Animation。**正确方法是 `ReparentProjectItem` + 两个完整路径字符串参数**（不是 @obj 引用、不是 `set_Item("AnimationDataChildReferences",...)`）。老隋在 Studio GUI 实测确认：`01circle_innerRadius` 已成功引用到 `adas.num`。
+> **之前卡住的核心难点已解决**：让 Animation Clip 引用 Animation。**正确方法是 `ReparentProjectItem` + 两个完整路径字符串参数**（不是 @obj 引用、不是 `set_Item("AnimationDataChildReferences",...)`）。Studio GUI 实测确认：`01circle_innerRadius` 已成功引用到 `adas.num`。
 
 ```python
 # 拿命令执行器
@@ -331,7 +331,7 @@ mcp kz_invoke target=@PlayAction method=set_Item args=["AnimationPlayer.PlayMess
 ```
 ✅ **已配置** (cluster_hmi warning 节点 分支B !=0 的 Play action, 2026-08-07): **RepeatCount=0(Infinite 无限循环)** + DurationScale=3(3倍速) + PlaybackMode=NORMAL。组件属性已复位回默认(RepeatCount=1/DurationScale=1)。
 
-> ⚠️ **Infinite 就是 RepeatCount=0**（老隋指正 2026-08-07）：Kanzi Studio **不允许设置 <0 的数**（set -1 会报错）。之前误以为 -1 是 Infinite，错的。**0 = Infinite 勾选值**。
+> ⚠️ **Infinite 就是 RepeatCount=0**：Kanzi Studio **不允许设置 <0 的数**（set -1 会报错）。之前误以为 -1 是 Infinite，错的。**0 = Infinite 勾选值**。
 
 ## ⭐ 用 DispatchMessageAction 控制动画启停（Trigger 里追加动作，2026-08-07 实测打通）
 
@@ -369,7 +369,7 @@ mcp kz_invoke target=@DispatchAction method=set_DispatchMessageActionMessageType
 ```
 ⚠️ **缓存时序坑**：`set_DispatchMessageActionMessageType` 有时报 `类型"System.String"无法转换为...MessageType`。因为 get_Items 新枚举出的 @obj 引用 bridge 缓存可能还没切成 MessageTypePluginWrapper 类型。**解决：set 前对消息引用多次 get_Name 预热缓存**（2-3次可靠），再 set 就成功。
 
-> 💡 **名字显示差异（2026-08-07 老隋确认）**：脚本创建的 DispatchMessageAction 默认名显示为 `Message.AnimationPlayer.Play`/`Stop`；而 UI 里手动创建（Dispatch Message Action → Animation Player → Start/Stop）默认名显示为 `Animation Player:Start`/`Stop`。**底层消息类型完全相同，功能等价，只是显示的默认名字不同，不是创建错了。**
+> 💡 **名字显示差异**：脚本创建的 DispatchMessageAction 默认名显示为 `Message.AnimationPlayer.Play`/`Stop`；而 UI 里手动创建（Dispatch Message Action → Animation Player → Start/Stop）默认名显示为 `Animation Player:Start`/`Stop`。**底层消息类型完全相同，功能等价，只是显示的默认名字不同，不是创建错了。**
 
 ### 4. RoutingTarget（消息发往目标节点）—— 默认即可！
 ```python

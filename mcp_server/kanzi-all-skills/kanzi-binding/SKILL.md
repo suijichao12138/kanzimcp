@@ -11,9 +11,9 @@ description: Kanzi Studio 动态数据绑定创建与表达式语法。CreateBin
 
 **MCP (Model Context Protocol)** 通过 WebSocket JSON-RPC 调用 Kanzi Studio 插件。
 
-### 接入（本机中继桥）
+### 接入（HTTP MCP）
 
-客户端 `kanzi-mcp-client.mjs`（workspace 根目录）：中继 `ws://123.57.85.81:58080`，channel `openclaw-main`，调用 `node kanzi-mcp-client.mjs '<tools/call 参数 JSON>'`。返回 `ref_id = @objN` 自动进缓存；Studio 重启后（**仅人工操作，助手绝不重启 Studio**）编号失效须重新枚举。
+通过 HTTP 端点 `POST http://123.57.85.81:9001/mcp`（Header `X-Kanzi-User: suijichao`，JSON-RPC `tools/call`）连接 Kanzi Studio 插件。返回 `ref_id = @objN` 自动进缓存；Studio 重启后（**仅人工操作，助手绝不重启 Studio**）编号失效须重新枚举。
 
 ### 基本请求格式
 
@@ -212,7 +212,7 @@ mcp({"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"kz_invoke"
 
 **通用字段**：非颜色/变换属性用 `N` 或 `VectorN`（N=X/Y/Z/W）。
 
-### 🌟 绑定路径写法总表（2026-10-20 老隋要求整理，覆盖全部节点引用方式）
+### 🌟 绑定路径写法总表（覆盖全部节点引用方式）
 
 > 绑定表达式里的路径写法，按「相对当前节点的位置」分 7 类。**推荐带 `@`**（校验路径/跟随移动/限同 prefab），示例均用带 @ 写法。
 

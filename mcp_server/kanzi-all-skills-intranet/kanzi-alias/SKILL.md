@@ -16,7 +16,7 @@ description: Kanzi 创建节点别名 Alias：ResourceDictionary.CreateNodeAlias
 > 用途：绑定表达式 `{#别名/属性}`、引擎 API `lookupNode("#别名")`、Action 的 Target Item。
 >
 > **底层 API（Studio 插件 API，kanzidocmcp 文档确认）**：
-> - `ResourceDictionary.CreateNodeAliasEntry(string resourceID, Node node)` —— **对象重载（推荐，2026-10-14 老隋确认正确）**
+> - `ResourceDictionary.CreateNodeAliasEntry(string resourceID, Node node)` —— **对象重载（推荐，2026-10-14）**
 > - `ResourceDictionary.CreateNodeAliasEntry(string resourceID, string relativePath)` —— 字符串重载（❌ 不可靠，建的是虚别名）
 > - `ResourceDictionary.DeleteEntry(string resourceID)` —— 删除别名
 > - `ResourceDictionary.NodeReferences` —— 枚举所有别名 `[key, 指向]`

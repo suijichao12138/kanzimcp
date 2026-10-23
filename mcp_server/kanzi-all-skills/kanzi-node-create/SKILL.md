@@ -31,9 +31,9 @@ mcp({"jsonrpc":"2.0","id":"2","method":"tools/call","params":{"name":"kz_create_
 | EmptyNode2D | 空容器节点 |
 | TextBlock2D | 文本块（支持 FontFamily、StateManager 等属性） |
 | Node2DPrefabPlaceholder | **Prefab 占位符节点**（引用模板，如 gear/POP） |
-| PluginTextscroll | **插件注册的滚动文本节点**（老隋需求，见下方专节） |
+| PluginTextscroll | **插件注册的滚动文本节点**（见下方专节） |
 
-### 🌟 在 Prefabs 模板库下创建节点（2026-08-17 实测打通，老隋逐次确认）
+### 🌟 在 Prefabs 模板库下创建节点（2026-08-17 实测打通）
 
 > **背景**：`/Prefabs/...`（模板库）里也能建节点，但**父路径必须写到真实 UI 节点那一层，不能停在「模板条目」上**——否则创建的节点在 API 层「成功」、UI 工程树里却**不可见（幽灵节点）**。
 
@@ -85,7 +85,7 @@ mcp kz_create_node parent=/Prefabs type=EmptyNode2D name=xxx
 
 ### 🌟 创建插件节点类型（PluginXxx，2026-08-08 实测打通）
 
-> **背景**：老隋要求"创建 `plugin_textscroll` 类型的节点"。直接传 `plugin_textscroll` 会失败（`不支持的节点类型或方法`）。**正确类型名是 `PluginTextscroll`** —— 插件在工程里注册的节点类型名是 `Plugin` + 名字（无点、无 2D 后缀），不是下划线的 `plugin_xxx`。
+> **背景**：要求"创建 `plugin_textscroll` 类型的节点"。直接传 `plugin_textscroll` 会失败（`不支持的节点类型或方法`）。**正确类型名是 `PluginTextscroll`** —— 插件在工程里注册的节点类型名是 `Plugin` + 名字（无点、无 2D 后缀），不是下划线的 `plugin_xxx`。
 
 #### ⚠️ 找插件节点类型的正确方法（关键！）
 

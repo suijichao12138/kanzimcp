@@ -1,6 +1,6 @@
 ---
 name: kanzi-refresh
-description: Kanzi 刷新工程树 + 刷新 Preview。创建任何对象后必须 SelectProjectItems 刷工程树；截图前必须 RestartPreview 刷 Preview。用 kz_invoke 反射调 Commands（GeneratedCommandInvoker），不加专用工具。2026-10-21 老隋要求。
+description: Kanzi 刷新工程树 + 刷新 Preview。创建任何对象后必须 SelectProjectItems 刷工程树；截图前必须 RestartPreview 刷 Preview。用 kz_invoke 反射调 Commands（GeneratedCommandInvoker），不加专用工具。
 ---
 
 # Kanzi 刷新工程树 / 刷新 Preview

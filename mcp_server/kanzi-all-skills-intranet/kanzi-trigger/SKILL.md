@@ -5,12 +5,12 @@ description: Kanzi Studio Triggers（触发器）创建与配置。TriggerNodeCo
 
 # Kanzi Trigger 创建
 
-## 连接模板（本机中继桥）
+## 连接模板（HTTP MCP）
 
-通过中继 WebSocket 连接 Kanzi Studio 插件。客户端 `kanzi-mcp-client.mjs`（workspace 根目录）。
+通过 HTTP MCP 连接 Kanzi Studio 插件。
 
-- **中继**：`ws://123.57.85.81:58080`，channel = `openclaw-main`
-- **调用**：`node kanzi-mcp-client.mjs '<tools/call 参数 JSON>'`，参数格式 `{"name":"kz_invoke","arguments":{"target":"X","method":"Y","args":[...]}}`
+- **端点**：`POST http://123.57.85.81:9001/mcp`（Header `X-Kanzi-User: suijichao`）
+- **调用**：JSON-RPC `tools/call`，参数格式 `{"name":"kz_invoke","arguments":{"target":"X","method":"Y","args":[...]}}`
 - 示例中的 `mcp kz_invoke target=X method=Y args=[...]` 即上一条的简写。
 
 ## 核心：创建 Trigger（✅ 已实测全面打通）
@@ -152,11 +152,11 @@ mcp kz_invoke target=@PlayAction method=set_Item args=["AnimationPlayer.PlayMess
 ```
 ⚠️ `set_RoutingTarget` 只接受 `@node:相对路径`（如 `@node:../..`），绝对路径/纯路径/对象引用全失败。但默认值已正确，通常不动。
 
-**名字显示差异（老隋确认）**：脚本创建的 DispatchMessageAction 默认名显示为 `Message.AnimationPlayer.Play/Stop`；Studio 手动创建（Dispatch Message Action → Animation Player → Start/Stop）默认名显示 `Animation Player:Start/Stop`。**底层消息类型完全相同，功能等价，不是建错。**
+**名字显示差异**：脚本创建的 DispatchMessageAction 默认名显示为 `Message.AnimationPlayer.Play/Stop`；Studio 手动创建（Dispatch Message Action → Animation Player → Start/Stop）默认名显示 `Animation Player:Start/Stop`。**底层消息类型完全相同，功能等价，不是建错。**
 
 ### 7b. DispatchMessageAction → StateManager GoToState（直接跳转状态！2026-08-07）
 
-> ⚠️ **要控制状态机切状态，用 GoToState 消息（直接跳转），不是设控制属性/SetPropertyAction！** 老隋确认：正确流程是 **Dispatch Message Action → State Manager → Go To State**。
+> ⚠️ **要控制状态机切状态，用 GoToState 消息（直接跳转），不是设控制属性/SetPropertyAction！** 正确流程是 **Dispatch Message Action → State Manager → Go To State**。
 
 **消息**：`Message.StateManager.GoToState`（MessageTypes 库 `@obj129 get_Items` 里有；还有 GoToNextDefinedState/GoToPreviousDefinedState/EnteredState/LeftState 等）。
 
@@ -262,7 +262,7 @@ actB.set_Item(PropertyValue, "@string:1")
 - ✅ 工程无损：所有测试对象已清理
 - ✅ **OnPropertyChangedTrigger 完整链路打通**：info 下 warning+text 节点、绑定、触发warning.value、双分支 Condition(action 判断EQUALS/DIFFERENT + 固定值) → SetPropertyAction 写 text.text=0/1，全部读回验证通过（2026-08-07）
 - ✅ **DispatchMessageAction 控制动画启停打通**：trigger 追加动作，MessageType=Play/Stop，默认 RoutingTarget 指向节点自身；循环（RepeatCount=0）+3倍速（DurationScale=3）配在 PlayMessageArguments（2026-08-07）
-- ✅ **DispatchMessageAction → StateManager.GoToState 打通（老隋纠正）**：直接跳转状态，State/StateGroup 参数用**裸名字符串**（非 @obj引用）；分支A→warning_0、分支B→warning_2（2026-08-07）
+- ✅ **DispatchMessageAction → StateManager.GoToState 打通**：直接跳转状态，State/StateGroup 参数用**裸名字符串**（非 @obj引用）；分支A→warning_0、分支B→warning_2（2026-08-07）
 
 ## 相关主题
 - 节点/组件创建：kanzi-ui skill

@@ -1,6 +1,6 @@
 ---
 name: kanzi-material-brush
-description: Kanzi Studio 创建「参数化渐变材质笔刷」的完整流程（Material + MaterialType + MaterialBrush 三层关联，含顶点/片元双着色器、uniform 属性、binding）。2026-08-11 完整实测打通。适用于 HMI 工程要新建一个带红→黄（或任意两色）渐变的可复用材质刷。所有命令走中继桥（ws://123.57.85.81:58080，kz_invoke）。
+description: Kanzi Studio 创建「参数化渐变材质笔刷」的完整流程（Material + MaterialType + MaterialBrush 三层关联，含顶点/片元双着色器、uniform 属性、binding）。2026-08-11 完整实测打通。适用于 HMI 工程要新建一个带红→黄（或任意两色）渐变的可复用材质刷。所有命令走 HTTP MCP（http://123.57.85.81:9001/mcp，kz_invoke）。
 ---
 ## 🚫 命名铁律（创建前必读）
 
@@ -9,13 +9,13 @@ description: Kanzi Studio 创建「参数化渐变材质笔刷」的完整流程
 > 不要以数字开头（部分 API 限制）。
 > 错误：`text/header` `bg.1` `a|b` `C:\temp` `new node`；正确：`text_header` `bg_1` `标题文本` `header-text`。
 
-## 0. 前置：接入中继桥 + 定位库
+## 0. 前置：接入 HTTP MCP + 定位库
 
 ```bash
-# 中继：ws://123.57.85.81:58080，channel = openclaw-main，客户端名 kanzi-mcp-client.mjs
-# 调用：node kanzi-mcp-client.mjs '{"name":"kz_invoke","arguments":{"target":"<ref或路径>","method":"<方法>","args":[...]}}'
+# HTTP MCP：POST http://123.57.85.81:9001/mcp（Header X-Kanzi-User: suijichao）
+# 调用：JSON-RPC tools/call {"name":"kz_invoke","arguments":{"target":"<ref或路径>","method":"<方法>","args":[...]}}
 
-# 建立连接后先 initialize(protocolVersion=2024-11-05)，再：
+# 无需 initialize，直接 tools/call：
 kz_invoke target=@project method=get_Children          # → Material Types 库 @objMT
 kz_invoke target=@project method=get_MaterialLibrary   # → Materials 库 @objMatLib
 kz_invoke target=@project method=get_BrushLibrary      # → Brushes 库 @objBrushLib
@@ -81,7 +81,7 @@ void main()
 }
 ```
 
-### 🌟 最容易踩的 3 个坑（老隋连续指正）
+### 🌟 最容易踩的 3 个坑
 1. **片元着色器缺 `vTexCoord` 声明**（`varying mediump vec2 vTexCoord;`）→ 编译失败、uniform 读不出（Get("Uniforms") 只有 kzProjectionCameraWorldMatrix）。
 2. **片元着色器 main 内缺 `precision mediump float;`** → uniform 能暴露但渲染不对。
 3. **顶点着色器没传 `vTexCoord`**（缺 `attribute kzTextureCoordinate0` / `varying vTexCoord` / `vTexCoord = kzTextureCoordinate0`）→ **最隐蔽**：uniform 暴露、binding 对、材质 brush 都建了，但渐变就是出不来（片元里 vTexCoord.x 没值）。
