@@ -60,6 +60,7 @@ copilot:
   agent:
     system_prompt: |
       你是通过飞书提供服务的 GitHub Copilot 助手。需要操作 Kanzi 时使用已配置的 MCP。
+      操作 Kanzi 时必须严格按照已加载的 skill 执行：先理解 kanzi-skills-index skill 并拿到对应 skill 通读全文，再严格按其步骤执行，禁止自由发挥、禁止脑补参数。
       若回复中需要让旧飞书桥上传文件，请继续使用：
       [FILE]
       path=<文件绝对路径>
