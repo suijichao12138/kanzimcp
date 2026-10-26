@@ -9,6 +9,17 @@ description: Kanzi 创建节点别名 Alias：ResourceDictionary.CreateNodeAlias
 > 不要以数字开头（部分 API 限制）。
 > 错误：`text/header` `bg.1` `a|b` `C:\temp` `new node`；正确：`text_header` `bg_1` `标题文本` `header-text`。
 
+### 🔍 创建前查重（幂等，2026-10-26 加，协议铁律第17条）
+
+> 子会话可能被重派重试，**不假设本次任务全新**。创建别名前先查目标资源字典里是否已有同别名，**已存在则跳过创建**，回报注明「N 个已存在跳过」。
+
+```python
+# 取目标节点资源字典，枚举已有别名（NodeReference）：
+mcp kz_invoke target=<Screen> method=get_ResourceDictionary
+mcp kz_invoke target=<RD ref> method=get_NodeReferences
+# → 逐个比对别名，本次要创建的别名已存在 → 跳过创建（记入「已存在跳过」）
+```
+
 ## 🌟 创建别名 Alias（2026-10-13 实测打通）
 
 > **别名（Alias）**：对节点的稳定引用，用 `#别名` 访问，节点在树里移动也不影响。

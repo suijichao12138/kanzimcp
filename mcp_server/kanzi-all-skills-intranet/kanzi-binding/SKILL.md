@@ -106,6 +106,19 @@ CreateBinding(Property property, AnimationTargetPropertyAttributeEnum attribute,
 > 官方文档：`kanzi-studio-plugin-api` → `AnimationTargetPropertyAttributeEnum`（a00260 页）。
 > ⚠️ 注意：这是**插件侧**枚举（CreateBinding 用），和运行时 API 的 `PropertyField` 枚举数值**不同**（运行时 Whole=0/TranslationX=1…），别混。
 
+### 🔍 创建前查重（幂等，2026-10-26 加，协议铁律第17条）
+
+> 子会话可能被重派重试，**不假设本次任务全新**。创建绑定前先查目标节点已有绑定，**已存在则跳过创建**，回报注明「N 个已存在跳过」。
+
+```python
+# 查目标节点已有绑定列表（详见下方「查询绑定」）：
+mcp({"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"/Screens/.../text","method":"get_Bindings"}}})
+# → 返回绑定列表；逐个 get_Property 看绑定的目标属性名/路径，
+# 与本次要创建的绑定（目标属性+表达式）比对：
+#   相同 → 已存在，跳过创建（记入「已存在跳过」）；
+#   不同 → 才创建。
+```
+
 ## 完整流程
 
 ```python

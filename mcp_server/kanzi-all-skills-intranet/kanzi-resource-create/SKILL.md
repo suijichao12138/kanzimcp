@@ -9,6 +9,18 @@ description: Kanzi 创建 Resource 资源条目（ResourceDictionary + CreateRes
 
 > **背景**：之前 `CreateResourceDictionary()` 返回空、拿不到对象去调 `CreateResourceEntry` 的根因，已在 **v6** 修复：`WrapResult` 增加 `ResourceDictionary` 特判（类型名含 ResourceDictionary 时 `RegisterObject` 返回对象引用，不再被当成空集合展开）。**v6 之后可用此方法在节点/页面上创建资源条目**（如颜色刷、图片）。
 
+### 🔍 创建前查重（幂等，2026-10-26 加，协议铁律第17条）
+
+> 子会话可能被重派重试，**不假设本次任务全新**。创建资源条目前先查目标节点的资源字典里是否已有同 resourceID/资源名，**已存在则跳过创建**，回报注明「N 个已存在跳过」。
+
+```python
+# 取目标节点资源字典，枚举已有条目：
+mcp kz_invoke target=<节点> method=get_ResourceDictionary args=[]
+mcp kz_invoke target=<RD ref> method=get_Resources args=[]
+# → 返回 KeyValuePair [resourceID, 资源名]，逐个比对：
+#   本次要创建的 resourceID 或资源名已存在 → 跳过创建（记入「已存在跳过」）
+```
+
 #### 核心流程（两步）
 
 **第1步：在目标节点上创建（或取）ResourceDictionary**

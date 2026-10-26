@@ -170,6 +170,16 @@ TBL="/Localization/Localization Table"   # v13 工具 target 都指向它
 
 > ⚠️ **地址规则**：若环境已配置好相关 MCP（如 nlp_worker config.yaml 的 `mcp_servers` 或部署机已建网关），**必须使用已配置的 MCP 地址**；`<kz_mcp_http机IP>` 仅为通用占位符（未配置时的示例写法）。
 
+### 🔍 创建前查重（幂等，2026-10-26 加，协议铁律第17条）
+
+> 子会话可能被重派重试，**不假设本次任务全新**。新增多国语 key 前先查该 key 是否已存在，**已存在则跳过新增**（改用更新），回报注明「N 个已存在跳过」。
+
+```bash
+# 按 key 查（已存在则返回该行，不存在报错/空）：
+HTTP POST http://<kz_mcp_http机IP>:9001/mcp（X-Kanzi-User: suijichao）→ tools/call {"name":"kz_loc_entry_get","arguments":{"target":"/Localization/Localization Table","key":"<本次要新增的KEY>"}}
+# → 查得到（该 key 已存在）→ 跳过新增；查不到 → 才 kz_loc_entry_add
+```
+
 ### CRUD 实测示例
 ```bash
 # 查

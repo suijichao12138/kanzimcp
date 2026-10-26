@@ -10,6 +10,20 @@ description: Kanzi 节点创建：kz_create_node 创建 EmptyNode2D/TextBlock2D/
 > 不要以数字开头（部分 API 限制）。
 > 错误：`text/header` `bg.1` `a|b` `C:\temp` `new node`；正确：`text_header` `bg_1` `标题文本` `header-text`。
 
+### 🔍 创建前查重（幂等，2026-10-26 加，协议铁律第17条）
+
+> 子会话可能被重派重试，**不假设本次任务全新**。创建节点前先查父节点下是否已存在同名节点，**已存在则跳过创建**，回报注明「N 个已存在跳过」。
+
+```python
+# 枚举父节点子项，比对名称（同名即已存在）：
+mcp({"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"<父节点路径>","method":"get_Children","args":[]}}})
+# → 逐个看返回项 name：
+#   本次要创建的节点名已在列表 → 跳过创建（记入「已存在跳过」）；
+#   不在 → 才创建。
+```
+
+> ⚠️ 查父节点时用路径（如 `/Screens/Screen/RootPage`）或已枚举到的父 ref；切换工程后先重新枚举。
+
 ## 创建节点
 
 ### kz_create_node（推荐，最简单）

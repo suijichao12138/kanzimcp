@@ -12,6 +12,24 @@ description: Kanzi 动画全流程：读动画数据（定位库/读属性）、
 
 # Kanzi 动画全流程
 
+### 🔍 创建前查重（幂等，2026-10-26 加，协议铁律第17条）
+
+> 子会话可能被重派重试，**不假设本次任务全新**。创建动画/动画组前先查两个库是否已存在同名对象，**已存在则跳过创建**，回报注明「N 个已存在跳过」。
+
+```python
+# 1) Animation Data 库：project.get_AnimationLibrary() → get_Children()，比对动画名
+mcp kz_invoke target=@project method=get_AnimationLibrary
+mcp kz_invoke target=<AnimationLibrary ref> method=get_Children
+# → 本次要创建的动画名已存在 → 跳过
+
+# 2) Animation Clips 库：project.get_Children() 里 name=="Animation Clips" → get_Children，比对 Clip 名
+mcp kz_invoke target=@project method=get_Children
+mcp kz_invoke target=<Animation Clips ref> method=get_Children
+# → 本次要创建的 Clip 名已存在 → 跳过
+```
+
+> ⚠️ 注意函数名大小写铁律：`get_Items()`/`get_Item(属性名)`，无参枚举用 `get_Children()`/`get_Items()`，详见下文。
+
 ## 核心概念：Kanzi 动画分两层
 
 - **Animation Data**：存放单一关键帧动画。例：`Internal.ctrlState`、`Internal.stateAnimationOpacity`。

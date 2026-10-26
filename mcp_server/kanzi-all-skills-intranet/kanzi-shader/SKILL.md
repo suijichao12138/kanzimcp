@@ -27,6 +27,17 @@ kz_invoke target=@project method=get_BrushLibrary      # → Brushes 库 @objBru
 
 > ⚠️ `@objN` 引用每次重连都会重新编号，**必须先枚举定位**，勿硬编码。⚠️ **助手绝不重启 Studio**（会造成未保存内容丢失且断连）。
 
+### 🔍 创建前查重（幂等，2026-10-26 加，协议铁律第17条）
+
+> 子会话可能被重派重试，**不假设本次任务全新**。新建 MaterialType 前先查 Material Types 库是否已存在同名类型，**已存在则跳过创建**，回报注明「N 个已存在跳过」。
+
+```bash
+# 枚举 Material Types 库（@project.get_Children() 里 name=="Material Types"）的 get_Children，比对名称：
+kz_invoke target=<Material Types 库 ref> method=get_Children
+# → 本次要创建的 MaterialType 名已存在 → 跳过创建；不存在 → 才创建
+# 只修改已有 MaterialType 的 shader 时不查重（目标是改内容不是新建），但改前必须先读当前内容
+```
+
 ---
 
 ## 1. Shader 资源模型（一句话搞懂）

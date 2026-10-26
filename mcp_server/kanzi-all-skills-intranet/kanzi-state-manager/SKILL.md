@@ -57,6 +57,24 @@ mcp({"..","name":"kz_invoke","arguments":{"target":"@obj47","method":"get_Name",
 
 下面的调用统一走 `kz_invoke`（工具名，参数遵循 v4 标识符 @type/@int/@string/@enum/@obj/@color 等）。
 
+### 🔍 创建前查重（幂等，2026-10-26 加，协议铁律第17条）
+
+> 子会话可能被重派重试，**不假设本次任务全新**。创建状态机前先查 StateGroup/State 是否已存在，**已存在则跳过创建**，回报注明「N 个已存在跳过」。
+
+```python
+# 1) 枚举 StateManagerLibrary 下所有 StateGroup：
+mcp({"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"@project","method":"get_StateManagerLibrary","args":[]}}})
+mcp({"jsonrpc":"2.0","id":"2","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"<StateManagerLibrary ref>","method":"get_Children","args":[]}}})
+# → 比对 StateGroup 名，已存在则跳过该组创建
+
+# 2) StateGroup 内查 State：
+mcp({"jsonrpc":"2.0","id":"3","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"<StateGroup ref>","method":"get_Children","args":[]}}})
+# → 比对 State 名（注意 get_Children 的 type 字段不可靠，用 get_TargetObjectPath 判别），
+#   已存在则跳过该 State 创建
+```
+
+> ⚠️ 查重顺序与创建顺序一致：先组后 State；StateObject 也按名称查重。
+
 ## 创建状态机
 
 ### 核心概念

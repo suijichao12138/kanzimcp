@@ -5,6 +5,17 @@ description: Kanzi 创建自定义属性类型（Property Types / DynamicPropert
 
 ## 自定义属性类型 — 创建属性（Property Types）
 
+### 🔍 创建前查重（幂等，2026-10-26 加，协议铁律第17条）
+
+> 子会话可能被重派重试，**不假设本次任务全新**。创建属性类型前先查 PropertyTypeLibrary 里是否已存在同名属性类型，**已存在则跳过创建**，回报注明「N 个已存在跳过」。
+
+```python
+# 枚举已有属性类型（名称唯一）：
+mcp({"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"@project","method":"get_PropertyTypeLibrary","args":[]}}})
+mcp({"jsonrpc":"2.0","id":"2","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"<PropertyTypeLibrary ref>","method":"get_ProjectPropertyTypes","args":[]}}})
+# → 比对名称（get_Name），本次要创建的属性名已存在 → 跳过创建（记入「已存在跳过」）
+```
+
 ### 获取属性类型库
 
 ```python

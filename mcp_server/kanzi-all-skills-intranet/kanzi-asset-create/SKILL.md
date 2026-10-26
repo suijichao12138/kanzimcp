@@ -15,6 +15,20 @@ description: Kanzi 创建素材：颜色笔刷（Color Brush）、纹理（Textu
 > 素材 = 在工程 Brushes / Textures / Font Families 库里创建的独立对象：**颜色刷、纹理、字体**。
 > 它们不是 Resource 条目（Resource 条目 = ResourceDictionary 里的条目，见 kanzi-resource-create）。
 
+### 🔍 创建前查重（幂等，2026-10-26 加，协议铁律第17条）
+
+> 子会话可能被重派重试，**不假设本次任务全新**。创建素材前先查对应库是否已存在同名对象，**已存在则跳过创建**，回报注明「N 个已存在跳过」。注意 `GenerateUniqueChildName` 会**自动加 `_1/_2` 后缀造新名**，不能用它来规避查重。
+
+```python
+# Brushes 库：get_BrushLibrary → get_Children，比对颜色刷名
+mcp kz_invoke target=@project method=get_BrushLibrary
+mcp kz_invoke target=<Brushes ref> method=get_Children
+# → 本次要创建的颜色刷名已存在 → 跳过
+
+# Textures 库：@project.get_Children() 里 name=="Textures" → get_Children（含子库），比对纹理名
+# Font Families 库：@project.get_Children() 里 name=="Font Families" → get_Children，比对字体名
+```
+
 ## 一、创建颜色笔刷（Color Brush）
 
 > 在工程 **Brushes 库** 里新建颜色刷并设 RGBA 颜色。颜色刷是 UI 前景色/背景色的常用素材。
