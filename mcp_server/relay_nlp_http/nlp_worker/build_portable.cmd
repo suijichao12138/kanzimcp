@@ -87,8 +87,10 @@ echo [5/7] Building PyInstaller onedir package...
 if errorlevel 1 exit /b 1
 
 echo [6/7] Adding external configuration templates...
+if not exist "dist\nlp-worker-portable\workspace" mkdir "dist\nlp-worker-portable\workspace"
 copy /Y "config.example.yaml" "dist\nlp-worker-portable\config.example.yaml" >nul
 copy /Y ".env.example" "dist\nlp-worker-portable\.env.example" >nul
+if exist ".env" copy /Y ".env" "dist\nlp-worker-portable\.env" >nul
 copy /Y "README.md" "dist\nlp-worker-portable\README.md" >nul
 copy /Y "run.cmd" "dist\nlp-worker-portable\run.cmd" >nul
 copy /Y "login_copilot.cmd" "dist\nlp-worker-portable\login_copilot.cmd" >nul

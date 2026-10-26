@@ -31,6 +31,11 @@ copilot:
   resume_failure: error
   configuration_change: new
   enable_session_store: true
+  infinite_session:
+    # 自动压缩上下文（SDK 1.0.26 无限会话）：利用率到阈值自动后台压缩历史，防长对话溢出
+    enabled: true
+    background_compaction_threshold: 0.80
+    buffer_exhaustion_threshold: 0.95
   large_output:
     enabled: true
     max_size_bytes: 51200

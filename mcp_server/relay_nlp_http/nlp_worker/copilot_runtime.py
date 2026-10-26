@@ -707,6 +707,29 @@ class LargeOutputConfig(StrictModel):
     output_directory: Path | None = None
 
 
+class InfiniteSessionConfig(StrictModel):
+    """无限会话自动压缩（SDK 1.0.26 InfiniteSessionConfig）。
+
+    - enabled: 是否启用后台自动压缩上下文（默认 True）
+    - background_compaction_threshold: 上下文利用率到该比例时后台异步压缩（0.0-1.0，默认 0.80）
+    - buffer_exhaustion_threshold: 到该比例时阻塞等压缩完成防溢出（0.0-1.0，默认 0.95）
+    """
+    enabled: bool = True
+    background_compaction_threshold: Annotated[float, Field(ge=0.1, le=1.0)] = 0.80
+    buffer_exhaustion_threshold: Annotated[float, Field(ge=0.1, le=1.0)] = 0.95
+
+    @model_validator(mode="after")
+    def validate_thresholds(self) -> "InfiniteSessionConfig":
+        if (
+            self.buffer_exhaustion_threshold
+            < self.background_compaction_threshold
+        ):
+            raise ValueError(
+                "buffer_exhaustion_threshold must be >= background_compaction_threshold"
+            )
+        return self
+
+
 class AgentConfig(StrictModel):
     system_prompt: str = ""
     system_prompt_mode: Literal["append", "replace"] = "append"
@@ -739,6 +762,7 @@ class CopilotConfig(StrictModel):
     configuration_change: Literal["error", "new"] = "error"
     enable_session_store: bool = True
     large_output: LargeOutputConfig = Field(default_factory=LargeOutputConfig)
+    infinite_session: InfiniteSessionConfig = Field(default_factory=InfiniteSessionConfig)
     model: ModelConfig
     agent: AgentConfig = Field(default_factory=AgentConfig)
     permissions: PermissionConfig = Field(default_factory=PermissionConfig)
@@ -1012,7 +1036,18 @@ def _expand_env(value: object, location: str = "config") -> object:
 
 def load_config(path: str | Path) -> AppConfig:
     config_path = Path(path).resolve()
-    load_dotenv(config_path.parent / ".env", override=False)
+    # 加载 config.yaml 同目录的 .env（若有）。Windows 中文系统默认编码可能是 GBK，
+    # 而 .env 常存为 UTF-8：先试 utf-8-sig（兼容 BOM），失败再试 gbk，避免因编码读不到变量。
+    env_path = config_path.parent / ".env"
+    if env_path.is_file():
+        for _enc in ("utf-8-sig", "gbk"):
+            try:
+                load_dotenv(env_path, override=False, encoding=_enc)
+                break
+            except (UnicodeDecodeError, LookupError):
+                continue
+    else:
+        log.warning("no .env file next to %s; ${...} placeholders will fail", config_path)
     try:
         raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     except FileNotFoundError as exc:
@@ -2021,6 +2056,15 @@ class CopilotRuntime:
             }
         else:
             kwargs["large_output"] = {"enabled": False}
+        # 无限会话自动压缩（SDK 1.0.26）：上下文利用率到阈值自动后台压缩历史，
+        # 防长对话上下文溢出。主会话与子会话都生效。
+        inf = self.config.copilot.infinite_session
+        if inf.enabled:
+            kwargs["infinite_sessions"] = {
+                "enabled": True,
+                "background_compaction_threshold": inf.background_compaction_threshold,
+                "buffer_exhaustion_threshold": inf.buffer_exhaustion_threshold,
+            }
         return kwargs
 
     def _build_fingerprint(self) -> str:
