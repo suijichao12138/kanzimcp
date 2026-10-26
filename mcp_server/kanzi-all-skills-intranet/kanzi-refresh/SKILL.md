@@ -6,7 +6,7 @@ description: Kanzi 刷新工程树 + 刷新 Preview。创建任何对象后必�
 # Kanzi 刷新工程树 / 刷新 Preview
 
 > **规则**：任何创建完成后必须刷新工程树；任何截图前必须刷新 Preview。否则 Studio 里看不到新内容 / 截到旧画面。
-> **原理**：插件无专用刷新工具，但 `@studio.get_Commands()` 返回的 GeneratedCommandInvoker 有这两个方法（2026-10-21 阿里云实机验证通过）。
+> **原理**：插件无专用刷新工具，但 `@studio.get_Commands()` 返回的 GeneratedCommandInvoker 有这两个方法（2026-10-21 实机验证通过）。
 
 ## 唯一前置：拿 Commands 对象
 

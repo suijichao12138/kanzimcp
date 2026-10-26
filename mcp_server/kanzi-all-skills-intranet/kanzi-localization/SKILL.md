@@ -168,29 +168,31 @@ TBL="/Localization/Localization Table"   # v13 工具 target 都指向它
 > rows 元素结构：`{"resourceName":KEY, "type":"text|font|style|node", "defaultText":"...", "targetRef":"@objN或路径", "translations":{"en":"..","zh-CHS":".."}}`
 > ⚠️ v13 的 `kz_loc_entry_*` 取代了 v8 的 `kz_localization`（get/list/set/rebuild/delete），旧工具已删除。
 
+> ⚠️ **地址规则**：若环境已配置好相关 MCP（如 nlp_worker config.yaml 的 `mcp_servers` 或部署机已建网关），**必须使用已配置的 MCP 地址**；`<kz_mcp_http机IP>` 仅为通用占位符（未配置时的示例写法）。
+
 ### CRUD 实测示例
 ```bash
 # 查
-HTTP POST http://123.57.85.81:9001/mcp（X-Kanzi-User: suijichao）→ tools/call {"name":"kz_loc_entry_list","arguments":{"target":"/Localization/Localization Table"}}
-HTTP POST http://123.57.85.81:9001/mcp（X-Kanzi-User: suijichao）→ tools/call {"name":"kz_loc_entry_get","arguments":{"target":"/Localization/Localization Table","key":"ECO"}}
+HTTP POST http://<kz_mcp_http机IP>:9001/mcp（X-Kanzi-User: suijichao）→ tools/call {"name":"kz_loc_entry_list","arguments":{"target":"/Localization/Localization Table"}}
+HTTP POST http://<kz_mcp_http机IP>:9001/mcp（X-Kanzi-User: suijichao）→ tools/call {"name":"kz_loc_entry_get","arguments":{"target":"/Localization/Localization Table","key":"ECO"}}
 
 # 增（add，带 defaultText + 各语言 translations，多行）
-HTTP POST http://123.57.85.81:9001/mcp（X-Kanzi-User: suijichao）→ tools/call {"name":"kz_loc_entry_add","arguments":{"target":"/Localization/Localization Table","rows":[{"resourceName":"zz_newkey","type":"text","defaultText":"默认文本","translations":{"en":"hello","zh-CHS":"你好"}}]}}
+HTTP POST http://<kz_mcp_http机IP>:9001/mcp（X-Kanzi-User: suijichao）→ tools/call {"name":"kz_loc_entry_add","arguments":{"target":"/Localization/Localization Table","rows":[{"resourceName":"zz_newkey","type":"text","defaultText":"默认文本","translations":{"en":"hello","zh-CHS":"你好"}}]}}
 # → added=True；add 内部用 new ResourceDictionaryEntry(key, new ProjectItemReference(text,TEXT)) + SetOrCreate
 
 # 改（set，改 defaultText + translations，多行）
-HTTP POST http://123.57.85.81:9001/mcp（X-Kanzi-User: suijichao）→ tools/call {"name":"kz_loc_entry_set","arguments":{"target":"/Localization/Localization Table","rows":[{"resourceName":"zz_newkey","type":"text","defaultText":"改后的默认文本","translations":{"en":"MODIFIED","zh-CHS":"已改"}}]}}
+HTTP POST http://<kz_mcp_http机IP>:9001/mcp（X-Kanzi-User: suijichao）→ tools/call {"name":"kz_loc_entry_set","arguments":{"target":"/Localization/Localization Table","rows":[{"resourceName":"zz_newkey","type":"text","defaultText":"改后的默认文本","translations":{"en":"MODIFIED","zh-CHS":"已改"}}]}}
 # → updated=True；type 保持 text
 
 # 删（delete，多 key）
-HTTP POST http://123.57.85.81:9001/mcp（X-Kanzi-User: suijichao）→ tools/call {"name":"kz_loc_entry_delete","arguments":{"target":"/Localization/Localization Table","keys":["zz_newkey"]}}
+HTTP POST http://<kz_mcp_http机IP>:9001/mcp（X-Kanzi-User: suijichao）→ tools/call {"name":"kz_loc_entry_delete","arguments":{"target":"/Localization/Localization Table","keys":["zz_newkey"]}}
 
 # 增语言列（add language）
-HTTP POST http://123.57.85.81:9001/mcp（X-Kanzi-User: suijichao）→ tools/call {"name":"kz_loc_entry_add_language","arguments":{"target":"/Localization/Localization Table","lang":"de"}}
+HTTP POST http://<kz_mcp_http机IP>:9001/mcp（X-Kanzi-User: suijichao）→ tools/call {"name":"kz_loc_entry_add_language","arguments":{"target":"/Localization/Localization Table","lang":"de"}}
 # → success=True；languageCount / translations 出现新语言列
 
 # 删语言列（delete language）
-HTTP POST http://123.57.85.81:9001/mcp（X-Kanzi-User: suijichao）→ tools/call {"name":"kz_loc_entry_delete_language","arguments":{"target":"/Localization/Localization Table","lang":"de"}}
+HTTP POST http://<kz_mcp_http机IP>:9001/mcp（X-Kanzi-User: suijichao）→ tools/call {"name":"kz_loc_entry_delete_language","arguments":{"target":"/Localization/Localization Table","lang":"de"}}
 # → success=True, found=True；该语言列从 get_Locales 消失；找不到 lang 返回 found=False 且不删任何内容
 ```
 

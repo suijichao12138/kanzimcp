@@ -1,6 +1,6 @@
 ---
 name: kanzi-material-brush
-description: Kanzi Studio 创建「参数化渐变材质笔刷」的完整流程（Material + MaterialType + MaterialBrush 三层关联，含顶点/片元双着色器、uniform 属性、binding）。2026-08-11 完整实测打通。适用于 HMI 工程要新建一个带红→黄（或任意两色）渐变的可复用材质刷。所有命令走 HTTP MCP（http://123.57.85.81:9001/mcp，kz_invoke）。
+description: Kanzi Studio 创建「参数化渐变材质笔刷」的完整流程（Material + MaterialType + MaterialBrush 三层关联，含顶点/片元双着色器、uniform 属性、binding）。2026-08-11 完整实测打通。适用于 HMI 工程要新建一个带红→黄（或任意两色）渐变的可复用材质刷。所有命令走 HTTP MCP（http://<kz_mcp_http机IP>:9001/mcp，kz_invoke）。
 ---
 ## 🚫 命名铁律（创建前必读）
 
@@ -11,8 +11,10 @@ description: Kanzi Studio 创建「参数化渐变材质笔刷」的完整流程
 
 ## 0. 前置：接入 HTTP MCP + 定位库
 
+> ⚠️ **地址规则**：若环境已配置好相关 MCP（如 nlp_worker config.yaml 的 `mcp_servers` 或部署机已建网关），**必须使用已配置的 MCP 地址**；`<kz_mcp_http机IP>` 仅为通用占位符（未配置时的示例写法）。
+
 ```bash
-# HTTP MCP：POST http://123.57.85.81:9001/mcp（Header X-Kanzi-User: suijichao）
+# HTTP MCP：POST http://<kz_mcp_http机IP>:9001/mcp（Header X-Kanzi-User: suijichao）
 # 调用：JSON-RPC tools/call {"name":"kz_invoke","arguments":{"target":"<ref或路径>","method":"<方法>","args":[...]}}
 
 # 无需 initialize，直接 tools/call：

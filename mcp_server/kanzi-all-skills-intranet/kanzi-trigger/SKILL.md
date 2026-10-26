@@ -9,7 +9,8 @@ description: Kanzi Studio Triggers（触发器）创建与配置。TriggerNodeCo
 
 通过 HTTP MCP 连接 Kanzi Studio 插件。
 
-- **端点**：`POST http://123.57.85.81:9001/mcp`（Header `X-Kanzi-User: suijichao`）
+> ⚠️ **地址规则**：若环境已配置好相关 MCP（如 nlp_worker config.yaml 的 `mcp_servers` 或部署机已建网关），**必须使用已配置的 MCP 地址**；`<kz_mcp_http机IP>` 仅为通用占位符（未配置时的示例写法）。
+- **端点**：`POST http://<kz_mcp_http机IP>:9001/mcp`（Header `X-Kanzi-User: suijichao`）
 - **调用**：JSON-RPC `tools/call`，参数格式 `{"name":"kz_invoke","arguments":{"target":"X","method":"Y","args":[...]}}`
 - 示例中的 `mcp kz_invoke target=X method=Y args=[...]` 即上一条的简写。
 

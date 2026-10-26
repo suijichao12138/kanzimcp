@@ -16,7 +16,8 @@ description: Kanzi Studio 状态机创建/配置。StateManager、StateGroup、S
 
 ### 接入（HTTP MCP）
 
-通过 HTTP 端点 `POST http://123.57.85.81:9001/mcp`（Header `X-Kanzi-User: suijichao`，JSON-RPC `tools/call`）连接 Kanzi Studio 插件。返回 `ref_id = @objN` 自动进缓存，Studio 重启后（**仅人工操作**）编号失效须重新枚举。
+> ⚠️ **地址规则**：若环境已配置好相关 MCP（如 nlp_worker config.yaml 的 `mcp_servers` 或部署机已建网关），**必须使用已配置的 MCP 地址**；`<kz_mcp_http机IP>` 仅为通用占位符（未配置时的示例写法）。
+通过 HTTP 端点 `POST http://<kz_mcp_http机IP>:9001/mcp`（Header `X-Kanzi-User: suijichao`，JSON-RPC `tools/call`）连接 Kanzi Studio 插件。返回 `ref_id = @objN` 自动进缓存，Studio 重启后（**仅人工操作**）编号失效须重新枚举。
 
 ### 基本请求格式
 

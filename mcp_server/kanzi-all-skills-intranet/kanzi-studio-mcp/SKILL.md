@@ -11,17 +11,19 @@ description: Kanzi Studio MCP 总入口。接入方式（http 端点 + X-Kanzi-U
 
 ### 方式 A：HTTP MCP（当前用的）
 
-通过 HTTP 端点 `POST http://123.57.85.81:9001/mcp`（Header `X-Kanzi-User: suijichao`）连接 Kanzi Studio 插件，JSON-RPC `tools/call`。
+> ⚠️ **地址规则**：若环境已配置好相关 MCP（如 nlp_worker config.yaml 的 `mcp_servers` 或部署机已建网关），**必须使用已配置的 MCP 地址**；`<kz_mcp_http机IP>` 仅为通用占位符（未配置时的示例写法）。
+
+通过 HTTP 端点 `POST http://<kz_mcp_http机IP>:9001/mcp`（Header `X-Kanzi-User: suijichao`）连接 Kanzi Studio 插件，JSON-RPC `tools/call`。
 
 ```bash
 # 读工程名（验证连接）
-curl -s -X POST http://123.57.85.81:9001/mcp \
+curl -s -X POST http://<kz_mcp_http机IP>:9001/mcp \
   -H "Content-Type: application/json" -H "X-Kanzi-User: suijichao" \
   -d '{"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"@project","method":"get_Name","args":[]}}}'
 # → ✅ 结果: cluster_hmi
 ```
 
-- **端点**：`http://123.57.85.81:9001/mcp`（等价别名 `/kanzistudio_mcp`）
+- **端点**：`http://<kz_mcp_http机IP>:9001/mcp`（等价别名 `/kanzistudio_mcp`）
 - **必带 Header**：`X-Kanzi-User: suijichao`（缺=403，须在 users.json 白名单）
 - **JSON-RPC**：`tools/call`，`id` 唯一
 - 相关脚本：`kanzi-mcp-list-tools.mjs`（列工具）、`kanzi-shot-save.mjs`（截图落盘）
@@ -37,7 +39,7 @@ curl -s -X POST http://123.57.85.81:9001/mcp \
 ```python
 import json, urllib.request
 
-URL = "http://123.57.85.81:9001/mcp"
+URL = "http://<kz_mcp_http机IP>:9001/mcp"
 HEADERS = {"Content-Type": "application/json", "X-Kanzi-User": "suijichao"}
 
 def call(tool, args, req_id="req-1"):
@@ -70,7 +72,7 @@ Header: Content-Type: application/json
 Header: X-Kanzi-User: <用户名>       ← 必需
 ```
 
-- 阿里云实测：`http://123.57.85.81:9001/kanzistudio_mcp`（2026-09-14 实测可用）
+- 实机实测：`http://<kz_mcp_http机IP>:9001/kanzistudio_mcp`（2026-09-14 实测可用）
 - **三端点并存**（copilot 就是这么配的）：
   - `/kanzistudio_mcp` → 操作 Kanzi Studio（**标准端点**；`/mcp` 是等价别名，实测两者结果一致）
   - `/kanzi_api_mcp` → 官方 API 代理
@@ -92,7 +94,7 @@ Header: X-Kanzi-User: <用户名>       ← 必需
 import json, urllib.request
 
 req = urllib.request.Request(
-    "http://123.57.85.81:9001/mcp",
+    "http://<kz_mcp_http机IP>:9001/mcp",
     data=json.dumps({
         "jsonrpc": "2.0",
         "id": "my-request-1",          # 唯一 id（字符串/数字均可）

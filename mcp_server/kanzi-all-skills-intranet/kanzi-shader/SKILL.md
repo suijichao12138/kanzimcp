@@ -13,9 +13,11 @@ description: Kanzi Studio Shader 操作 skill（给 nlp/Copilot 用）—— 通
 
 ## 0. 前置：接入 + 定位库
 
+> ⚠️ **地址规则**：若环境已配置好相关 MCP（如 nlp_worker config.yaml 的 `mcp_servers` 或部署机已建网关），**必须使用已配置的 MCP 地址**；`<kz_mcp_http机IP>` 仅为通用占位符（未配置时的示例写法）。
+
 ```bash
 # HTTP MCP 连接
-POST http://123.57.85.81:9001/mcp（Header X-Kanzi-User: suijichao），JSON-RPC tools/call 调 kz_invoke
+POST http://<kz_mcp_http机IP>:9001/mcp（Header X-Kanzi-User: suijichao），JSON-RPC tools/call 调 kz_invoke
 
 # 定位三个库
 kz_invoke target=@project method=get_Children          # → Material Types 库 @objMT
@@ -156,7 +158,7 @@ kz_get_raw_ref target=@objNewBI method=get_IsBindingEnabled    # True
 
 ## 7. 官方文档参考（用 kanzidocmcp 查）
 
-**方法**：`kanzi_doc_mcp` 端点（`http://123.57.85.81:9001/kanzi_doc_mcp`，头 `X-Kanzi-User: suijichao`）→ `search_docs(query)` 定位 → `get_page(page_url)` 取全文 → `ask_question(question)` 问细节。
+**方法**：`kanzi_doc_mcp` 端点（`http://<kz_mcp_http机IP>:9001/kanzi_doc_mcp`，头 `X-Kanzi-User: suijichao`）→ `search_docs(query)` 定位 → `get_page(page_url)` 取全文 → `ask_question(question)` 问细节。
 
 **常用页面**（4.1.1）：
 - Shaders 总览：`.../working-with/shaders/shaders.html`（shader 类型、自带库）

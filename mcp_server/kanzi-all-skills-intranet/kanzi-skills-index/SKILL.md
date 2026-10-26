@@ -10,6 +10,8 @@ description: Kanzi skills 导航索引（小模型适配版）。唯一常驻的
 
 ## 🛠️ 使用规则（必须遵守）
 
+> ⚠️ **地址规则**：若环境已配置好相关 MCP（如 nlp_worker config.yaml 的 `mcp_servers` 或部署机已建网关），**必须使用已配置的 MCP 地址**；`<kz_mcp_http机IP>` 仅为通用占位符（未配置时的示例写法）。
+
 skill MCP 提供 **3 个工具**（9001 网关 `/kanzi_skill_mcp`）：
 
 | 工具 | 用途 | 用法 |

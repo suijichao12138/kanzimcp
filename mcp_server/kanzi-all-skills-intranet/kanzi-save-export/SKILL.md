@@ -112,10 +112,12 @@ r = mcp({
 
 成功返回：`✅ 调用成功（无返回值）`
 
+> ⚠️ **地址规则**：若环境已配置好相关 MCP（如 nlp_worker config.yaml 的 `mcp_servers` 或部署机已建网关），**必须使用已配置的 MCP 地址**；`<kz_mcp_http机IP>` 仅为通用占位符（未配置时的示例写法）。
+
 ## 完整 Python 示例
 
 ```python
-# HTTP MCP：POST http://123.57.85.81:9001/mcp（Header X-Kanzi-User: suijichao）
+# HTTP MCP：POST http://<kz_mcp_http机IP>:9001/mcp（Header X-Kanzi-User: suijichao）
 # 调用：JSON-RPC tools/call {"name":"kz_invoke","arguments":{"target":...,"method":...,"args":[...]}}
 # 下面 mcp({...}) 调用 = 对 kz_invoke 工具的一次调用（tools/call JSON-RPC）。
 
