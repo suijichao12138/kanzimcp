@@ -12,29 +12,41 @@ import json
 import logging
 import os
 import re
+import subprocess
 import sys
 import time
 import uuid
+from dataclasses import asdict, dataclass, is_dataclass
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Awaitable, Callable, Literal
 from urllib.parse import unquote, urlparse
 
 import httpx
 import yaml
-from copilot import CopilotClient, ModelInfo, RuntimeConnection, ToolInvocation, define_tool
+from copilot import (
+    CopilotClient,
+    ModelInfo,
+    RuntimeConnection,
+    ToolInvocation,
+    define_tool,
+)
+from copilot._cli_version import CLI_VERSION as SDK_RUNTIME_VERSION
 from copilot._jsonrpc import JsonRpcError, ProcessExitedError
 from copilot.generated.session_events import (
+    AbortData,
+    AgentInterruptedData,
     AssistantMessageData,
     AssistantMessageDeltaData,
     AssistantMessageStartData,
     AssistantReasoningDeltaData,
     AssistantStreamingDeltaData,
+    AssistantTurnRetryData,
     SessionErrorData,
     SessionIdleData,
-    ToolExecutionStartData,
     ToolExecutionCompleteData,
     ToolExecutionProgressData,
+    ToolExecutionStartData,
 )
 from copilot.rpc import (
     PermissionDecisionApproveOnce,
@@ -45,11 +57,56 @@ from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from session_store import SessionStore
-from task_dispatch import TASK_SKILLS, TaskDispatchConfig
+from task_dispatch import TaskDispatchConfig
 
 log = logging.getLogger(__name__)
 _ENV_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 _WINDOWS_RUNTIME_NAME = "copilot.exe"
+_RUNTIME_VERSION_PATTERN = re.compile(r"(?<!\d)(\d+\.\d+\.\d+(?:-\d+)?)(?!\d)")
+_RUNTIME_HASH_PATTERN = re.compile(
+    r"^(copilot\.exe|copilot-runtime\.exe|runtime\.node)\s+SHA256\s+([0-9a-f]{64})$",
+    re.IGNORECASE | re.MULTILINE,
+)
+_RUNTIME_COMPONENTS = ("copilot.exe", "copilot-runtime.exe", "runtime.node")
+EXPECTED_SDK_VERSION = "1.0.26"
+EXPECTED_RUNTIME_VERSION = "1.0.103"
+RUNTIME_VERSION_MARKER = "COPILOT_RUNTIME_VERSION.txt"
+_TOOL_DIAGNOSTIC_TEXT_LIMIT = 1000
+_TOOL_DIAGNOSTIC_META_LIMIT = 1500
+_SENSITIVE_DIAGNOSTIC_KEY = re.compile(
+    r"(authorization|cookie|password|secret|token|api[_-]?key|headers?)",
+    re.IGNORECASE,
+)
+_BEARER_DIAGNOSTIC_VALUE = re.compile(
+    r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+"
+)
+_SENSITIVE_DIAGNOSTIC_VALUE = re.compile(
+    r"(?i)(\b(?:authorization|password|secret|token|api[_-]?key)\b"
+    r"\s*[:=]\s*)([^\s,;}\]]+)"
+)
+_TOOL_CANCEL_TOKENS = (
+    "abort",
+    "cancel",
+    "interrupted",
+    "superseded",
+    "replaced by",
+    "stale request",
+)
+_TOOL_PERMISSION_TOKENS = (
+    "permission",
+    "denied",
+    "rejected",
+    "not approved",
+    "user unavailable",
+    "user_not_available",
+)
+_TOOL_RETRY_TOKENS = (
+    "retry",
+    "retrying",
+    "will retry",
+    "transient",
+    "temporarily unavailable",
+)
 
 
 class BridgeError(Exception):
@@ -62,6 +119,274 @@ class ConfigError(BridgeError):
 
 class CopilotRuntimeError(BridgeError):
     """Copilot SDK operation failed."""
+
+
+@dataclass
+class ToolFailureDiagnostic:
+    call_id: str
+    tool_name: str
+    reason: str
+    classification: Literal[
+        "failure", "cancelled", "permission", "retryable", "recovered"
+    ]
+    turn_id: str | None = None
+
+
+def _redact_diagnostic_text(text: str, secrets: list[str]) -> str:
+    rendered = text
+    for secret in secrets:
+        rendered = rendered.replace(secret, "******")
+    rendered = _BEARER_DIAGNOSTIC_VALUE.sub("Bearer ******", rendered)
+    return _SENSITIVE_DIAGNOSTIC_VALUE.sub(
+        lambda match: f"{match.group(1)}******",
+        rendered,
+    )
+
+
+def _diagnostic_value(
+    value: Any,
+    secrets: list[str],
+    *,
+    depth: int = 0,
+) -> Any:
+    if depth >= 4:
+        return "<max-depth>"
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, str):
+        return _bounded_text(
+            _redact_diagnostic_text(value, secrets),
+            _TOOL_DIAGNOSTIC_TEXT_LIMIT,
+        )
+    if is_dataclass(value):
+        return _diagnostic_value(asdict(value), secrets, depth=depth + 1)
+    if isinstance(value, dict):
+        sanitized: dict[str, Any] = {}
+        for raw_key, item in list(value.items())[:30]:
+            key = str(raw_key)
+            sanitized[key] = (
+                "******"
+                if _SENSITIVE_DIAGNOSTIC_KEY.search(key)
+                else _diagnostic_value(item, secrets, depth=depth + 1)
+            )
+        return sanitized
+    if isinstance(value, (list, tuple, set)):
+        return [
+            _diagnostic_value(item, secrets, depth=depth + 1)
+            for item in list(value)[:20]
+        ]
+    if hasattr(value, "to_dict"):
+        try:
+            return _diagnostic_value(value.to_dict(), secrets, depth=depth + 1)
+        except (AttributeError, TypeError, ValueError):
+            pass
+    return _bounded_text(
+        _redact_diagnostic_text(str(value), secrets),
+        _TOOL_DIAGNOSTIC_TEXT_LIMIT,
+    )
+
+
+def _diagnostic_json(value: Any, secrets: list[str], limit: int) -> str:
+    rendered = json.dumps(
+        _diagnostic_value(value, secrets),
+        ensure_ascii=False,
+        sort_keys=True,
+        default=str,
+    )
+    return _bounded_text(rendered, limit)
+
+
+def _tool_name_from_start(data: ToolExecutionStartData) -> str:
+    description = getattr(data, "tool_description", None)
+    candidates = (
+        getattr(data, "mcp_tool_name", None),
+        getattr(description, "name", None),
+        getattr(data, "tool_name", None),
+        getattr(data, "tool_title", None),
+    )
+    name = next(
+        (str(candidate).strip() for candidate in candidates if str(candidate or "").strip()),
+        "未知工具",
+    )
+    server = str(getattr(data, "mcp_server_name", None) or "").strip()
+    return f"{server}/{name}" if server and server.casefold() not in name.casefold() else name
+
+
+def _tool_failure_reason(data: ToolExecutionCompleteData, secrets: list[str]) -> str:
+    error = getattr(data, "error", None)
+    result = getattr(data, "result", None)
+    candidates = (
+        getattr(error, "message", None),
+        getattr(error, "error", None),
+        getattr(error, "details", None),
+        getattr(result, "content", None),
+        getattr(result, "detailed_content", None),
+    )
+    raw = next(
+        (str(candidate).strip() for candidate in candidates if str(candidate or "").strip()),
+        "未提供错误原因",
+    )
+    return _bounded_text(
+        _redact_diagnostic_text(raw, secrets),
+        240,
+    ).replace("\n", " ")
+
+
+def _classify_tool_failure(data: ToolExecutionCompleteData, reason: str) -> str:
+    error = getattr(data, "error", None)
+    fields = (
+        getattr(error, "code", None),
+        getattr(error, "message", None),
+        getattr(error, "remediation", None),
+        reason,
+    )
+    searchable = " ".join(str(field or "") for field in fields).casefold()
+    if any(token in searchable for token in _TOOL_CANCEL_TOKENS):
+        return "cancelled"
+    if any(token in searchable for token in _TOOL_PERMISSION_TOKENS):
+        return "permission"
+    if any(token in searchable for token in _TOOL_RETRY_TOKENS):
+        return "retryable"
+    return "failure"
+
+
+class ToolExecutionTracker:
+    """Track tool names and delay user-facing failure decisions until turn end."""
+
+    def __init__(self, session_key: str, secrets: list[str]) -> None:
+        self.session_key = session_key
+        self.secrets = secrets
+        self.names: dict[str, str] = {}
+        self.pending: dict[str, ToolFailureDiagnostic] = {}
+
+    def start(self, data: ToolExecutionStartData) -> str:
+        name = _tool_name_from_start(data)
+        call_id = data.tool_call_id
+        self.names[call_id] = name
+        for failure in self.pending.values():
+            if failure.tool_name == name and failure.classification in {
+                "failure",
+                "retryable",
+            }:
+                failure.classification = "recovered"
+        log.debug(
+            "Tool execution started: %s",
+            _diagnostic_json(
+                {
+                    "session_key": self.session_key,
+                    "tool_call_id": call_id,
+                    "tool_name": name,
+                    "mcp_server": getattr(data, "mcp_server_name", None),
+                    "mcp_tool": getattr(data, "mcp_tool_name", None),
+                    "transport": getattr(data, "mcp_transport", None),
+                    "turn_id": getattr(data, "turn_id", None),
+                },
+                self.secrets,
+                _TOOL_DIAGNOSTIC_META_LIMIT,
+            ),
+        )
+        return name
+
+    def complete(self, data: ToolExecutionCompleteData) -> ToolFailureDiagnostic | None:
+        call_id = data.tool_call_id
+        description = getattr(data, "tool_description", None)
+        name = (
+            str(getattr(description, "name", None) or "").strip()
+            or self.names.get(call_id)
+            or "未知工具"
+        )
+        if data.success:
+            self.pending.pop(call_id, None)
+            for failure in self.pending.values():
+                if failure.tool_name == name:
+                    failure.classification = "recovered"
+            return None
+
+        reason = _tool_failure_reason(data, self.secrets)
+        classification = _classify_tool_failure(data, reason)
+        failure = ToolFailureDiagnostic(
+            call_id=call_id,
+            tool_name=name,
+            reason=reason,
+            classification=classification,  # type: ignore[arg-type]
+            turn_id=getattr(data, "turn_id", None),
+        )
+        self.pending[call_id] = failure
+        diagnostic = {
+            "session_key": self.session_key,
+            "tool_call_id": call_id,
+            "tool_name": name,
+            "classification": classification,
+            "turn_id": failure.turn_id,
+            "error": getattr(data, "error", None),
+            "result_content": getattr(getattr(data, "result", None), "content", None),
+            "result_detailed_content": getattr(
+                getattr(data, "result", None), "detailed_content", None
+            ),
+            "mcp_meta": getattr(data, "mcp_meta", None)
+            or getattr(getattr(data, "result", None), "mcp_meta", None),
+            "shell_execution": getattr(data, "shell_execution", None),
+        }
+        logger = log.info if classification in {"cancelled", "retryable"} else log.warning
+        logger(
+            "Tool execution failed: %s",
+            _diagnostic_json(
+                diagnostic,
+                self.secrets,
+                _TOOL_DIAGNOSTIC_META_LIMIT,
+            ),
+        )
+        return failure
+
+    def retry(self, data: AssistantTurnRetryData) -> None:
+        for failure in self.pending.values():
+            if not failure.turn_id or failure.turn_id == data.turn_id:
+                failure.classification = "recovered"
+        log.info(
+            "Assistant turn retry: %s",
+            _diagnostic_json(
+                {
+                    "session_key": self.session_key,
+                    "turn_id": data.turn_id,
+                    "reason": data.reason,
+                },
+                self.secrets,
+                _TOOL_DIAGNOSTIC_META_LIMIT,
+            ),
+        )
+
+    def interrupted(self, data: AgentInterruptedData | AbortData) -> None:
+        call_ids = set(getattr(data, "tool_call_ids", None) or ())
+        for call_id, failure in self.pending.items():
+            if not call_ids or call_id in call_ids:
+                failure.classification = "cancelled"
+        log.info(
+            "Tool execution interrupted: %s",
+            _diagnostic_json(
+                {
+                    "session_key": self.session_key,
+                    "tool_call_ids": sorted(call_ids),
+                    "event": data,
+                },
+                self.secrets,
+                _TOOL_DIAGNOSTIC_META_LIMIT,
+            ),
+        )
+
+    def user_messages(self) -> list[str]:
+        messages: list[str] = []
+        for failure in self.pending.values():
+            if failure.classification == "failure":
+                messages.append(
+                    f"↪️ 工具 {failure.tool_name} 本次调用未成功："
+                    f"{failure.reason}；Copilot 将继续处理"
+                )
+            elif failure.classification == "permission":
+                messages.append(
+                    f"🔒 工具 {failure.tool_name} 本次未执行："
+                    f"{failure.reason}；Copilot 已继续处理本轮请求。"
+                )
+        return messages
 
 
 def application_directory() -> Path:
@@ -87,6 +412,183 @@ def bundled_runtime_path() -> Path | None:
             "rebuild or re-extract the complete portable folder"
         )
     return path
+
+
+def parse_runtime_version(output: str) -> str:
+    """Extract the semantic runtime version from version text."""
+    match = _RUNTIME_VERSION_PATTERN.search(output)
+    if match is None:
+        raise ConfigError(
+            "cannot parse Copilot Runtime version from --version output"
+        )
+    return match.group(1)
+
+
+def _windows_file_version(executable: Path) -> str:
+    """Read the PE file version without starting the hostless Runtime wrapper."""
+    import ctypes
+    from ctypes import wintypes
+
+    size = ctypes.windll.version.GetFileVersionInfoSizeW(str(executable), None)
+    if size == 0:
+        raise ConfigError(
+            f"Copilot Runtime has no Windows file version metadata: {executable}"
+        )
+    buffer = ctypes.create_string_buffer(size)
+    if not ctypes.windll.version.GetFileVersionInfoW(
+        str(executable), 0, size, buffer
+    ):
+        raise ConfigError(
+            f"cannot read Copilot Runtime file version metadata: {executable}"
+        )
+    value = ctypes.c_void_p()
+    value_length = wintypes.UINT()
+    if not ctypes.windll.version.VerQueryValueW(
+        buffer, "\\", ctypes.byref(value), ctypes.byref(value_length)
+    ):
+        raise ConfigError(
+            f"cannot query Copilot Runtime file version metadata: {executable}"
+        )
+    words = ctypes.cast(value, ctypes.POINTER(wintypes.DWORD * 13)).contents
+    file_version_ms = words[2]
+    file_version_ls = words[3]
+    parts = (
+        file_version_ms >> 16,
+        file_version_ms & 0xFFFF,
+        file_version_ls >> 16,
+        file_version_ls & 0xFFFF,
+    )
+    if parts[-1] == 0:
+        parts = parts[:-1]
+    return ".".join(str(part) for part in parts)
+
+
+def read_runtime_version(executable: Path) -> str:
+    """Read the Runtime version using the mechanism supported by this platform."""
+    if sys.platform == "win32":
+        return _windows_file_version(executable)
+    try:
+        completed = subprocess.run(
+            [str(executable), "--version"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise ConfigError(
+            f"Copilot Runtime version check timed out after 15 seconds: {executable}"
+        ) from exc
+    except OSError as exc:
+        raise ConfigError(
+            f"cannot execute Copilot Runtime version check {executable}: {exc}"
+        ) from exc
+    output = "\n".join(part for part in (completed.stdout, completed.stderr) if part)
+    if completed.returncode != 0:
+        raise ConfigError(
+            f"Copilot Runtime version check failed with exit code "
+            f"{completed.returncode}: {executable}"
+        )
+    return parse_runtime_version(output)
+
+
+def _runtime_component_hashes(executable: Path) -> dict[str, str]:
+    hashes: dict[str, str] = {}
+    for name in _RUNTIME_COMPONENTS:
+        path = executable.parent / name
+        if not path.is_file():
+            raise ConfigError(f"Copilot Runtime bundle component not found: {path}")
+        digest = hashlib.sha256()
+        with path.open("rb") as source:
+            for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                digest.update(chunk)
+        hashes[name] = digest.hexdigest()
+    marker = executable.parent / ".hostless-runtime-assets-v2"
+    if not marker.is_file():
+        raise ConfigError(f"Copilot Runtime bundle marker not found: {marker}")
+    return hashes
+
+
+def validate_runtime_binary(
+    executable: Path,
+    *,
+    marker_path: Path | None = None,
+    expected_version: str = EXPECTED_RUNTIME_VERSION,
+) -> str:
+    """Verify the selected Runtime and optional portable marker are identical."""
+    path = executable.resolve()
+    if not path.is_file():
+        raise ConfigError(f"Copilot Runtime executable not found: {path}")
+    actual_version = read_runtime_version(path)
+    if actual_version != expected_version:
+        raise ConfigError(
+            f"Copilot Runtime version mismatch: expected {expected_version}, "
+            f"found {actual_version} at {path}"
+        )
+    actual_hashes = _runtime_component_hashes(path)
+    if marker_path is not None:
+        marker = marker_path.resolve()
+        if not marker.is_file():
+            raise ConfigError(f"Copilot Runtime version marker not found: {marker}")
+        try:
+            marker_version = parse_runtime_version(
+                marker.read_text(encoding="utf-8")
+            )
+        except OSError as exc:
+            raise ConfigError(
+                f"cannot read Copilot Runtime version marker {marker}: {exc}"
+            ) from exc
+        if marker_version != expected_version or marker_version != actual_version:
+            raise ConfigError(
+                "Copilot Runtime marker mismatch: "
+                f"expected {expected_version}, marker {marker_version}, "
+                f"executable {actual_version}"
+            )
+        marker_hashes = {
+            name.casefold(): digest.casefold()
+            for name, digest in _RUNTIME_HASH_PATTERN.findall(
+                marker.read_text(encoding="utf-8")
+            )
+        }
+        if marker_hashes != actual_hashes:
+            raise ConfigError(
+                "Copilot Runtime bundle hash mismatch; the portable Runtime "
+                "was replaced or incompletely extracted"
+            )
+    return actual_version
+
+
+def write_runtime_version_marker(executable: Path, marker_path: Path) -> None:
+    """Validate a build Runtime and write a trusted portable version marker."""
+    actual = validate_runtime_binary(executable)
+    hashes = _runtime_component_hashes(executable.resolve())
+    marker_path.parent.mkdir(parents=True, exist_ok=True)
+    marker_path.write_text(
+        (
+            f"GitHub Copilot CLI {actual}\n"
+            f"github-copilot-sdk {EXPECTED_SDK_VERSION}\n"
+        )
+        + "".join(
+            f"{name} SHA256 {digest}\n" for name, digest in hashes.items()
+        ),
+        encoding="utf-8",
+    )
+
+
+def selected_runtime_path() -> Path | None:
+    """Return and validate the Runtime explicitly selected for this process."""
+    if runtime_path := bundled_runtime_path():
+        validate_runtime_binary(
+            runtime_path,
+            marker_path=application_directory() / RUNTIME_VERSION_MARKER,
+        )
+        return runtime_path
+    configured = os.environ.get("COPILOT_CLI_PATH", "").strip()
+    if configured:
+        runtime_path = Path(configured).expanduser().resolve()
+        validate_runtime_binary(runtime_path)
+        return runtime_path
+    return None
 
 
 class StrictModel(BaseModel):
@@ -642,10 +1144,12 @@ def validate_runtime_config(config: AppConfig) -> Path | None:
     config.validate_runtime_paths()
     CopilotRuntime.validate_sdk_version()
     load_skills(config.skills)
-    return bundled_runtime_path()
+    return selected_runtime_path()
 
 
-def _client_options(config: AppConfig) -> dict[str, Any]:
+def _client_options(
+    config: AppConfig, runtime_path: Path | None = None
+) -> dict[str, Any]:
     cfg = config.copilot
     options: dict[str, Any] = {
         "working_directory": str(cfg.working_directory),
@@ -654,7 +1158,7 @@ def _client_options(config: AppConfig) -> dict[str, Any]:
         "base_directory": str(cfg.base_directory) if cfg.base_directory else None,
         "log_level": "warning",
     }
-    if runtime_path := bundled_runtime_path():
+    if runtime_path is not None:
         options["connection"] = RuntimeConnection.for_stdio(path=str(runtime_path))
     return options
 
@@ -687,8 +1191,8 @@ def _safe_config_error(config: AppConfig, error: BaseException) -> str:
 
 async def list_available_models(config: AppConfig) -> list[ModelInfo]:
     """List models through the configured SDK runtime without creating a session."""
-    validate_runtime_config(config)
-    client = CopilotClient(**_client_options(config))
+    runtime_path = validate_runtime_config(config)
+    client = CopilotClient(**_client_options(config, runtime_path))
     started = False
     try:
         started = True
@@ -1429,13 +1933,19 @@ class CopilotRuntime:
     def validate_sdk_version() -> None:
         try:
             current = version("github-copilot-sdk")
-            parts = tuple(int(part) for part in current.split(".")[:3])
         except PackageNotFoundError as exc:
             raise ConfigError("github-copilot-sdk is not installed") from exc
-        except ValueError as exc:
-            raise ConfigError("cannot parse github-copilot-sdk version") from exc
-        if not ((1, 0, 11) <= parts < (1, 1, 0)):
-            raise ConfigError(f"supported SDK range is >=1.0.11,<1.1; installed {current}")
+        if current != EXPECTED_SDK_VERSION:
+            raise ConfigError(
+                f"GitHub Copilot SDK version mismatch: expected "
+                f"{EXPECTED_SDK_VERSION}, installed {current}"
+            )
+        if SDK_RUNTIME_VERSION != EXPECTED_RUNTIME_VERSION:
+            raise ConfigError(
+                "GitHub Copilot SDK Runtime pin mismatch: "
+                f"SDK expects {SDK_RUNTIME_VERSION}, worker expects "
+                f"{EXPECTED_RUNTIME_VERSION}"
+            )
 
     def _build_session_kwargs(self, task_type: str | None = None) -> dict[str, Any]:
         copilot = self.config.copilot
@@ -1569,10 +2079,11 @@ class CopilotRuntime:
         return self.client
 
     async def start(self) -> None:
-        self.config.validate_runtime_paths()
-        self.validate_sdk_version()
+        runtime_path = validate_runtime_config(self.config)
         try:
-            self.client = CopilotClient(**_client_options(self.config))
+            self.client = CopilotClient(
+                **_client_options(self.config, runtime_path)
+            )
             await self.client.start()
         except (OSError, RuntimeError, ValueError) as exc:
             self.client = None
@@ -1695,6 +2206,8 @@ class CopilotRuntime:
             _stream_buf: str = ""
             _stream_last_ts: float = 0.0
             _stream_emitted: bool = False
+            tool_tracker = ToolExecutionTracker(key, self._secrets)
+            terminal_tool_messages: list[str] = []
 
             # ---- 多阶段活动反馈: 绝对串行节流 + 发送闭包 ----
             # on_event 是同步回调, 不能 await, 用 create_task 调度异步发送。
@@ -1752,6 +2265,7 @@ class CopilotRuntime:
                 nonlocal _stream_buf
                 nonlocal _stream_last_ts
                 nonlocal _stream_emitted
+                nonlocal terminal_tool_messages
                 match getattr(event, "data", None):
                     case AssistantMessageData():  # noqa: F841
                         last_assistant = event
@@ -1788,7 +2302,16 @@ class CopilotRuntime:
                         _p = getattr(d, "progress_message", "") or ""
                         if _p.strip():
                             _emit(f"↪️ {_p.strip()}")
+                    case AssistantTurnRetryData() as retry:
+                        tool_tracker.retry(retry)
+                    case AgentInterruptedData() as interrupted:
+                        tool_tracker.interrupted(interrupted)
+                    case AbortData() as aborted:
+                        tool_tracker.interrupted(aborted)
                     case SessionIdleData():  # noqa: F841
+                        terminal_tool_messages = tool_tracker.user_messages()
+                        if terminal_tool_messages:
+                            last_tool_content = terminal_tool_messages[-1]
                         done.set()
                     case SessionErrorData() as data:  # noqa: F841
                         nonlocal error
@@ -1800,8 +2323,9 @@ class CopilotRuntime:
                         # 工具提示收敛: 第1个必发, 之后改为按间距汇总(不是每条都发)
                         _tool_started_ts = time.time()
                         _tool_count += 1
+                        tool_name = tool_tracker.start(d)
                         if _tool_count == 1:
-                            _emit(f"🔧 正在执行 {d.tool_name}...")
+                            _emit(f"🔧 正在执行 {tool_name}...")
                         elif _tool_count % _max_tools == 0:
                             _emit(
                                 f"🔧 已调用 {_tool_count} 个工具, 持续操作中..."
@@ -1809,24 +2333,12 @@ class CopilotRuntime:
                     case ToolExecutionCompleteData() as d:  # noqa: F841
                         _tool_started_ts = None
                         # 记录最后一次工具调用结果(供主会话静默结束时兜底回传):
-                        # 成功存 content, 失败存 error 摘要
+                        # 成功存 content；失败交给 tracker 延迟至回合结束分类，避免
+                        # cancelled/retryable 的中间失败被误报给用户。
                         _result = getattr(d, "result", None)
+                        tool_tracker.complete(d)
                         if d.success and _result is not None:
                             last_tool_content = getattr(_result, "content", None) or ""
-                        elif not d.success:
-                            _err = getattr(d, "error", None)
-                            last_tool_content = f"❌ 工具失败: {getattr(_err, 'message', '') or getattr(_err, 'error', '') or d.tool_call_id}"
-                        # 完成不逐条发, 否则太碎; 只发失败的(异常值得用户知道),
-                        # 成功留给汇总/里程碑, 避免"✅完成"和"执行"一样刷屏。
-                        if not d.success:
-                            _desc = getattr(d, "tool_description", None)
-                            _tn = (
-                                getattr(_desc, "name", None)
-                                if _desc is not None else None
-                            )
-                            _label = _tn or getattr(
-                                d, "tool_call_id", "tool") or "tool"
-                            _emit(f"⚠️ {_label} 失败")
 
 
             max_idle = float(self.config.copilot.max_idle_seconds)
@@ -1914,6 +2426,17 @@ class CopilotRuntime:
                 ) from exc
             finally:
                 unsubscribe()
+
+            if on_progress is not None:
+                for message in terminal_tool_messages:
+                    try:
+                        await on_progress(message)
+                    except Exception as exc:
+                        log.warning(
+                            "[%s] Failed to deliver terminal tool status: %s",
+                            key,
+                            self._safe_error(exc),
+                        )
 
             if error is not None:
                 raise CopilotRuntimeError(f"Copilot request failed: {self._safe_error(error)}")

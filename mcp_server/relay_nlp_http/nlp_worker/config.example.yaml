@@ -1,18 +1,18 @@
 relay:
-  url: ws://10.10.118.152:58080/suijichao
-  channel: suijichao
+  url: ws://${RELAY_IP}/${KANZI_MCP_USERNAME}
+  channel: ${KANZI_MCP_USERNAME}
   role: nlp_worker
   reconnect_delay_seconds: 3
   ping_interval_seconds: 30
   ping_timeout_seconds: 10
   max_message_bytes: 16777216
   allowed_channels:
-    - suijichao
+    - ${KANZI_MCP_USERNAME}
   identity:
     # The old bridge strips all sender/chat IDs. Strict compatibility therefore
     # requires one dedicated bot/relay channel per principal.
     mode: dedicated_channel
-    dedicated_principal_id: suijichao
+    dedicated_principal_id: ${KANZI_MCP_USERNAME}
     include_thread_scope: true
 
 copilot:
@@ -24,21 +24,12 @@ copilot:
   # use_logged_in_user: false
   # Relative paths are resolved from this config file. Set this to an existing
   # Kanzi/project directory on the target machine; "." keeps the example portable.
-  working_directory: .
+  working_directory: ./workspace
   base_directory: ./.copilot-data
   response_timeout_seconds: 600
-  # 活动刷新式超时阈值: 只要 copilot 还在持续输出/调 MCP 就续期,
-  # 超过此秒数无任何事件才判定死寂并超时(长任务不误报)。
   max_idle_seconds: 300
-  # 方案B(长工具活性探测): 工具执行中超过 max_idle 无事件时, 会 POST kz_health
-  # 到这里判断 Kanzi 插件是否还活着; 插件忙则续期继续等, 避免创建大量状态等
-  # 长工具被误判超时。留空(或注释掉)则退回原死寂逻辑。
-  # ⚠️ 用 kanzistudio_mcp 端点(本地 Studio 插件), 不是 kanzi_api_mcp(官方 API)!
-  kanzi_probe_url: http://127.0.0.1:9001/kanzistudio_mcp
-  kanzi_probe_headers:
-    X-Kanzi-User: suijichao
   resume_failure: error
-  configuration_change: error
+  configuration_change: new
   enable_session_store: true
   large_output:
     enabled: true
@@ -46,21 +37,41 @@ copilot:
     # {session_id} is required: every SDK session writes to its own safe files folder.
     output_directory: ./.copilot-data/session-state/{session_id}/files
   model:
-    name: gpt-5.4
-    reasoning_effort: medium
+    #name: gpt-5.6-sol
+    #reasoning_effort: medium
+    #provider:
+    #  type: github
+    
+    name: deepseek-v4-flash-fp8
     provider:
-      type: github
-      # BYOK example:
-      # type: openai
-      # base_url: https://oneapi.example.com/v1
-      # api_key: ${OPENAI_API_KEY}
-      # wire_api: responses
-      # Optional SDK 1.0.11 fields: transport, headers, model_id, wire_model,
-      # max_prompt_tokens, max_output_tokens. Azure supports azure_api_version.
+      type: openai
+      base_url: https://oneapi.pateo.com.cn/v1
+      api_key: ${OPENAI_API_KEY}
+      wire_api: completions   #responses
+    
+    #name: deepseek-ai/DeepSeek-V4-Flash
+    #provider:
+    #  type: openai
+    #  base_url: https://api.siliconflow.cn/v1
+    #  api_key: ${SILICONFLOW_API_KEY}
+    #  wire_api: completions   #responses
+      
+      
+    #name: deepseek-v4-flash-fp8
+    ##reasoning_effort: medium
+    #provider:
+    #  type: openai
+    #  # BYOK example:
+    #  # type: openai
+    #  base_url: https://oneapi.pateo.com.cn/v1
+    #  api_key: ${OPENAI_API_KEY}
+    #  wire_api: completions   #responses
+    # Optional SDK 1.0.11 fields: transport, headers, model_id, wire_model,
+    # max_prompt_tokens, max_output_tokens. Azure supports azure_api_version.
   agent:
     system_prompt: |
       你是通过飞书提供服务的 GitHub Copilot 助手。需要操作 Kanzi 时使用已配置的 MCP。
-      操作 Kanzi 时必须严格按照已加载的 skill 执行：先理解 kanzi-skills-index skill 并拿到对应 skill 通读全文，再严格按其步骤执行，禁止自由发挥、禁止脑补参数。
+      操作 Kanzi 时必须严格按照已加载的 skill 执行：先理解 kanzi-skills-index skill 并拿到需要的 skill 通读全文，再严格按其步骤执行，禁止自由发挥、禁止脑补参数。
       若回复中需要让旧飞书桥上传文件，请继续使用：
       [FILE]
       path=<文件绝对路径>
@@ -74,21 +85,24 @@ copilot:
     excluded_tools: []
   permissions:
     # ask 在无安全交互审批 UI 的飞书链路中会按 deny 处理。
-    default: deny
+    default: allow
     allow:
       # Runtime 实际的只读权限 kind。
       - read
       - read_file
       - grep
       - glob
-      - kanzi-*-kz_get_*
-      - kanzi-*-kz_list_*
-      - kanzi-*-kz_health
-    deny:
-      - shell
       - write_file
       - edit_file
-      - kanzi-*-kz_delete_*
+      - shell
+      - kanzi-studio-mcp-*
+      - kanzi-api-mcp-*
+      - kanzi-doc-mcp-*
+    deny: []
+      #- shell
+      #- write_file
+      #- edit_file
+      #- kanzi-*-kz_delete_*
     ask: []
 
 skills:
@@ -101,44 +115,42 @@ skills:
     # 例：
     # - path: D:\AIBox\kanzimcp\nlp-worker-portable-win-x64\skills
     #   enabled: true
-    - path: ./skills/kanzi-skills-index
+    - path: ./skills
       enabled: true
-    # 主会话调度协议（理解→拆任务→task_dispatch 派发→汇总；含顺序执行铁律）
-    - path: ./skills/kanzi-main-protocol
-      enabled: true
-    # 子会话执行协议（由 COMMON_SKILLS 自动注入所有子会话，无需在此配，
-    #  但放在 skill 父目录里才能被 load_skills 发现；此处可不写）
-    # - path: ./skills/kanzi-task-execution-protocol
-    #   enabled: true
-    # - path: D:\your-project\.github\skills
-    #   enabled: true
-    # If a directory has its own SKILL.md, set recursive: true to include children too.
-    #   recursive: true
+    
 
 mcp_servers:
   # These three endpoints preserve the existing HTTP → relay → Kanzi route.
   kanzi-studio-mcp:
     enabled: true
     type: http
-    url: http://10.10.118.152:9001/kanzistudio_mcp
+    url: http://${KANZI_MCP_IP}/kanzistudio_mcp
     headers:
-      X-Kanzi-User: suijichao
+      X-Kanzi-User: ${KANZI_MCP_USERNAME}
+    tools: ["*"]
+    timeout_seconds: 300
+  kanzi-skill-mcp:
+    enabled: true
+    type: http
+    url: http://${KANZI_MCP_IP}/kanzi_skill_mcp
+    headers:
+      X-Kanzi-User: ${KANZI_MCP_USERNAME}
     tools: ["*"]
     timeout_seconds: 300
   kanzi-api-mcp:
     enabled: true
     type: http
-    url: http://10.10.118.152:9001/kanzi_api_mcp
+    url: http://${KANZI_MCP_IP}/kanzi_api_mcp
     headers:
-      X-Kanzi-User: suijichao
+      X-Kanzi-User: ${KANZI_MCP_USERNAME}
     tools: ["*"]
     timeout_seconds: 300
   kanzi-doc-mcp:
     enabled: true
     type: http
-    url: http://10.10.118.152:9001/kanzi_doc_mcp
+    url: http://${KANZI_MCP_IP}/kanzi_doc_mcp
     headers:
-      X-Kanzi-User: suijichao
+      X-Kanzi-User: ${KANZI_MCP_USERNAME}
     tools: ["*"]
     timeout_seconds: 300
   # local-example:
@@ -155,8 +167,8 @@ artifacts:
   enabled: true
   # Exact scheme + host + port only. Redirects and all other origins are rejected.
   allowed_origins:
-    - http://10.10.118.152:9001
-    - http://10.10.118.152:8081
+    - http://${ARTIFACT_FEISHU}
+    - http://${ARTIFACT_HTTP}
   timeout_seconds: 60
   max_download_bytes: 67108864
   max_tool_output_chars: 8000
@@ -179,7 +191,7 @@ compatibility:
   progress_max_tool_events_before_summary: 8
   output_type: claude_output
   support_file_download_marker: true
-  bridge_http: http://10.10.118.152:8081/suijichao
+  bridge_http: http://${FEISHU_BRIDGE}/${KANZI_MCP_USERNAME}
   bridge_target_open_id: null
   # Legacy Feishu [FILE_DOWNLOAD] timeout. Downloads must match bridge_http origin.
   download_timeout_seconds: 120
@@ -187,7 +199,8 @@ compatibility:
   # Extra trusted roots. Relative paths are resolved from config.yaml.
   # working_directory and .copilot-data/session-state/<session-id>/files are
   # allowed automatically; never add the entire .copilot-data directory here.
-  upload_allowed_roots: []
+  upload_allowed_roots: 
+    - ./test
 
 messages:
   max_input_chars: 12000
@@ -222,10 +235,7 @@ task_dispatch:
   # 所有子会话共用的 skill（执行协议；不配则用代码默认：task-execution-protocol + index + studio-mcp + project-switch + highfreq）
   common_skills:
     - kanzi-task-execution-protocol
-    - kanzi-refresh
     - kanzi-skills-index
-    - kanzi-studio-mcp
-    - kanzi-project-switch
     - kanzi-properties-highfreq
   # 子会话类型 → 该类型注入的专属 skill（不配则用代码默认表；每个类型再自动叠加 common_skills）
   session_types:
@@ -241,9 +251,10 @@ task_dispatch:
     shader:             [kanzi-shader, kanzi-material-brush]
     save-export:        [kanzi-save-export]
 
-# ===== 网页控制台（会话管理 + 配置修改，随 nlp_worker 同进程启动）=====
+    # ===== 网页控制台（会话管理 + 配置修改，随 nlp_worker 同进程启动）=====
 web:
   enabled: true
   # 仅本机访问；改 0.0.0.0 或局域网 IP 可被其他机器访问（无鉴权，注意安全）
   listen_host: 127.0.0.1
   listen_port: 8400
+  

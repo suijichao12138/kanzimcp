@@ -13,12 +13,11 @@ from __future__ import annotations
 import json
 import logging
 import mimetypes
-import socket
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse
 
 from . import api
 
@@ -76,7 +75,7 @@ class Handler(BaseHTTPRequestHandler):
     # ── 路由 ──
     def do_GET(self):
         u = urlparse(self.path)
-        path, qs = u.path, parse_qs(u.query)
+        path = u.path
         if path in ("/", "/index.html"):
             return self._serve_static("index.html")
         if path.startswith("/static/"):

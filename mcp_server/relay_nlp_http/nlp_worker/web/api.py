@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from pathlib import Path
 
 import yaml
@@ -255,7 +254,6 @@ def session_reset(body: dict) -> tuple[int, dict]:
     if not key:
         return _err(400, "缺少 key")
     copilot = getattr(CTX, "copilot", None)
-    store = getattr(CTX, "store", None)
     if copilot is None:
         return _err(500, "copilot runtime 不可用")
     import asyncio

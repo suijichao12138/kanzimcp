@@ -18,17 +18,39 @@ feishu_bridge.py → relay_multi.py → nlp_worker.py
 build_portable.cmd
 ```
 
-脚本安装 `requirements-build.txt`、通过 SDK 官方
-机制定位当前构建解释器的缓存，缓存不存在时才调用
-`python -m copilot download-runtime`（300 秒超时），再执行 PyInstaller onedir 构建。企业网络
-无法下载时可先显式设置 `COPILOT_RUNTIME_SOURCE` 或 SDK 支持的 `COPILOT_CLI_PATH`，指向已
-验证兼容的 Windows x64 `copilot.exe`。脚本会执行 `copilot.exe --version` 并把结果写入发布
-包。输出：
+脚本精确安装 `github-copilot-sdk==1.0.26`，优先验证并复用项目缓存
+`build\copilot-runtime`。也兼容此前 SDK 生成的
+`build\copilot-runtime-1.0.103\prebuilds\win32-x64`；验证通过后会完整同步到规范目录，后续
+构建不再联网。复用要求 SDK pin、Runtime 1.0.103、完整 hostless bundle、Windows PE
+`FileVersion` 和三个核心文件 SHA256 全部通过。手工放入缓存时必须至少包含
+`copilot.exe`、`copilot-runtime.exe`、`runtime.node`、`.hostless-runtime-assets-v2` 以及
+官方 bundle 的其他资源；只有 `copilot.exe` 会明确报告缺失项并进入自动补齐。
+
+只有本地候选均缺失或验证失败时，脚本才调用 SDK 官方命令下载固定 Runtime，正常下载不使用
+`--force`：
+
+```bat
+python -m copilot download-runtime --version 1.0.103 --in-process
+```
+
+下载缓存损坏且阻碍 SDK 下载时，脚本只清理项目内
+`build\copilot-runtime-download`，然后仅重试一次 `--force`；不会删除已验证的规范缓存。
+下载成功后完整同步至 `build\copilot-runtime`，并生成版本/SHA256 marker。下载有 900 秒
+超时；若构建机不能直连 release 下载地址，但已登录 GitHub CLI，脚本会通过
+`gh release download` 获取同一官方 asset 和 `SHA256SUMS.txt`，再让 SDK 官方下载器从临时
+localhost 服务完成 checksum 校验与解包。两种下载路径都不复用用户全局缓存、`PATH` 或旧
+`COPILOT_CLI_PATH`。构建前会核对 SDK 版本、SDK 的 `CLI_VERSION`、实际
+Windows PE `FileVersion` 和三个 Runtime 核心文件的 SHA256，不一致即拒绝构建。SDK 1.0.26
+的 hostless `copilot.exe` wrapper 已不支持旧的 `--version` 参数，因此不能再沿用旧包的
+CLI 输出校验。PyInstaller 会携带官方完整 Runtime bundle，而不是只复制一个来源不明的
+exe。输出：
 
 ```text
 dist\nlp-worker-portable\
   nlp_worker.exe
   _internal\runtime\copilot.exe
+  _internal\runtime\copilot-runtime.exe
+  _internal\runtime\runtime.node
   config.example.yaml
   .env.example
   COPILOT_RUNTIME_VERSION.txt
@@ -68,9 +90,12 @@ nlp_worker.exe --config config.yaml --list-models
 携带 Python 运行时，但 Windows 仍需系统可加载应用所需的 Microsoft Visual C++ Runtime；
 建议 Windows 10/11 x64。
 
-冻结程序通过 SDK 1.0.11 公开的
+冻结程序通过 SDK 1.0.26 公开的
 `RuntimeConnection.for_stdio(path=...)` 显式启动包内 Runtime，不访问目标机的 SDK 缓存，也
-不在首次启动时下载 Copilot CLI。配置文件默认从 `nlp_worker.exe` 旁查找；配置中的
+不在首次启动时下载 Copilot CLI。启动和 `--validate-config` 都会再次核对包内 Runtime
+PE `FileVersion`、SDK 固定版本和 `COPILOT_RUNTIME_VERSION.txt` 中三个核心文件的 SHA256；
+Runtime 被替换、缺文件或 marker 漂移会在解析 session event 前明确报错。SDK 启动时还会
+执行 protocol handshake。配置文件默认从 `nlp_worker.exe` 旁查找；配置中的
 SQLite、日志、skills、MCP cwd、Copilot `working_directory`/`base_directory` 等相对路径均
 相对配置文件目录解析。示例用 `working_directory: .` 以便解压即校验；实际使用应改成目标机
 **已经存在**的 Kanzi/项目根目录。程序不会擅自创建工作目录，路径不存在或不是目录会在
@@ -84,7 +109,7 @@ SQLite、日志、skills、MCP cwd、Copilot `working_directory`/`base_directory
 python -m pip install -r requirements.txt
 Copy-Item .env.example .env
 Copy-Item config.example.yaml config.yaml
-python -m copilot download-runtime
+python -m copilot download-runtime --version 1.0.103 --in-process
 ```
 
 编辑 `.env` 与 `config.yaml`，然后启动：
@@ -120,14 +145,31 @@ python -m pytest -q
   原子改名，失败会清理临时文件。
 - `storage.database_path`：SQLite 会话映射和消息去重。
 
-所有 `${ENV_VAR}` 在启动时展开；缺失变量或未知配置字段会直接报错。SDK 固定验证
-`github-copilot-sdk >=1.0.11,<1.1`，MCP 超时会转换为 SDK 所需毫秒值。
+所有 `${ENV_VAR}` 在启动时展开；缺失变量或未知配置字段会直接报错。Worker 精确验证
+`github-copilot-sdk==1.0.26`，并验证该 SDK 固定的 Runtime 与实际可执行文件均为
+`1.0.103`。MCP 超时会转换为 SDK 所需毫秒值。
 
 SQLite 保存 conversation key、SDK session ID、模型、配置指纹、状态和时间。重启后调用
 SDK `resume_session()`。恢复失败默认明确报错；只有配置 `resume_failure: new` 才新建。
 模型/MCP/skills/agent 配置指纹变化也默认拒绝恢复，可用 `/new` 明确重置。
 
 命令：`/new`、`/status`、`/cancel`、`/help`。
+
+### 工具调用诊断
+
+SDK 的 `tool.execution_complete success=false` 只表示一次工具尝试未成功，不等同于整轮任务
+失败。Worker 从 `tool.execution_start` 保存 `tool_call_id → MCP/工具名`，完成事件缺少
+`tool_description` 时仍能显示具体工具名。普通飞书提示不会显示内部 `call_*` ID，而是：
+
+```text
+↪️ 工具 kanzi-studio-mcp/kz_invoke 本次调用未成功：<简短原因>；Copilot 将继续处理
+```
+
+取消、中断、自动重试以及同工具后续成功会降级为日志或消除提示；权限拒绝显示为“本次未执行”
+状态。真正的整轮失败仍由 SessionError、发送异常或超时路径报告。每次未成功尝试都会在
+`logging.file` 写入 session key、call ID、解析出的工具名、结构化 error、限长 result 摘要、
+MCP 元数据摘要和 shell 信息。日志会替换配置中的 token/密钥，并屏蔽
+Authorization、Cookie、password、secret、token、API key 和 headers 字段。
 
 ## 从旧 worker 迁移
 

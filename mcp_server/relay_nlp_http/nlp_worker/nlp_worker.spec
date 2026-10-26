@@ -8,18 +8,34 @@ project_root = Path(SPECPATH)
 runtime_source = Path(os.environ.get("COPILOT_RUNTIME_SOURCE", ""))
 if not runtime_source.is_file():
     raise SystemExit(
-        "COPILOT_RUNTIME_SOURCE must point to the downloaded Windows copilot.exe"
+        "COPILOT_RUNTIME_SOURCE must point to the SDK 1.0.26 Runtime 1.0.103 copilot.exe"
     )
+runtime_bundle = Path(
+    os.environ.get("COPILOT_RUNTIME_BUNDLE", str(runtime_source.parent))
+).resolve()
+if runtime_source.resolve().parent != runtime_bundle or not runtime_bundle.is_dir():
+    raise SystemExit("COPILOT_RUNTIME_BUNDLE must be the parent of COPILOT_RUNTIME_SOURCE")
+runtime_datas = [
+    (
+        str(path),
+        str(Path("runtime") / path.relative_to(runtime_bundle).parent),
+    )
+    for path in sorted(runtime_bundle.rglob("*"))
+    if path.is_file()
+]
+if not runtime_datas:
+    raise SystemExit("Copilot Runtime bundle is empty")
 
 copilot_datas, copilot_binaries, copilot_hiddenimports = collect_all("copilot")
 datas = [
     *copilot_datas,
+    *runtime_datas,
     *copy_metadata("github-copilot-sdk"),
     *collect_data_files("certifi"),
     # 网页控制台前端静态资源
     (str(project_root / "web" / "static"), "web/static"),
 ]
-binaries = [*copilot_binaries, (str(runtime_source), "runtime")]
+binaries = [*copilot_binaries]
 hiddenimports = [
     *copilot_hiddenimports,
     "pydantic_core._pydantic_core",

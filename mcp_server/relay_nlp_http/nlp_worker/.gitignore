@@ -1,12 +1,19 @@
 # 备份文件（手动备份，不入库）
 *.bak_*
 
-# 下载的 Copilot Runtime 二进制（159MB 超 GitHub 100MB 上限，不入库）
-# 仅排除 copilot.exe 本体；build/ 目录其他文件照常可提交
-**/build/copilot-runtime/copilot.exe
+# 本地配置、凭据和运行数据
+config.yaml
+.env
+.copilot-data/
+*.db
+*.db-shm
+*.db-wal
+*.log
 
-# PyInstaller 打包产物（可选排除；如有需要可保留 build 其余部分）
-# dist/
+# 构建环境、SDK Runtime 和 PyInstaller 发布物
+.venv/
+build/
+dist/
 
 # Python 运行时缓存
 __pycache__/

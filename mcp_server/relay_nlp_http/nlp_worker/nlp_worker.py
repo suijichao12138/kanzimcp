@@ -578,7 +578,7 @@ def main() -> None:
             runtime_path = validate_runtime_config(config)
             print(f"Configuration valid: {Path(config_path).resolve()}")
             if runtime_path:
-                print(f"Bundled Copilot Runtime: {runtime_path}")
+                print(f"Validated Copilot Runtime: {runtime_path}")
             return
         if args.list_models:
             asyncio.run(list_models_main(config_path))
