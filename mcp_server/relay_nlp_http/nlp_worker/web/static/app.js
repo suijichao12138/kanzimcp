@@ -47,7 +47,7 @@ document.querySelectorAll("#topnav button").forEach((btn) => {
 });
 
 function switchView(v) {
-  ["sessions", "config", "env"].forEach((name) => {
+  ["sessions", "config", "env", "logs"].forEach((name) => {
     const el = $("#view-" + name);
     el.classList.toggle("active", name === v);
     el.hidden = name !== v;
@@ -55,6 +55,7 @@ function switchView(v) {
   if (v === "sessions") loadSessions();
   if (v === "config") loadGroups();
   if (v === "env") loadEnv();
+  if (v === "logs") loadLogs();
 }
 
 /* ── 状态栏 ── */
@@ -458,6 +459,35 @@ $("#btn-env-add").addEventListener("click", async () => {
     $("#env-new-key").value = ""; $("#env-new-value").value = "";
     loadEnv();
   } catch (e) { toast(e.message, false); }
+});
+
+/* ── 日志 ── */
+async function loadLogs() {
+  try {
+    const lines = $("#logs-lines").value || 200;
+    const d = await api("/api/logs?lines=" + lines);
+    const data = d.data;
+    const box = $("#logs-box");
+    box.textContent = (data.lines || []).join("\n") + (data.truncated ? "\n…（仅显示尾部 " + lines + " 行，共 " + data.total + " 行）" : "");
+    box.scrollTop = box.scrollHeight;
+    $("#logs-info").textContent = data.log_path
+      ? `日志: ${data.log_path}`
+      : "未配置日志文件（config.logging.file）";
+  } catch (e) { toast(e.message, false); }
+}
+
+$("#btn-logs-refresh").addEventListener("click", loadLogs);
+$("#logs-lines").addEventListener("change", loadLogs);
+$("#btn-restart").addEventListener("click", async () => {
+  if (!confirm("重启 nlp_worker？将断开当前连接并重新拉起进程（约 10-30 秒）。")) return;
+  try {
+    const d = await api("/api/restart", { method: "POST", body: "{}" });
+    toast("已触发重启，新进程 PID " + d.data.pid + "，旧进程即将退出…");
+  } catch (e) {
+    // 旧进程可能已开始退出，连接中断也算预期
+    toast("重启已触发（连接可能中断，页面稍后刷新）");
+  }
+  setTimeout(() => location.reload(), 3000);
 });
 
 /* ── 启动 ── */

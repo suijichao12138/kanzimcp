@@ -13,6 +13,7 @@
     <button data-nav="sessions" class="active">会话管理</button>
     <button data-nav="config">配置修改</button>
     <button data-nav="env">环境变量</button>
+    <button data-nav="logs">日志</button>
     <span id="statusbar"></span>
   </nav>
 </header>
@@ -64,6 +65,23 @@
       <input id="env-new-value" placeholder="值" style="width:320px">
       <button id="btn-env-add">添加</button>
     </div>
+  </section>
+  <!-- 日志 -->
+  <section id="view-logs" class="view">
+    <div class="toolbar">
+      <button id="btn-logs-refresh">刷新</button>
+      <label class="inline-label">行数
+        <select id="logs-lines" style="width:auto">
+          <option value="100">100</option>
+          <option value="200" selected>200</option>
+          <option value="500">500</option>
+          <option value="1000">1000</option>
+        </select>
+      </label>
+      <span id="logs-info" class="muted"></span>
+      <button id="btn-restart" class="danger" style="float:right">重启 nlp_worker</button>
+    </div>
+    <pre id="logs-box"></pre>
   </section>
 </main>
 <div id="toast"></div>

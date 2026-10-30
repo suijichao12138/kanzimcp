@@ -83,6 +83,11 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if path == "/api/status":
                 code, body = api.status()
+            elif path == "/api/logs":
+                from urllib.parse import parse_qs as _parse_qs
+                _qs = _parse_qs(u.query)
+                _lines = _qs.get("lines", ["200"])[0]
+                code, body = api.logs_list({"lines": _lines})
             elif path == "/api/sessions":
                 code, body = api.sessions_list()
             elif path == "/api/config":
@@ -112,6 +117,8 @@ class Handler(BaseHTTPRequestHandler):
                 code, out = api.session_reset(body)
             elif path == "/api/sessions/clear":
                 code, out = api.sessions_clear()
+            elif path == "/api/restart":
+                code, out = api.restart()
             elif path == "/api/env":
                 code, out = api.env_put(body)
             elif path == "/api/env/refresh":

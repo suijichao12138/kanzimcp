@@ -548,3 +548,123 @@ def status() -> tuple[int, dict]:
         "config_path": str(_config_path()),
         "env_path": str(_env_path()),
     })
+
+
+# ─────────────────────────── 日志 API ───────────────────────────
+
+def _log_path() -> Path | None:
+    """返回当前日志文件路径（config.logging.file，可能为空）。"""
+    cfg = getattr(CTX, "config", None)
+    if cfg is None:
+        return None
+    logging_cfg = getattr(cfg, "logging", None)
+    if logging_cfg is None:
+        return None
+    file_path = getattr(logging_cfg, "file", None)
+    if not file_path:
+        return None
+    if isinstance(file_path, str):
+        file_path = Path(file_path)
+    # 相对路径相对 config 目录解析
+    if not file_path.is_absolute():
+        config_dir = getattr(cfg, "config_dir", None) or Path(".")
+        if isinstance(config_dir, str):
+            config_dir = Path(config_dir)
+        file_path = config_dir / file_path
+    return file_path
+
+
+def logs_list(body: dict) -> tuple[int, dict]:
+    """读取日志文件尾部。参数：lines=行数（默认 200，上限 2000）；tail=1 表示读尾部。"""
+    lines = int((body or {}).get("lines", 200) or 200)
+    lines = max(1, min(lines, 2000))
+    path = _log_path()
+    if path is None or not path.exists():
+        return 200, _ok({
+            "log_path": str(path) if path else None,
+            "lines": [],
+            "total": 0,
+            "truncated": False,
+            "tail": True,
+        })
+    try:
+        # 读尾部 N 行（大文件不整读）
+        size = path.stat().st_size
+        chunk = 64 * 1024
+        with path.open("r", encoding="utf-8", errors="replace") as fh:
+            if size > chunk:
+                fh.seek(max(0, size - chunk))
+                # 跳过可能被截断的首行
+                fh.readline()
+            content = fh.read()
+        all_lines = content.splitlines()
+        truncated = len(all_lines) > lines
+        tail_lines = all_lines[-lines:] if truncated else all_lines
+        return 200, _ok({
+            "log_path": str(path),
+            "lines": tail_lines,
+            "total": len(all_lines),
+            "truncated": truncated,
+            "tail": True,
+        })
+    except OSError as exc:
+        return _err(500, f"读取日志失败: {exc}")
+
+
+def restart() -> tuple[int, dict]:
+    """重启 nlp_worker：Popen 拉起新进程（同命令同参数），再请求主循环退出。
+
+    新进程用 DETACHED_PROCESS（Windows）脱离当前控制台，避免被旧进程退出带走。
+    """
+    import os as _os
+    import subprocess as _subprocess
+    import sys as _sys
+
+    executable = _sys.executable
+    if getattr(_sys, "frozen", False):
+        # 打包 exe：直接重启 exe（不经过 python）
+        argv = [executable, "--config", str(_config_path())]
+    else:
+        # 源码运行：python nlp_worker.py --config ...
+        script = Path(__file__).resolve().parent.parent / "nlp_worker.py"
+        argv = [executable, str(script), "--config", str(_config_path())]
+
+    creationflags = 0
+    if _sys.platform == "win32":
+        creationflags = (
+            _subprocess.DETACHED_PROCESS
+            | _subprocess.CREATE_NEW_PROCESS_GROUP
+            | _subprocess.CREATE_NO_WINDOW
+        )
+    try:
+        proc = _subprocess.Popen(
+            argv,
+            cwd=str(_config_path().parent),
+            creationflags=creationflags,
+            close_fds=True,
+            stdout=_subprocess.DEVNULL,
+            stderr=_subprocess.DEVNULL,
+            stdin=_subprocess.DEVNULL,
+        )
+    except OSError as exc:
+        log.warning("重启拉起新进程失败: %s", exc)
+        return _err(500, f"重启失败（拉起新进程）: {exc}")
+
+    # 请求主循环退出（relay.stop() 置 running=False → run() 返回 → 进程自然退出）
+    relay = getattr(CTX, "relay", None)
+    if relay is not None:
+        import asyncio
+        loop = _main_loop()
+        if loop is not None:
+            try:
+                asyncio.run_coroutine_threadsafe(
+                    relay.stop(), loop
+                ).result(timeout=10)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("重启时停止 relay 失败: %s", exc)
+
+    return 200, _ok({
+        "restarted": True,
+        "pid": proc.pid,
+        "argv": argv,
+    })

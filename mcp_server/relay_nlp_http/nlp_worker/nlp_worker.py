@@ -552,6 +552,14 @@ async def list_models_main(config_path: str | Path) -> None:
 
 
 def main() -> None:
+    # PyInstaller windowed 模式（console=False，runw.exe bootloader）下
+    # sys.stdout/sys.stderr 为 None：print/argparse help 会抛 AttributeError，
+    # 导致 --help / --validate-config 退出码非 0（验证脚本误判失败、不打 zip）。
+    # 重定向到 devnull 保证无窗口模式下程序正常返回。
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, "w", encoding="utf-8")  # noqa: SIM115
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, "w", encoding="utf-8")  # noqa: SIM115
     parser = argparse.ArgumentParser(
         description="GitHub Copilot SDK NLP worker for relay_multi.py"
     )
