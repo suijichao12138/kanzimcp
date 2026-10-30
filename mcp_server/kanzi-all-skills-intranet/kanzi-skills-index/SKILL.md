@@ -26,7 +26,7 @@ skill MCP 提供 **3 个工具**（9001 网关 `/kanzi_skill_mcp`）：
 2. **要操作步骤** → `list_skills()` 找到对应 skill → `get_skill("skill名")` 拿完整步骤照着做。
 3. **禁止**：直接读 `skills/*/SKILL.md` 文件、反复查 docmcp、多次调工具试错。
 4. `search_property` 查不到 → 换更短关键词再试一次，还不行才考虑读全量属性文件对应段落。
-5. **完全按照skill执行**：获取到对应skill后必须通读全文，严格按照skill执行。
+5. **完全按照skill执行**：获取到对应skill后必须通读全文，严格按照skill执行，禁止脑补API流程/参数。
 
 ## 📋 高频属性（常驻，不用查工具）
 

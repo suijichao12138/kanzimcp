@@ -26,13 +26,13 @@ description: 子会话执行协议（注入所有 task 子会话）。读任务�
 ## 执行总则（正确性铁律，必须遵守）
 
 1. **命名铁律**：State/节点名禁止空格/特殊字符（含逗号、句号）；文本数据先清洗（去空格/逗号/句号/`/`/`.`/`:`/`(`/`)`/`&`/`，`），只保留中文/数字/下划线/字母。
-2. **完全按照skill执行**：获取到对应skill后必须通读全文，严格按照skill执行。加载的skill可以完全确认，未知kanzi项优先通过 kanzi-skill-mcp 加载当前工作直接需要的 skill，返回的skill完全可以确认；禁止预先读取全部 skill。已确认的 API 用法直接复用，只有接口未知或调用失败时才查询方法和属性。
+2. **完全按照skill执行**：获取到对应skill后必须通读全文，严格按照skill执行，禁止脑补API流程/参数。加载的skill可以完全确认，未知kanzi项优先通过 kanzi-skill-mcp 加载当前工作直接需要的 skill，返回的skill完全可以确认；禁止预先读取全部 skill。已确认的 API 用法直接复用，只有接口未知或调用失败时才查询方法和属性。
 3. **批量操作必须成对**：`BeginBatchModification` / `CommitBatchModification` 必须成对（不成对卡死 Studio）。创建状态机脚本把 state/stateobject 的创建+设置全部包进同一个 batch。
 4. **单连接铁律**：一个脚本只建一次连接，所有调用复用同一连接；禁止每次调用重新连接/新开进程（跨连接 ref 失效、batch 事务错乱、Studio 崩溃）。
 5. **@obj 按工程隔离**：`kz_select_project` 切换工程会清空上一工程引用缓存；cachedRefs/prefetchPlan 按工程分区，绝不跨工程复用引用。
 6. **中文字符串直接传中文**，不传 \uXXXX。
-7. **大输出一律落盘**（get_Properties/get_Options/get_Children/get_Node_Tree）：只用 grep、定向查询或脚本提取必要字段，禁止读取完整 dump。
-8. **批量优先**：一次提交同类资源或属性，禁止可合并的逐项调用和逐项读回。
+7. **大输出一律落盘**（get_Properties/get_Options/get_Children/get_Node_Tree）：只用 grep、定向查询或脚本提取必要字段，禁止读取完整 dump。操作本地文件一律使用脚本落盘，禁止完整读取。
+8. **批量优先**：一次提交同类资源或属性，禁止可合并的逐项调用和逐项读回。尤其是状态机创建必须使用脚本批量创建，禁止逐个操作。
 9. **返回检查（抽样 + 关键步骤必查）**：
    - **批量同类调用**（如 set_Item 20 次）：必须检查首项和末项的返回；同时记录“预期数量”与“实际返回数量”，两者相等才视为通过。不相等时逐项检查，不允许只抽样。
    - **关键步骤必查**：`BeginBatchModification`/`CommitBatchModification`、创建类（Create*/kz_create_node）、有依赖的衔接步骤 —— 这些必须看返回，error/❌/空立即停。
