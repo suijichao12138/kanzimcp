@@ -117,6 +117,13 @@ skills:
     # ⚠️ task_dispatch 子会话按类型注入 skill：这里必须指向【skill 父目录】
     #（无自身 SKILL.md 时自动递归发现所有子 skill），否则子会话只能加载到
     # 单一路径下的 skill。主会话需要注入 kanzi-main-protocol（调度协议）。
+    #
+    # ⚠️ 本地优先 + skill-mcp 兜底（2026-11-04）：
+    #   - 本地 entries 有同名 skill → 用本地的（测试覆盖场景）；
+    #   - 本地缺失 → 从 mcp_servers.kanzi-skill-mcp 的 get_skill 实时拉取注入
+    #     （团队统一维护点，改 skill 即全团队生效；不缓存到本地）；
+    #   - 拉取失败/不存在 → 静默跳过（log 一条），不报错；
+    #   - 本地目录不存在/为空 → 不报错，全部走 skill-mcp。
     # 例：
     # - path: D:\AIBox\kanzimcp\nlp-worker-portable-win-x64\skills
     #   enabled: true

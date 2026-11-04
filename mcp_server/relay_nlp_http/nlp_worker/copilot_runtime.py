@@ -1109,15 +1109,20 @@ def _walk_skill_files(root: Path) -> list[Path]:
 
 
 def _discover_skill_files(entry: SkillEntry) -> list[Path]:
+    """发现 entry 下的 SKILL.md。
+
+    路径不存在 / 目录内无 SKILL.md → 返回空列表（不 raise，由 load_skills
+    的 skill-mcp fallback 兜底；团队不本地部署 skill 时允许本地目录缺失/为空）。
+    """
     path = entry.path
     if not path.exists():
-        raise ConfigError(f"configured skill does not exist: {path}")
+        return []
     if path.is_file():
         if path.name.casefold() != "skill.md":
             raise ConfigError(f"skill file must be named SKILL.md: {path}")
         return [path.resolve()]
     if not path.is_dir():
-        raise ConfigError(f"skill path is not a file or directory: {path}")
+        return []
 
     direct = path / "SKILL.md"
     if direct.is_file() and not entry.recursive:
@@ -1127,16 +1132,74 @@ def _discover_skill_files(entry: SkillEntry) -> list[Path]:
             raise ConfigError(f"skill symlink escapes configured directory: {direct}")
         return [resolved_direct]
     found = _walk_skill_files(path)
-    if not found:
-        raise ConfigError(f"configured skill directory contains no SKILL.md: {path}")
     return found
 
 
-def load_skills(config: SkillsConfig, include: list[str] | None = None) -> str:
+def _fetch_skill_from_mcp(skill_mcp: MCPRemoteConfig, name: str, timeout: float = 8.0) -> str | None:
+    """从 kanzi-skill-mcp 拉取单个 skill 的完整内容。
+
+    返回 skill 内容字符串；失败/超时/不存在返回 None（调用方静默跳过，不 raise）。
+    """
+    import urllib.request
+
+    url = skill_mcp.url
+    headers = {"Content-Type": "application/json"}
+    for k, v in (skill_mcp.headers or {}).items():
+        headers[k] = v
+    payload = json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "id": f"skill-{name}",
+            "method": "tools/call",
+            "params": {
+                "name": "get_skill",
+                "arguments": {"name": name, "max_chars": 60000},
+            },
+        }
+    ).encode()
+    try:
+        req = urllib.request.Request(url, data=payload, headers=headers, method="POST")
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode())
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger(__name__).warning(
+            f"skill-mcp 拉取 {name} 失败(网络/超时/响应): {exc} —— 静默跳过"
+        )
+        return None
+    try:
+        result = data["result"]
+        for content in result.get("content", []):
+            if isinstance(content, dict) and content.get("text"):
+                parsed = json.loads(content["text"])
+                if parsed.get("found"):
+                    return parsed.get("content") or None
+                # found=False → skill 不存在，静默跳过
+                logging.getLogger(__name__).warning(
+                    f"skill-mcp 无 {name}: {parsed.get('hint', '')} —— 静默跳过"
+                )
+                return None
+    except (KeyError, TypeError, json.JSONDecodeError) as exc:
+        logging.getLogger(__name__).warning(
+            f"skill-mcp 拉取 {name} 返回格式异常: {exc} —— 静默跳过"
+        )
+        return None
+    logging.getLogger(__name__).warning(f"skill-mcp 拉取 {name} 空响应 —— 静默跳过")
+    return None
+
+
+def load_skills(
+    config: SkillsConfig,
+    include: list[str] | None = None,
+    skill_mcp: MCPRemoteConfig | None = None,
+) -> str:
     """加载启用的 SKILL.md 拼成字符串。
 
     include: 可选，只加载 skill 目录名（Path 的 name）在此列表内的文件；
              为 None 加载全部（主会话用）。子会话按类型传 include。
+    skill_mcp: 可选，kanzi-skill-mcp 远程配置。本地 entries 未命中 include 里的
+               skill 名时，从 skill-mcp 的 get_skill 拉取内容补入（团队统一维护点）；
+               拉取失败/不存在 → 静默跳过（log 一条），不缓存到本地。
+               本地已有同名 skill → 用本地的（测试覆盖优先）。
     """
     discovered: dict[str, Path] = {}
     for entry in config.entries:
@@ -1148,6 +1211,8 @@ def load_skills(config: SkillsConfig, include: list[str] | None = None) -> str:
 
     blocks: list[str] = []
     total = 0
+    # 本地命中（按 include 过滤）
+    local_names: set[str] = set()
     paths = sorted(discovered.values(), key=lambda path: path.as_posix().casefold())
     for path in paths:
         if include is not None:
@@ -1171,6 +1236,32 @@ def load_skills(config: SkillsConfig, include: list[str] | None = None) -> str:
         except (OSError, UnicodeError) as exc:
             raise ConfigError(f"cannot read UTF-8 skill {path}: {exc}") from exc
         blocks.append(f"<skill source={path.as_posix()!r}>\n{content.strip()}\n</skill>")
+        dirname = path.parent.name if path.parent.name else path.name
+        local_names.add(dirname)
+        local_names.add(path.name)
+
+    # skill-mcp fallback：include 里本地缺失的 skill 名，逐个拉取（失败静默跳过）
+    if include is not None and skill_mcp is not None and skill_mcp.enabled:
+        for name in include:
+            if name in local_names:
+                continue  # 本地优先（测试覆盖）
+            content = _fetch_skill_from_mcp(skill_mcp, name)
+            if content is None:
+                continue  # 静默跳过
+            if len(content) > config.max_file_bytes:
+                logging.getLogger(__name__).warning(
+                    f"skill-mcp {name} 超过 max_file_bytes，跳过"
+                )
+                continue
+            total += len(content)
+            if total > config.max_total_bytes:
+                logging.getLogger(__name__).warning(
+                    f"skill-mcp 拉取 {name} 后总大小超 max_total_bytes，跳过"
+                )
+                continue
+            blocks.append(
+                f"<skill source='kanzi-skill-mcp:{name}'>\n{content.strip()}\n</skill>"
+            )
     return "\n\n".join(blocks)
 
 
@@ -1984,14 +2075,25 @@ class CopilotRuntime:
 
     def _build_session_kwargs(self, task_type: str | None = None) -> dict[str, Any]:
         copilot = self.config.copilot
+        # skill-mcp 远程配置（本地 entries 未命中时从它拉取 skill 内容；团队统一维护点）
+        skill_mcp_cfg = self.config.mcp_servers.get("kanzi-skill-mcp")
+        skill_mcp = (
+            skill_mcp_cfg
+            if isinstance(skill_mcp_cfg, MCPRemoteConfig) and skill_mcp_cfg.enabled
+            else None
+        )
         if task_type:
             # 子会话：公共 skill（config common_skills）+ 该类型专属 skill（config session_types 优先）
             include = self.config.task_dispatch.common_skills_for() + self.config.task_dispatch.skills_for(task_type)
-            skills = load_skills(self.config.skills, include=include)
+            skills = load_skills(self.config.skills, include=include, skill_mcp=skill_mcp)
         else:
             # 主会话：只加载主会话协议 skill（config main_skills），
             # 与子会话协议/类型 skill 严格隔离，防止主会话自己执行 Kanzi 操作
-            skills = load_skills(self.config.skills, include=self.config.task_dispatch.main_skills_for())
+            skills = load_skills(
+                self.config.skills,
+                include=self.config.task_dispatch.main_skills_for(),
+                skill_mcp=skill_mcp,
+            )
         prompt = copilot.agent.system_prompt.strip()
         if skills:
             prompt = (
