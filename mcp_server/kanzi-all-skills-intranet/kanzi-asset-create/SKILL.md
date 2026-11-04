@@ -44,17 +44,17 @@ mcp kz_invoke target=<Brushes ref> method=get_Children
 **第1步：创建 Color Brush**
 ```python
 # 定位 Brushes 库（拿 BrushLibrary 引用）
-mcp kz_invoke target=@project method=get_BrushLibrary        # → @obj2 (BrushLibraryPluginWrapper)
+mcp kz_invoke target=@project method=get_BrushLibrary        # → <Brushes库ref> (BrushLibraryPluginWrapper, 编号每次连接变)
 
 # 在 @project 上调 CreateBrush：名字, Brushes库, BrushTypeEnum.COLOR
-mcp kz_invoke target=@project method=CreateBrush args=["@string:Color Brush_9BA014", "@obj2", "@enum:COLOR"]
-# → 返回 ref_id = @obj49 (BrushPluginWrapper)
+mcp kz_invoke target=@project method=CreateBrush args=["@string:Color Brush_9BA014", "<Brushes库ref>", "@enum:COLOR"]
+# → 返回 ref_id = <新颜色刷ref> (BrushPluginWrapper)
 # 名字用 GenerateUniqueChildName；重名会自动加 _1/_2 后缀（如 Color Brush_9BA014_1）
 ```
 
 **第2步：设置颜色 `Set("ColorBrush.Color", "@color:AARRGGBB")`**
 ```python
-mcp kz_invoke target=@obj49 method=Set args=["ColorBrush.Color", "@color:#FF9BA014"]   # ✅ R155 G160 B20 A255
+mcp kz_invoke target=<新颜色刷ref> method=Set args=["ColorBrush.Color", "@color:#FF9BA014"]   # ✅ R155 G160 B20 A255
 # @color: 前缀解析成 System.Windows.Media.Color（WPF Color 对象）
 # 读回验证：get_Item → Color 对象，再 ToString() → #FF9BA013 之类 #AARRGGBB
 ```
@@ -80,18 +80,18 @@ mcp kz_invoke target=@obj49 method=Set args=["ColorBrush.Color", "@color:#FF9BA0
 
 ```python
 # 1. 拿 Brushes 库
-mcp kz_invoke target=@project method=get_BrushLibrary   # → @obj2
+mcp kz_invoke target=@project method=get_BrushLibrary   # → <Brushes库ref>
 # 2. 创建颜色刷（@project 上调 CreateBrush）
-mcp kz_invoke target=@project method=CreateBrush args=["@string:Color Brush_9BA014", "@obj2", "@enum:COLOR"]   # → @obj49
+mcp kz_invoke target=@project method=CreateBrush args=["@string:Color Brush_9BA014", "<Brushes库ref>", "@enum:COLOR"]   # → <新颜色刷ref>
 # 3. 设颜色 R=155 G=160 B=20 A=255
-mcp kz_invoke target=@obj49 method=Set args=["ColorBrush.Color", "@color:#FF9BA014"]
+mcp kz_invoke target=<新颜色刷ref> method=Set args=["ColorBrush.Color", "@color:#FF9BA014"]
 # 4. 读回验证
-mcp kz_invoke target=@obj49 method=get_Item args=["ColorBrush.Color"]        # → @obj54 (Color)
-mcp kz_invoke target=@obj54 method=ToString args=[]                             # → #FF9BA013
-mcp kz_invoke target=@obj54 method=get_R args=[]   # R=155
+mcp kz_invoke target=<新颜色刷ref> method=get_Item args=["ColorBrush.Color"]        # → <Color对象ref> (Color, 编号每次连接变)
+mcp kz_invoke target=<Color对象ref> method=ToString args=[]                             # → #FF9BA013
+mcp kz_invoke target=<Color对象ref> method=get_R args=[]   # R=155
 # 5. 保存
-mcp kz_invoke target=@studio method=get_Commands  # → @obj67 (GeneratedCommandInvoker)
-mcp kz_invoke target=@obj67 method=SaveProject args=["@project"]   # ✅ 保存落盘
+mcp kz_invoke target=@studio method=get_Commands  # → <命令执行器ref> (GeneratedCommandInvoker)
+mcp kz_invoke target=<命令执行器ref> method=SaveProject args=["@project"]   # ✅ 保存落盘
 ```
 
 ### 要点
@@ -118,18 +118,18 @@ mcp kz_invoke target=@obj67 method=SaveProject args=["@project"]   # ✅ 保存�
 ### 一、纹理创建到【文件夹下】（如 adas 文件夹）
 ```python
 # 1. 拿 TextureLibrary + 目标文件夹（adas）引用
-mcp kz_invoke target=@project method=get_TextureLibrary   # → @obj69（顶层库）
-mcp kz_invoke target=@obj69 method=get_Children           # → 子库 adas = @obj221
-# 2. 创建纹理（父容器 = adas 文件夹 @obj221）
-mcp kz_invoke target=@project method=CreateProjectItem args=["@type:Rightware.Kanzi.Studio.PluginInterface.SingleTexture", "@string:green_sig_num", "@obj221"]
-# → ✅ @obj1094，Path = Textures/adas/green_sig_num
+mcp kz_invoke target=@project method=get_TextureLibrary   # → <顶层纹理库ref>
+mcp kz_invoke target=<顶层纹理库ref> method=get_Children           # → 子库 adas = <adas文件夹ref>
+# 2. 创建纹理（父容器 = <adas文件夹ref>）
+mcp kz_invoke target=@project method=CreateProjectItem args=["@type:Rightware.Kanzi.Studio.PluginInterface.SingleTexture", "@string:green_sig_num", "<adas文件夹ref>"]
+# → ✅ <新纹理ref>，Path = Textures/adas/green_sig_num
 ```
 
 ### 二、纹理创建到【根目录下】（Texture 顶层）
 ```python
-# 父容器 = 顶层 TextureLibrary @obj69（不是 adas）
-mcp kz_invoke target=@project method=CreateProjectItem args=["@type:Rightware.Kanzi.Studio.PluginInterface.SingleTexture", "@string:green_sig_num_tl", "@obj69"]
-# → ✅ @obj1095，Path = Textures/green_sig_num_tl
+# 父容器 = <顶层纹理库ref>（不是 adas）
+mcp kz_invoke target=@project method=CreateProjectItem args=["@type:Rightware.Kanzi.Studio.PluginInterface.SingleTexture", "@string:green_sig_num_tl", "<顶层纹理库ref>"]
+# → ✅ <新纹理ref>，Path = Textures/green_sig_num_tl
 ```
 > **第 3 参（父容器）决定位置**：传文件夹 → `Textures/adas/xxx`；传顶层 → `Textures/xxx`。
 
@@ -137,12 +137,12 @@ mcp kz_invoke target=@project method=CreateProjectItem args=["@type:Rightware.Ka
 > 纹理文件夹 = `CreateProjectItem` + 泛型 T 用 **`TextureLibrary`** 完整类型名（TextureLibrary 既是顶层库类型，也是子库/文件夹类型）。
 
 ```python
-# Texture 顶层建文件夹（父 = @obj69）
-mcp kz_invoke target=@project method=CreateProjectItem args=["@type:Rightware.Kanzi.Studio.PluginInterface.TextureLibrary", "@string:__texdir_test__", "@obj69"]
-# → ✅ @obj1097，Path = Textures/__texdir_test__
-# 文件夹内再建子文件夹（父 = 刚建的文件夹 @obj1097）
-mcp kz_invoke target=@project method=CreateProjectItem args=["@type:Rightware.Kanzi.Studio.PluginInterface.TextureLibrary", "@string:__sub_dir__", "@obj1097"]
-# → ✅ @obj1098，Path = Textures/__texdir_test__/__sub_dir__
+# Texture 顶层建文件夹（父 = <顶层纹理库ref>）
+mcp kz_invoke target=@project method=CreateProjectItem args=["@type:Rightware.Kanzi.Studio.PluginInterface.TextureLibrary", "@string:__texdir_test__", "<顶层纹理库ref>"]
+# → ✅ <新文件夹ref>，Path = Textures/__texdir_test__
+# 文件夹内再建子文件夹（父 = <新文件夹ref>）
+mcp kz_invoke target=@project method=CreateProjectItem args=["@type:Rightware.Kanzi.Studio.PluginInterface.TextureLibrary", "@string:__sub_dir__", "<新文件夹ref>"]
+# → ✅ <新子文件夹ref>，Path = Textures/__texdir_test__/__sub_dir__
 ```
 
 | 创建目标 | 泛型 @type: 完整类型名（只差这一处！） |
@@ -155,11 +155,11 @@ mcp kz_invoke target=@project method=CreateProjectItem args=["@type:Rightware.Ka
 
 ```python
 # 1. 拿 ImageDirectory
-mcp kz_invoke target=@project method=get_ImageDirectory   # → @obj882
+mcp kz_invoke target=@project method=get_ImageDirectory   # → <ImageDirectory ref>
 # 2. 找图片所在子文件夹（如 adas）
-mcp kz_invoke target=@obj882 method=get_Children          # → adas = @obj891
+mcp kz_invoke target=<ImageDirectory ref> method=get_Children          # → adas = <adas图片夹ref>
 # 3. 找目标图片（green_sig_num.png）
-mcp kz_invoke target=@obj891 method=get_Children          # → green_sig_num.png = @obj1071
+mcp kz_invoke target=<adas图片夹ref> method=get_Children          # → green_sig_num.png = <图片ref>
 # 图片的 get_Path = Resource Files/Images/adas/green_sig_num.png
 ```
 
@@ -179,20 +179,20 @@ mcp kz_invoke target=@obj891 method=get_Children          # → green_sig_num.pn
 > 属性名是 **`TextureImage`**，不是 `SingleTexture.Image` / `Image`（那两个都不存在）。
 
 ```python
-mcp kz_invoke target=@obj1094 method=Set args=["TextureImage", "@obj1071"]   # ✅
-# 读回：get_Item("TextureImage") → @obj1071 即成功
+mcp kz_invoke target=<新纹理ref> method=Set args=["TextureImage", "<图片ref>"]   # ✅
+# 读回：get_Item("TextureImage") → <图片ref> 即成功
 ```
 > 纹理可用属性（get_Properties 确认）：`TextureImage`、`ImportedFrom`、`IDInImportSource`、`GpuResourceMemoryType`、`TextureMinificationFilter`、`TextureMagnificationFilter`、`TextureFormat`、`TextureWrapMode`、`TextureAnisotropyType`、`Name`。
 
 ### 六、完整流程示例（建夹→建纹理→绑图）
 ```python
-# 前提：TextureLibrary=@obj69, adas=@obj221, ImageDirectory=@obj882, adas图=@obj891
-# 1. 图片引用：green_sig_num.png = @obj1071（get_Children 遍历）
+# 前提：TextureLibrary=<顶层纹理库ref>, adas=<adas文件夹ref>, ImageDirectory=<ImageDirectory ref>, adas图=<adas图片夹ref>
+# 1. 图片引用：green_sig_num.png = <图片ref>（get_Children 遍历）
 # 2. 在 adas 下创建纹理
-@project.CreateProjectItem("@type:Rightware.Kanzi.Studio.PluginInterface.SingleTexture", "@string:green_sig_num", "@obj221")  # → @obj1094
+@project.CreateProjectItem("@type:Rightware.Kanzi.Studio.PluginInterface.SingleTexture", "@string:green_sig_num", "<adas文件夹ref>")  # → <新纹理ref>
 # 3. 绑图
-@obj1094.Set("TextureImage", "@obj1071")
-# 4. 读回验证：@obj1094.get_Item("TextureImage") → @obj1071
+<新纹理ref>.Set("TextureImage", "<图片ref>")
+# 4. 读回验证：<新纹理ref>.get_Item("TextureImage") → <图片ref>
 # 5. 保存：@studio.get_Commands() → SaveProject("@project")
 ```
 > **重名规则**：同一文件夹下不能有同名纹理；重名报 `A child with the name "xxx" already exists`。不同文件夹重名不冲突。创建前可用 `GenerateUniqueChildName(name)` 拿唯一名。
@@ -203,8 +203,8 @@ mcp kz_invoke target=@obj1094 method=Set args=["TextureImage", "@obj1071"]   # �
 
 ### 1. 定位字体相关库
 ```python
-@project.get_FontFamilyLibrary()   # → FontFamilyLibrary (现有: MiSans-Medium等), 如 @obj2
-@project.get_FontDirectory()        # → FontDirectory (字体文件: xxx.ttf), 如 @obj9
+@project.get_FontFamilyLibrary()   # → <FontFamilyLibrary ref> (现有: MiSans-Medium等)
+@project.get_FontDirectory()        # → <FontDirectory ref> (字体文件: xxx.ttf)
 # FontDirectory 里是字体文件: MiSans-Medium.ttf / MiSans-Regular.ttf 等，需 get_Children 遍历拿到 ref
 ```
 
@@ -214,8 +214,8 @@ mcp kz_invoke target=@obj1094 method=Set args=["TextureImage", "@obj1071"]   # �
 @project.CreateProjectItem(
     "@type:Rightware.Kanzi.Studio.PluginInterface.FontFamily",
     "@string:__font_test__",        # 唯一名(重名报 existing，可先 GenerateUniqueChildName)
-    "@obj2")                         # 父容器 = FontFamilyLibrary（不是 FontDirectory！字创建在库下）
-# → @obj8 (FontFamilyPluginWrapper) ✅
+    "<FontFamilyLibrary ref>")                         # 父容器 = FontFamilyLibrary（不是 FontDirectory！字创建在库下）
+# → <新字体ref> (FontFamilyPluginWrapper) ✅
 # 字体属性只有 2 个: FontFiles、Name
 ```
 
@@ -227,12 +227,12 @@ mcp kz_invoke target=@obj1094 method=Set args=["TextureImage", "@obj1071"]   # �
 #   @list:类型名@obj1,@obj2  → List<T>
 #   @list:@obj1,@obj2        → List<object> (无类型名)
 # 类型名 = 元素类型(接口/类)，如 Rightware.Kanzi.Studio.PluginInterface.FontFile(接口,可收实现类型)
-@obj8.Set("FontFiles", "@list:Rightware.Kanzi.Studio.PluginInterface.FontFile@obj10,@obj11")  # 绑 2 个 ✅
+<新字体ref>.Set("FontFiles", "@list:Rightware.Kanzi.Studio.PluginInterface.FontFile<字体文件1ref>,<字体文件2ref>")  # 绑 2 个 ✅
 ```
 
 ### 4. 读回验证 + 保存
 ```python
-@obj8.Get("FontFiles")  # 单绑 ['@obj10']，双绑 ['@obj10','@obj11']
+<新字体ref>.Get("FontFiles")  # 单绑 [<字体文件1ref>]，双绑 [<字体文件1ref>,<字体文件2ref>]
 # 注意: get_Item/Get 对集合属性只显示尾部一个(反射桥摊开)，要看完整看返回的 refs 列表
 @studio.get_Commands()  # → GeneratedCommandInvoker
 invoker.SaveProject("@project")  # ✅（@project 上无 SaveProject，必须走 invoker）

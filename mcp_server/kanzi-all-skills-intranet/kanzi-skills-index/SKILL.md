@@ -127,7 +127,7 @@ skill MCP 提供 **3 个工具**（9001 网关 `/kanzi_skill_mcp`）：
 
 | 你要引用的是… | 写法 | 示例 |
 |---|---|---|
-| **素材/资源对象**（brush/纹理/字体/状态机，先用 get_Children 拿到它的引用） | `@obj<引用>` | `args=["Node2D.ForegroundBrush", "@obj5736"]` |
+| **素材/资源对象**（brush/纹理/字体/状态机，先用 get_Children 拿到它的引用） | `@obj<引用>` | `args=["Node2D.ForegroundBrush", "<颜色刷ref>"]` |
 | **Resource 条目**（ResourceDictionary 里用 resourceID 注册的条目） | `KzResourceID:资源名` | `args=["Node2D.ForegroundBrush", "KzResourceID:FFFFFF"]` |
 
 > ⚠️ 前缀拼写：是 `KzResourceID:`，不是 `resourceID:` / `resource:`（少 `Kz` 会失败）。

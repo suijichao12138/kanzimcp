@@ -23,7 +23,7 @@ mcp kz_invoke target=@节点 method=get_ResourceDictionary args=[]
 
 **第2步：往字典里加资源条目 CreateResourceEntry(resourceID, 资源对象)**
 ```python
-mcp kz_invoke target=@objRD method=CreateResourceEntry args=["@string:FFFFFF", "@obj9"]
+mcp kz_invoke target=<资源字典ref> method=CreateResourceEntry args=["@string:FFFFFF", "<颜色刷ref>"]
 ```
 
 #### ⚠️🌟 最关键的坑：resourceID 纯数字必须加 `@string:` 前缀！
@@ -35,20 +35,20 @@ mcp kz_invoke target=@objRD method=CreateResourceEntry args=["@string:FFFFFF", "
 
 ```python
 # 1. 先拿到要注册的资源对象引用（颜色刷 / 图片）
-#    颜色刷：Brushes 库 get_Children → Color Brush_FFFFFF = @obj9, Color Brush_000000 = @obj8
-#    图片：   Textures 库 → adas 子库 → get_Children → green_sig_num = @obj384
+#    颜色刷：Brushes 库 get_Children → Color Brush_FFFFFF = <颜色刷ref>（现场枚举）
+#    图片：   Textures 库 → adas 子库 → get_Children → green_sig_num = <图片ref>（现场枚举）
 
 # 2. text_1 节点：创建 RD 并加颜色刷
-mcp kz_invoke target=/Screens/Screen/RootPage/Info/text_1 method=CreateResourceDictionary args=[]   # → @obj2
-mcp kz_invoke target=@obj2 method=CreateResourceEntry args=["@string:FFFFFF", "@obj9"]          # ✅ (第二次报 already exists 正常)
-mcp kz_invoke target=@obj2 method=CreateResourceEntry args=["@string:000000", "@obj8"]          # ✅
+mcp kz_invoke target=<目标节点路径> method=CreateResourceDictionary args=[]   # → <资源字典ref>
+mcp kz_invoke target=<资源字典ref> method=CreateResourceEntry args=["@string:FFFFFF", "<颜色刷ref>"]          # ✅ (第二次报 already exists 正常)
+mcp kz_invoke target=<资源字典ref> method=CreateResourceEntry args=["@string:000000", "<颜色刷ref>"]          # ✅
 
 # 3. image_1 节点：创建 RD 并加图片
-mcp kz_invoke target=/Screens/Screen/RootPage/Info/image_1 method=CreateResourceDictionary args=[] # → @obj1066
-mcp kz_invoke target=@obj1066 method=CreateResourceEntry args=["@string:green_sig_num", "@obj384"] # ✅
+mcp kz_invoke target=<目标节点路径> method=CreateResourceDictionary args=[] # → <资源字典ref>
+mcp kz_invoke target=<资源字典ref> method=CreateResourceEntry args=["@string:green_sig_num", "<图片ref>"] # ✅
 
 # 4. 验证：get_Resources 应列出 KeyValuePair 条目 [resourceID, 资源名]
-mcp kz_invoke target=@objRD method=get_Resources args=[]
+mcp kz_invoke target=<资源字典ref> method=get_Resources args=[]
 # → name = [FFFFFF, ... Name = Color Brush_FFFFFF]
 # → name = [000000, ... Name = Color Brush_000000]
 # → name = [green_sig_num, ...SingleTexturePluginWrapper Name = green_sig_num]

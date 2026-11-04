@@ -114,19 +114,19 @@ mcp({"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"kz_invoke"
 # ===== 第2步：获取节点属性列表，找到目标属性的 ref_id =====
 r = mcp({"jsonrpc":"2.0","id":"2","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"/Screens/.../text","method":"get_Properties"}}})
 # 从 r 的返回值中提取 warning.value 对应的 ref_id
-# 解析示例：返回文本如 "▪ ref_id = @obj10 ... name = warning.value" 则 ref_id=@obj10
+# 解析示例：返回文本如 "▪ ref_id = <属性ref> ... name = warning.value" 则取该 ref_id 作 <属性ref>
 
 # ===== 第3步：缓存属性 ref =====
-# 发一个 get_Name 调用来确保 @obj10 在 _objectStore 中
-mcp({"jsonrpc":"2.0","id":"3","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"@obj10","method":"get_Name","args":[]}}})
+# 发一个 get_Name 调用来确保 <属性ref> 在 _objectStore 中
+mcp({"jsonrpc":"2.0","id":"3","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"<属性ref>","method":"get_Name","args":[]}}})
 # 返回 "warning.value" 即确认缓存成功
 
 # ===== 第4步：创建绑定 =====
 # 三个参数用 v4 标识符：@obj: 属性ref + @enum:WHOLE_PROPERTY + @string:code
-mcp({"jsonrpc":"2.0","id":"4","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"/Screens/.../text","method":"CreateBinding","args":["@obj:" + obj10num, "@enum:WHOLE_PROPERTY", "@string:{#Info/warning.value}"]}}})
-# 成功返回：BindingWrapper 的 ref_id，如 @obj11
-# 注释: @obj:10 = @obj10 新格式; obj10num 为去掉 @obj 前缀后的数字
-# 也兼容旧写法: args:["@obj10", 9, "{#Info/warning.value}"]
+mcp({"jsonrpc":"2.0","id":"4","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"<目标节点路径>","method":"CreateBinding","args":["<属性ref>", "@enum:WHOLE_PROPERTY", "@string:{#Info/warning.value}"]}}})
+# 成功返回：BindingWrapper 的 ref_id，如 <绑定ref>
+# 注释: <属性ref> 为节点 get_Properties 拿到的属性对象引用（v4 新格式 @obj:数字 等价）
+# 也兼容旧写法: args:["<属性ref>", 9, "{#Info/warning.value}"]
 ```
 
 ## 查询绑定
@@ -135,14 +135,14 @@ mcp({"jsonrpc":"2.0","id":"4","method":"tools/call","params":{"name":"kz_invoke"
 # 列出节点所有绑定
 r = mcp({"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"/Screens/.../text","method":"get_Bindings"}}})
 
-# 从返回中找到绑定对象的 ref_id（如 @obj11）
+# 从返回中找到绑定对象的 ref_id（如 <绑定ref>）
 # 查看绑定的属性
-mcp({"jsonrpc":"2.0","id":"2","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"@obj11","method":"get_Property"}}})
+mcp({"jsonrpc":"2.0","id":"2","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"<绑定ref>","method":"get_Property"}}})
 # 查看绑定的 code
-mcp({"jsonrpc":"2.0","id":"3","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"@obj11","method":"get_Code"}}})
+mcp({"jsonrpc":"2.0","id":"3","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"<绑定ref>","method":"get_Code"}}})
 # 查看绑定的类型/开关
-mcp({"jsonrpc":"2.0","id":"4","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"@obj11","method":"get_BindingType"}}})
-mcp({"jsonrpc":"2.0","id":"5","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"@obj11","method":"get_IsBindingEnabled"}}})
+mcp({"jsonrpc":"2.0","id":"4","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"<绑定ref>","method":"get_BindingType"}}})
+mcp({"jsonrpc":"2.0","id":"5","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"<绑定ref>","method":"get_IsBindingEnabled"}}})
 ```
 
 ### Binding 接口其它可查属性（官方文档，2026-10-14 补充）
@@ -160,7 +160,7 @@ mcp({"jsonrpc":"2.0","id":"5","method":"tools/call","params":{"name":"kz_invoke"
 ## 删除绑定
 
 ```python
-mcp({"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"/Screens/.../text","method":"DeleteBinding","args":["@obj12"]}}})
+mcp({"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"<目标节点路径>","method":"DeleteBinding","args":["<绑定ref>"]}}})
 ```
 
 ## 注意事项
@@ -260,10 +260,10 @@ mcp({"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"kz_invoke"
 
 ```python
 # 查看对象可调用的方法
-mcp({"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"kz_ref_methods","arguments":{"target":"@obj123"}}})
+mcp({"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"kz_ref_methods","arguments":{"target":"<某对象ref>"}}})
 
 # 查看对象实现的接口
-mcp({"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"kz_ref_interfaces","arguments":{"target":"@obj123"}}})
+mcp({"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"kz_ref_interfaces","arguments":{"target":"<某对象ref>"}}})
 ```
 
 > v4 参数标识符（@type/@int/@string/@enum/@obj/@node/@null/@vector/@transformation2d/@color/@list）→ `kanzi-studio-mcp` skill。

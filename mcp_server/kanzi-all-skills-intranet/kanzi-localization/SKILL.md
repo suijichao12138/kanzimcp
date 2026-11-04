@@ -119,8 +119,8 @@ for row in row_refs:
 {
   "key": "SourceHanSansSCfontFamily",
   "isText": false,               // ← 非文本，所以 get_Translations 读不出！
-  "resourceRef": "@obj13",      // ProjectItemReference
-  "targetRef": "@obj14",
+  "resourceRef": "<资源引用ref>",      // ProjectItemReference
+  "targetRef": "<目标资源ref>",
   "targetType": "FontFamily",
   "targetFullType": "Rightware.Kanzi.Tool.Logic.Project.ResourceFileItems.FontFamily",
   "targetName": "SourceHanSansSC_new"   // ← 字体名
@@ -176,33 +176,33 @@ TBL="/Localization/Localization Table"   # v13 工具 target 都指向它
 
 ```bash
 # 按 key 查（已存在则返回该行，不存在报错/空）：
-HTTP POST http://<kz_mcp_http机IP>:9001/mcp（X-Kanzi-User: suijichao）→ tools/call {"name":"kz_loc_entry_get","arguments":{"target":"/Localization/Localization Table","key":"<本次要新增的KEY>"}}
+HTTP POST http://<kz_mcp_http机IP>:9001/mcp（X-Kanzi-User: <用户名>）→ tools/call {"name":"kz_loc_entry_get","arguments":{"target":"/Localization/Localization Table","key":"<本次要新增的KEY>"}}
 # → 查得到（该 key 已存在）→ 跳过新增；查不到 → 才 kz_loc_entry_add
 ```
 
 ### CRUD 实测示例
 ```bash
 # 查
-HTTP POST http://<kz_mcp_http机IP>:9001/mcp（X-Kanzi-User: suijichao）→ tools/call {"name":"kz_loc_entry_list","arguments":{"target":"/Localization/Localization Table"}}
-HTTP POST http://<kz_mcp_http机IP>:9001/mcp（X-Kanzi-User: suijichao）→ tools/call {"name":"kz_loc_entry_get","arguments":{"target":"/Localization/Localization Table","key":"ECO"}}
+HTTP POST http://<kz_mcp_http机IP>:9001/mcp（X-Kanzi-User: <用户名>）→ tools/call {"name":"kz_loc_entry_list","arguments":{"target":"/Localization/Localization Table"}}
+HTTP POST http://<kz_mcp_http机IP>:9001/mcp（X-Kanzi-User: <用户名>）→ tools/call {"name":"kz_loc_entry_get","arguments":{"target":"/Localization/Localization Table","key":"ECO"}}
 
 # 增（add，带 defaultText + 各语言 translations，多行）
-HTTP POST http://<kz_mcp_http机IP>:9001/mcp（X-Kanzi-User: suijichao）→ tools/call {"name":"kz_loc_entry_add","arguments":{"target":"/Localization/Localization Table","rows":[{"resourceName":"zz_newkey","type":"text","defaultText":"默认文本","translations":{"en":"hello","zh-CHS":"你好"}}]}}
+HTTP POST http://<kz_mcp_http机IP>:9001/mcp（X-Kanzi-User: <用户名>）→ tools/call {"name":"kz_loc_entry_add","arguments":{"target":"/Localization/Localization Table","rows":[{"resourceName":"zz_newkey","type":"text","defaultText":"默认文本","translations":{"en":"hello","zh-CHS":"你好"}}]}}
 # → added=True；add 内部用 new ResourceDictionaryEntry(key, new ProjectItemReference(text,TEXT)) + SetOrCreate
 
 # 改（set，改 defaultText + translations，多行）
-HTTP POST http://<kz_mcp_http机IP>:9001/mcp（X-Kanzi-User: suijichao）→ tools/call {"name":"kz_loc_entry_set","arguments":{"target":"/Localization/Localization Table","rows":[{"resourceName":"zz_newkey","type":"text","defaultText":"改后的默认文本","translations":{"en":"MODIFIED","zh-CHS":"已改"}}]}}
+HTTP POST http://<kz_mcp_http机IP>:9001/mcp（X-Kanzi-User: <用户名>）→ tools/call {"name":"kz_loc_entry_set","arguments":{"target":"/Localization/Localization Table","rows":[{"resourceName":"zz_newkey","type":"text","defaultText":"改后的默认文本","translations":{"en":"MODIFIED","zh-CHS":"已改"}}]}}
 # → updated=True；type 保持 text
 
 # 删（delete，多 key）
-HTTP POST http://<kz_mcp_http机IP>:9001/mcp（X-Kanzi-User: suijichao）→ tools/call {"name":"kz_loc_entry_delete","arguments":{"target":"/Localization/Localization Table","keys":["zz_newkey"]}}
+HTTP POST http://<kz_mcp_http机IP>:9001/mcp（X-Kanzi-User: <用户名>）→ tools/call {"name":"kz_loc_entry_delete","arguments":{"target":"/Localization/Localization Table","keys":["zz_newkey"]}}
 
 # 增语言列（add language）
-HTTP POST http://<kz_mcp_http机IP>:9001/mcp（X-Kanzi-User: suijichao）→ tools/call {"name":"kz_loc_entry_add_language","arguments":{"target":"/Localization/Localization Table","lang":"de"}}
+HTTP POST http://<kz_mcp_http机IP>:9001/mcp（X-Kanzi-User: <用户名>）→ tools/call {"name":"kz_loc_entry_add_language","arguments":{"target":"/Localization/Localization Table","lang":"de"}}
 # → success=True；languageCount / translations 出现新语言列
 
 # 删语言列（delete language）
-HTTP POST http://<kz_mcp_http机IP>:9001/mcp（X-Kanzi-User: suijichao）→ tools/call {"name":"kz_loc_entry_delete_language","arguments":{"target":"/Localization/Localization Table","lang":"de"}}
+HTTP POST http://<kz_mcp_http机IP>:9001/mcp（X-Kanzi-User: <用户名>）→ tools/call {"name":"kz_loc_entry_delete_language","arguments":{"target":"/Localization/Localization Table","lang":"de"}}
 # → success=True, found=True；该语言列从 get_Locales 消失；找不到 lang 返回 found=False 且不删任何内容
 ```
 
@@ -213,35 +213,35 @@ HTTP POST http://<kz_mcp_http机IP>:9001/mcp（X-Kanzi-User: suijichao）→ too
 **⚠️ 关键：`targetRef` 必须传目标资源的裸对象引用（`@obj`），不能用路径（`/path`）！** 用路径会 `构造 ResourceDictionaryEntry 失败`。
 
 **拿目标字体的裸对象 ref（两选一）：**
-1. 读一个已有字体条目 → `kz_loc_entry_get` → 返回里的 `targetRef`（如 `@obj24` = FontFamily 裸对象）
-2. 用 `kz_get_raw_ref` 从字体 wrapper 取裸对象：`kz_get_raw_ref {target:"@对象", method:"get_WrappedItem", args:[]}` → `✅ 裸对象: @obj37`
+1. 读一个已有字体条目 → `kz_loc_entry_get` → 返回里的 `targetRef`（如 <字体裸对象ref> = FontFamily 裸对象）
+2. 用 `kz_get_raw_ref` 从字体 wrapper 取裸对象：`kz_get_raw_ref {target:"<字体wrapper ref>", method:"get_WrappedItem", args:[]}` → `✅ 裸对象: <字体裸对象ref>`
   - 先 `kz_invoke {target:"/Font Families", method:"get_Children"}` 列字体 wrapper（name=字体名，ref=@obj）
 
 **新增字体条目：**
 ```json
-{"name":"kz_loc_entry_add","arguments":{"target":"/Localization/Localization Table","rows":[{"resourceName":"__FONT1","type":"font","targetRef":"@obj24","defaultText":"测试"}]}}
+{"name":"kz_loc_entry_add","arguments":{"target":"<本地化表路径>","rows":[{"resourceName":"__FONT1","type":"font","targetRef":"<字体裸对象ref>","defaultText":"测试"}]}}
 // → added=True；targetRef 是 FontFamily 裸对象（@obj，非 path！）
 ```
 读回验证：`isText=false`、`resourceRef_ContentType=ABSOLUTE`、`targetName=<字体>`（如 SourceHanSansSC_new）、`contentType=font`
 
 **修改字体条目（改 target 到另一字体）：**
 ```json
-{"name":"kz_loc_entry_set","arguments":{"target":"/Localization/Localization Table","rows":[{"resourceName":"__FONT1","type":"font","targetRef":"@obj37","defaultText":"测试-MEDIUM"}]}}
-// → updated=True；target 换成 @obj37（另一 FontFamily 裸对象）
+{"name":"kz_loc_entry_set","arguments":{"target":"<本地化表路径>","rows":[{"resourceName":"__FONT1","type":"font","targetRef":"<字体裸对象ref>","defaultText":"测试-MEDIUM"}]}}
+// → updated=True；target 换成 <字体裸对象ref>（另一 FontFamily 裸对象）
 ```
 读回确认：`targetName` 变新字体（如 SourceHanSansSC_new → SourceHanSansSC-Medium_new）、`isText` 仍为 false、类型保持 font。
 
 **实测（2026-08-19 真实表）：**
-- 新增 `__TEST_FONT_REF` type=font targetRef=@obj24 → added=True，isText=false，target=SourceHanSansSC_new
-- set 改 targetRef=@obj37（SourceHanSansSC-Medium_new 裸对象，via kz_get_raw_ref）→ updated=True，target=SourceHanSansSC-Medium_new，isText/type 保持
+- 新增 `__TEST_FONT_REF` type=font targetRef=<字体裸对象ref> → added=True，isText=false，target=SourceHanSansSC_new
+- set 改 targetRef=<字体裸对象ref>（SourceHanSansSC-Medium_new 裸对象，via kz_get_raw_ref）→ updated=True，target=SourceHanSansSC-Medium_new，isText/type 保持
 - 完成后 `kz_loc_entry_delete` 清理测试条目
 - ⚠️ `type:"font"` + `targetRef:"/Font Families/..."`（路径）会失败；必须 `@obj` 裸对象引用
 
 **✅ 保留的真实条目（新增后不删，2026-08-19）：**
 新增了一个永久字体引用条目并保留在表里：
 ```json
-{"name":"kz_loc_entry_add","arguments":{"target":"/Localization/Localization Table","rows":[{"resourceName":"ARFontfontFamily","type":"font","targetRef":"@obj40","defaultText":"AR字体"}]}}
-// → added=True；@obj40 = ARFont Family 字体裸对象（via kz_get_raw_ref get_WrappedItem）
+{"name":"kz_loc_entry_add","arguments":{"target":"<本地化表路径>","rows":[{"resourceName":"ARFontfontFamily","type":"font","targetRef":"<字体裸对象ref>","defaultText":"AR字体"}]}}
+// → added=True；<字体裸对象ref> = ARFont Family 字体裸对象（via kz_get_raw_ref get_WrappedItem）
 ```
 读回：`key=ARFontfontFamily`、`isText=false`、`targetName=ARFont Family`、`ContentType=ABSOLUTE` **已保留在表，未删**。
 命名约定参照现有字体条目（`<字体名>fontFamily`），供 HMI 字体引用用。
@@ -322,7 +322,7 @@ v13 的 `kz_loc_entry_*` **按 key 单个增/改/删**，底层 `SetOrCreate`/`R
 ### 删表：`kz_invoke target=表对象 method=Delete`（危险）
 ```python
 # 先定位表对象（ExportTranslations list 或 get_Children 拿 ref），再调用 Delete
-@obj4521.Delete()   # 例：对 LocalizationTablePluginWrapper 调 Delete 返回 True
+<本地化表ref>.Delete()   # 例：对 LocalizationTablePluginWrapper 调 Delete 返回 True
 # → 整张表项被删：路径 /Localization/xxx 无法解析，Localization 库 children 变空
 ```
 > **Delete() = 删整个项目项，不是删行！** 只能在确认数据有备份/可恢复时用。

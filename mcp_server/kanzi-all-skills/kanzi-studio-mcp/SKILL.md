@@ -15,12 +15,12 @@ description: Kanzi Studio MCP 总入口。接入方式（http 端点 + X-Kanzi-U
 
 ```bash
 # 读工程名（验证连接）
-node /home/suijichao/.openclaw/workspace-kanzimcp/kanzi-mcp-client.mjs '{"name":"kz_invoke","arguments":{"target":"@project","method":"get_Name","args":[]}}'
+node <client.mjs路径> '{"name":"kz_invoke","arguments":{"target":"@project","method":"get_Name","args":[]}}'
 # → ✅ 结果: cluster_hmi
 ```
 
-- 地址：`ws://123.57.85.81:58080/suijichao`（**端口 58080；路径段 = 通道名**）
-- **第一条消息必须带 `role`**：`{"role":"client","name":"suijichao"}` —— 否则中继回 `未知角色` / `Server not connected`
+- 地址：`ws://<中继IP>:58080/<用户名>`（**端口 58080；路径段 = 通道名**）
+- **第一条消息必须带 `role`**：`{"role":"client","name":"<用户名>"}` —— 否则中继回 `未知角色` / `Server not connected`
 - 之后走 JSON-RPC：`initialize` → `tools/call`
 - 相关脚本：`kanzi-mcp-client.mjs`（通用调用）、`kanzi-mcp-list-tools.mjs`（列工具）、`kanzi-shot-save.mjs`（截图落盘）
 - ⚠️ ws 直连是 **client 槽**：同通道里 server（Kanzi 插件）是对方。多 client 并存已支持（2026-09-14 实测）。
@@ -38,8 +38,8 @@ import json, websockets, asyncio
 
 async def main():
     # 1. 只建一次连接（整个脚本复用这一个）
-    async with websockets.connect("ws://123.57.85.81:58080/suijichao") as ws:
-        await ws.send(json.dumps({"role":"client","name":"suijichao"}))
+    async with websockets.connect("ws://<中继IP>:58080/<用户名>") as ws:
+        await ws.send(json.dumps({"role":"client","name":"<用户名>"}))
         # 2. Begin 批量
         await call(ws, "kz_invoke", {"target":"@project","method":"BeginBatchModification","args":["批量创建"]})
         # 3. 循环内复用同一连接发 N 次调用（禁止每次重新连接）
@@ -75,7 +75,7 @@ Header: X-Kanzi-User: <用户名>       ← 必需
   - `/kanzistudio_mcp` → 操作 Kanzi Studio（**标准端点**；`/mcp` 是等价别名，实测两者结果一致）
   - `/kanzi_api_mcp` → 官方 API 代理
   - `/kanzi_doc_mcp` → 官方文档代理
-- 白名单 `users.json`：`suijichao / wangtianyu / wangdong / zhenghaitao / lvhuiyuan / test`
+- 白名单 `users.json`：按实际部署配置（X-Kanzi-User 对应白名单内用户名）
 
 ## 一、用脚本直接调 HTTP MCP（2026-09-14 实测打通）
 
@@ -101,7 +101,7 @@ req = urllib.request.Request(
                    "arguments": {"target": "@project", "method": "get_Name", "args": []}}
     }).encode(),
     headers={"Content-Type": "application/json",
-             "X-Kanzi-User": "suijichao"},
+             "X-Kanzi-User": "<用户名>"},
     method="POST")
 print(urllib.request.urlopen(req, timeout=60).read().decode())
 ```

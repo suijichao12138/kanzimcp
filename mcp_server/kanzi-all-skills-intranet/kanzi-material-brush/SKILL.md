@@ -14,7 +14,7 @@ description: Kanzi Studio 创建「参数化渐变材质笔刷」的完整流程
 > ⚠️ **地址规则**：若环境已配置好相关 MCP（如 nlp_worker config.yaml 的 `mcp_servers` 或部署机已建网关），**必须使用已配置的 MCP 地址**；`<kz_mcp_http机IP>` 仅为通用占位符（未配置时的示例写法）。
 
 ```bash
-# HTTP MCP：POST http://<kz_mcp_http机IP>:9001/mcp（Header X-Kanzi-User: suijichao）
+# HTTP MCP：POST http://<kz_mcp_http机IP>:9001/mcp（Header X-Kanzi-User: <用户名>）
 # 调用：JSON-RPC tools/call {"name":"kz_invoke","arguments":{"target":"<ref或路径>","method":"<方法>","args":[...]}}
 
 # 无需 initialize，直接 tools/call：

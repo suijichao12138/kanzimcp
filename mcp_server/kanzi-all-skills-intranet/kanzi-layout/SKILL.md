@@ -12,9 +12,9 @@ description: Kanzi 布局节点：StackLayout2D 创建、方向设置（StackLay
 ### 创建（kz_create_node type=StackLayout2D）
 ```python
 # 横向布局节点
-kz_create_node parent=/Screens/Screen/RootPage type=StackLayout2D name=layout_h   # → @obj10358
+kz_create_node parent=<父节点路径> type=StackLayout2D name=layout_h   # → <新节点ref>
 # 纵向布局节点
-kz_create_node parent=/Screens/Screen/RootPage type=StackLayout2D name=layout_v   # → @obj10359
+kz_create_node parent=<父节点路径> type=StackLayout2D name=layout_v   # → <新节点ref>
 ```
 
 ### 设方向（⚠️ 必须用 @int: 强转整数）

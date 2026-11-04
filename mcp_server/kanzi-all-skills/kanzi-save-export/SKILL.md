@@ -60,7 +60,7 @@ r = mcp({
 返回示例：
 ```json
 {
-  "ref_id": "@obj706",
+  "ref_id": "<命令执行器ref>",
   "type": "GeneratedCommandInvoker",
   "fullType": "Rightware.Kanzi.Tool.ApplicationCommon.Plugin.GeneratedCommandInvoker"
 }
@@ -79,7 +79,7 @@ r = mcp({
     "params": {
         "name": "kz_invoke",
         "arguments": {
-            "target": "@obj:706",      # GeneratedCommandInvoker 的 ref（新格式 @obj: 等价 @obj706）
+            "target": "<命令执行器ref>",      # GeneratedCommandInvoker 的 ref
             "method": "SaveProject",
             "args": ["@project"]       # @project 自动解析为当前工程对象（v4 已修复 args 解析）
         }
@@ -89,7 +89,7 @@ r = mcp({
 
 成功返回：`✅ 调用成功（无返回值）`
 
-> ✅ **v4 实测确认**：`@project` 作为 `args` 参数现在能正确解析成工程对象（此前会当字符串导致"找不到与参数(String)匹配"）；`@obj:` 新格式 target 与 `@obj706` 等价可用（v4 已加归一化）。
+> ✅ **v4 实测确认**：`@project` 作为 `args` 参数现在能正确解析成工程对象（此前会当字符串导致"找不到与参数(String)匹配"）。
 
 ### 第3步：导出 kzb
 
@@ -102,7 +102,7 @@ r = mcp({
     "params": {
         "name": "kz_invoke",
         "arguments": {
-            "target": "@obj:706",
+            "target": "<命令执行器ref>",
             "method": "ExportBinary",
             "args": ["@project"]
         }
@@ -220,7 +220,7 @@ ws.close()
 
 | 标识符 | 作用 | 示例 |
 |--------|------|------|
-| `@obj:X` | 对象缓存引用（等价 `@objX`，target 与 args 均可用） | `@obj:706` |
+| `@obj:X` | 对象缓存引用（等价 `@objX`，target 与 args 均可用） | `@obj:706`（示例） |
 | `@node:/path` | 节点路径（target 与 args 均可用） | `@node:/Screens/.../text` |
 | `@project` / `@studio` | 工程/Studio 对象（target 与 args 均可用，v4 已修 args 解析） | `args:["@project"]` |
 | `@type:名字` | .NET Type 对象（如 `@type:string`） | `CreateProperty<T>` |

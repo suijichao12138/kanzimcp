@@ -20,9 +20,9 @@ mcp({"jsonrpc":"2.0","id":"2","method":"tools/call","params":{"name":"kz_invoke"
 
 ```python
 r = mcp({"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"@project","method":"get_PropertyTypeLibrary","args":[]}}})
-# 返回 ref_id = @obj2
+# 返回 ref_id = <属性库ref>（编号每次连接会变）
 
-ptlib = "@obj2"  # 每次 Studio 重启（仅人工操作，助手绝不重启）后需要重新获取
+ptlib = "<属性库ref>"  # 每次 Studio 重启（仅人工操作，助手绝不重启）后需要重新获取
 ```
 
 ### 1. 创建 String / Text 属性（v4 实测通过）
@@ -68,6 +68,78 @@ mcp({"jsonrpc":"2.0","id":"3","method":"tools/call","params":{"name":"kz_invoke"
 # 也兼容直接传 dict: args:["...", "...", "...", {"off":0,"on":1,"ss":3}]
 ```
 
+### 3a. 枚举属性创建后单键值对增删改（2026-11-03 实测通过）
+
+> 创建后对 `Options` 做**单键值对**增/删/改：一次只传一个键值对，不需要全量重写字典。
+> 用现有插件工具 `kz_get_raw_ref` 拿到底层 `Dictionary<string,int>` 对象引用（不展开），再对字典调 `Add` / `set_Item` / `Remove`。
+
+**操作对象（两个 ref，必须先定位）**
+
+| 变量 | 含义 | 怎么拿到 |
+|---|---|---|
+| `<枚举属性ref>` | 目标 CustomEnumProperty 属性对象 | 先 `get_PropertyTypeLibrary` 拿属性库 ref → `get_ProjectPropertyTypes` 列全部属性 → 按名称（get_Name）找到目标枚举属性，取其 ref_id（ref 编号每次连接都会变，见步骤 0） |
+| `<字典ref>` | 该属性的 `Options` 底层 `Dictionary<string,int>` 对象 | 对 `<枚举属性ref>` 调 `kz_get_raw_ref` + `get_Options`（下方 ①），返回的裸对象即字典 ref |
+
+> ⚠️ ref 编号（@objN）每次连接/重连都会变，**禁止硬编码**，每次操作前必须重新定位。
+
+**0. 定位枚举属性 ref（先做这步，后续 target 都填它）**
+
+```python
+# 拿属性类型库
+mcp({"jsonrpc":"2.0","id":"0","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"@project","method":"get_PropertyTypeLibrary","args":[]}}})
+# → 返回 ref_id（如 @obj2，编号每次连接会变）→ 记作 <属性库ref>
+
+# 列出全部属性类型，按名称找到目标枚举属性（如 warning.level），取它的 ref_id 作 <枚举属性ref>
+mcp({"jsonrpc":"2.0","id":"0","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"<属性库ref>","method":"get_ProjectPropertyTypes","args":[]}}})
+# → 每条含 ref_id + name（get_Name），name 匹配目标属性（如 warning.level）的 ref_id 即 <枚举属性ref>
+```
+
+**① 拿字典 ref（不展开）——之后增/改/删都对着这个 ref 调**
+
+```python
+# target = <枚举属性ref>（第 0 步拿到），method = get_Options，args = 空
+mcp({"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"kz_get_raw_ref","arguments":{"target":"<枚举属性ref>","method":"get_Options","args":[]}}})
+# → ✅ 裸对象: @objXXXX  （类型 = System.Collections.Generic.Dictionary`2[string,int]）→ 记作 <字典ref>
+# 注意：普通 get_Options 会把字典展开成 KeyValuePair 元素（值类型，无法调方法），必须用 kz_get_raw_ref
+```
+
+**② 增（Add 单个键值对）**
+
+```python
+# target = <字典ref>（① 拿到），method = Add，args = [键, 值]（键是字符串，值是整数）
+mcp({"jsonrpc":"2.0","id":"2","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"<字典ref>","method":"Add","args":["level_7","7"]}}})
+# → ✅ 调用成功；用 ⑤ get_Options 读回确认新增 level_7=7
+```
+
+**③ 改（set_Item 修改单个键值对）**
+
+```python
+# target = <字典ref>，method = set_Item，args = [键, 新值]（改已存在的键的值）
+mcp({"jsonrpc":"2.0","id":"3","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"<字典ref>","method":"set_Item","args":["level_3","30"]}}})
+# → ✅ 调用成功；用 ⑤ 读回确认 level_3 由 3 变为 30
+```
+
+**④ 删（Remove 删除单个键值对）**
+
+```python
+# target = <字典ref>，method = Remove，args = [键]
+mcp({"jsonrpc":"2.0","id":"4","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"<字典ref>","method":"Remove","args":["level_7"]}}})
+# → ✅ 结果: True；用 ⑤ 读回确认 level_7 已删除
+```
+
+**⑤ 查（任意时刻读回全部键值对）**
+
+```python
+# target = <枚举属性ref>，method = get_Options，args = 空
+mcp({"jsonrpc":"2.0","id":"5","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"<枚举属性ref>","method":"get_Options","args":[]}}})
+# → 每个选项一个 KeyValuePair ref，name = [key, value]
+```
+
+> **要点**：
+> - `kz_get_raw_ref` 是插件已有工具（KzMCPServerClient 实现），**不改代码**；HTTP 网关 `tools/call` 原样转发（不过滤工具名），ws 直连中继同样可用。
+> - 三个方法参数：`Add(键, 值)` 新增；`set_Item(键, 新值)` 修改已存在键；`Remove(键)` 删除。
+> - `Add` 遇到已存在键会抛异常（Dictionary 语义），改值用 `set_Item`；`Remove` 删除不存在的键返回 False 不抛错。
+
 ### 3b. 创建 Vector 属性（v4 实测通过）
 
 ```python
@@ -89,17 +161,17 @@ mcp({"jsonrpc":"2.0","id":"3","method":"tools/call","params":{"name":"kz_invoke"
 # 先列出
 r = mcp({"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":ptlib,"method":"get_ProjectPropertyTypes","args":[]}}})
 # 找到 ref_id，再删除
-mcp({"jsonrpc":"2.0","id":"2","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":ptlib,"method":"DeleteProperty","args":["@obj333"]}}})
+mcp({"jsonrpc":"2.0","id":"2","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":ptlib,"method":"DeleteProperty","args":["<属性ref>"]}}})
 ```
 
 ### 5. 读取属性字段值
 
 ```python
 # 方法签名：get_Name, get_DisplayName, get_Category, get_Description, get_Options
-mcp({"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"@obj333","method":"get_DisplayName","args":[]}}})
+mcp({"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"<属性ref>","method":"get_DisplayName","args":[]}}})
 
 # 批量查看所有属性
-mcp({"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"kz_ref_properties","arguments":{"ref_id":"@obj333"}}})
+mcp({"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"kz_ref_properties","arguments":{"ref_id":"<属性ref>"}}})
 ```
 
 ### 6. 设置 Description（单独设置）
@@ -107,7 +179,7 @@ mcp({"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"kz_ref_pro
 CreateIntProperty 没有 Description 参数，创建后单独设：
 
 ```python
-mcp({"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"@obj333","method":"set_Description","args":["这是一个测试属性"]}}})
+mcp({"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"<属性ref>","method":"set_Description","args":["这是一个测试属性"]}}})
 ```
 
 ## 调试工具

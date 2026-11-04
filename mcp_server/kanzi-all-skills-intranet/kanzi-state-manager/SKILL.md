@@ -17,7 +17,7 @@ description: Kanzi Studio 状态机创建/配置。StateManager、StateGroup、S
 ### 接入（HTTP MCP）
 
 > ⚠️ **地址规则**：若环境已配置好相关 MCP（如 nlp_worker config.yaml 的 `mcp_servers` 或部署机已建网关），**必须使用已配置的 MCP 地址**；`<kz_mcp_http机IP>` 仅为通用占位符（未配置时的示例写法）。
-通过 HTTP 端点 `POST http://<kz_mcp_http机IP>:9001/mcp`（Header `X-Kanzi-User: suijichao`，JSON-RPC `tools/call`）连接 Kanzi Studio 插件。返回 `ref_id = @objN` 自动进缓存，Studio 重启后（**仅人工操作**）编号失效须重新枚举。
+通过 HTTP 端点 `POST http://<kz_mcp_http机IP>:9001/mcp`（Header `X-Kanzi-User: <用户名>`，JSON-RPC `tools/call`）连接 Kanzi Studio 插件。返回 `ref_id = @objN` 自动进缓存，Studio 重启后（**仅人工操作**）编号失效须重新枚举。
 
 ### 基本请求格式
 
@@ -51,9 +51,9 @@ description: Kanzi Studio 状态机创建/配置。StateManager、StateGroup、S
 
 `@objXXX` 必须先进入缓存才能使用。发一次 `kz_invoke` 调用即可触发缓存：
 ```python
-mcp({"..","name":"kz_invoke","arguments":{"target":"@obj47","method":"get_Name","args":[]}})
+mcp({"..","name":"kz_invoke","arguments":{"target":"<某对象ref>","method":"get_Name","args":[]}})
 ```
-调用成功后 `@obj47` 就在缓存中了。
+调用成功后 `<某对象ref>` 就在缓存中了。
 
 下面的调用统一走 `kz_invoke`（工具名，参数遵循 v4 标识符 @type/@int/@string/@enum/@obj/@color 等）。
 
@@ -132,46 +132,16 @@ mcp kz_invoke target=@project method=CommitBatchModification
 ### 完整流程（旧版：预取 RuntimeType）
 
 ```python
-# ===== 第1步：获取 StateManager Library =====
-r = mcp({"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"@project","method":"get_StateManagerLibrary"}}})
-# 返回中提取 ref_id，如 @obj225
-
-# 缓存一下
-mcp({"jsonrpc":"2.0","id":"2","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"@obj225","method":"get_Name","args":[]}}})
-
-# ===== 第2步：获取各层次 RuntimeType =====
-# StateManager 类型
-r = mcp({"jsonrpc":"2.0","id":"3","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"@obj225","method":"get_ProjectItemType"}}})
-sm_type = 提取 r 中的 ref_id  # 如 @obj226
-
-# StateGroup 类型 — 找一个已有 StateGroup 获取
-r = mcp({"jsonrpc":"2.0","id":"4","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"@obj225","method":"get_Children"}}})
-# 从列表中找第一个 StateGroup 的 ref_id
-r = mcp({"jsonrpc":"2.0","id":"5","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"@obj100","method":"get_ProjectItemType"}}})
-sg_type = 提取 r 中的 ref_id
-
-# State 类型 — 同样从已有 State 获取
-# StateObject 类型 — 通过反射获取
-r = mcp({"jsonrpc":"2.0","id":"6","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"@project","method":"GetType","args":[]}}})
-# 获取 project 类型，GetProperties 找到 Assembly
-# Assembly.GetType("Rightware.Kanzi.Studio.PluginInterface.StateObject")
-
-# ===== 第3步：批量创建 + 设置（Begin 和 Commit 必须成对！）=====
-# ⚠️ 创建状态机必须把 state/stateobject 的创建 + 设置（State 控制属性值、StateObject 的 TargetObjectPath/文本）全部包进同一个 batch（Begin/Commit 成对）
-mcp({"jsonrpc":"2.0","id":"begin","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"@project","method":"BeginBatchModification","args":["创建 warning State Manager"]}}})
-
-# 创建 StateManager（第三参 = StateManagerLibrary 的 ref）
-mcp({"jsonrpc":"2.0","id":"sm","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"@project","method":"CreateProjectItem","args":["@obj226", "warning State Manager", "@obj225"]}}})
-
-# 创建 StateGroup（第三参 = 刚创建的 SM 的 ref）
-mcp({"jsonrpc":"2.0","id":"sg","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"@project","method":"CreateProjectItem","args":["@obj227", "warningGroup", "@obj228"]}}})
-
-# 创建 State（第三参 = SG 的 ref）
-mcp({"jsonrpc":"2.0","id":"st","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"@project","method":"CreateProjectItem","args":["@obj229", "warning_0", "@obj230"]}}})
-
-# Commit
-mcp({"jsonrpc":"2.0","id":"commit","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"@project","method":"CommitBatchModification"}}})
+# ⚠️ 旧版流程（预取 RuntimeType 再传 @obj 类型对象）已废弃，用上方「新版 @type: 完整类型名」流程。
+# 原因（2026-11-03 实机验证）：CreateProjectItem 第 1 参传 RuntimeType 创建 StateManager 虽可，
+# 但创建 StateGroup 时传 RuntimeType 对象报「找不到与参数 (String, String, StateManagerPluginWrapper) 匹配的 CreateProjectItem」。
+# 统一改用 @type:Rightware.Kanzi.Studio.PluginInterface.StateManager / StateGroup / State / StateObject 完整类型名（上方新版已实测通过）。
+```python
+# 唯一需要保留的旧版思路：创建后从返回 ref_id 取新对象引用，作为下一层级创建的 parent
+mcp({"jsonrpc":"2.0","id":"sm","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"@project","method":"CreateProjectItem","args":["@type:Rightware.Kanzi.Studio.PluginInterface.StateManager", "warning State Manager", "<StateManagerLibrary ref>"]}}})
+# → 返回 <新SM ref>，作下一层 parent
 ```
+
 
 ⚠️ **注意**: 上述 `@obj227`、`@obj228` 等 ref 都是示意值。实际使用时：
 1. 先获取 SM/SG/State 的 RuntimeType ref
@@ -184,12 +154,12 @@ mcp({"jsonrpc":"2.0","id":"commit","method":"tools/call","params":{"name":"kz_in
 
 ```python
 # 先获取 StateGroup 属性列表
-mcp({"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"@obj:230","method":"get_Properties"}}})
+mcp({"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"<StateGroup ref>","method":"get_Properties"}}})
 # 找到 "StateGroupControllerPropertyTypeReference" 的 ref_id
 
 # 设置控制属性 — value 指向某个 PropertyType 引用（用 @obj: 新格式，v4 实测通过）
-mcp({"jsonrpc":"2.0","id":"2","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"@obj:230","method":"set_Item","args":["StateGroupControllerPropertyTypeReference", "@obj:19"]}}})
-# @obj:19 = 目标属性的 PropertyType 对象（如 FloatPropertyTypePluginWrapper），
+mcp({"jsonrpc":"2.0","id":"2","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"<StateGroup ref>","method":"set_Item","args":["StateGroupControllerPropertyTypeReference", "<目标属性PropertyType ref>"]}}})
+# <目标属性PropertyType ref> = 目标属性的 PropertyType 对象（如 FloatPropertyTypePluginWrapper），
 #           从目标节点 get_Properties 获取（如 FontStyleConcept.Size）
 # ✅ v4 实测：set_Item 控制属性引用 + get_Item 回读均成功
 ```
@@ -197,7 +167,7 @@ mcp({"jsonrpc":"2.0","id":"2","method":"tools/call","params":{"name":"kz_invoke"
 #### State 控制属性值（用 @int: 避免数值歧义）
 
 ```python
-mcp({"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"@obj:238","method":"set_Item","args":["warning.value", "@int:0"]}}})
+mcp({"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"<State ref>","method":"set_Item","args":["warning.value", "@int:0"]}}})
 ```
 
 #### StateObject 创建（mcp 可直接创建）
@@ -205,11 +175,11 @@ mcp({"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"kz_invoke"
 在 State 下创建 StateObject，`@type:StateObject` 即可（已实测）：
 
 ```python
-# 创建 StateObject 到某个 State (@obj392) 下
-mcp({"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"@project","method":"CreateProjectItem","args":["@type:StateObject", "V4TestStateObject", "@obj:392"]}}})
+# 创建 StateObject 到某个 State（<State ref>，现场枚举）下
+mcp({"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"@project","method":"CreateProjectItem","args":["@type:StateObject", "V4TestStateObject", "<State ref>"]}}})
 
 # 判别是不是真 StateObject — 调 get_TargetObjectPath
-mcp({"jsonrpc":"2.0","id":"2","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"@obj:新ref","method":"get_TargetObjectPath","args":[]}}})
+mcp({"jsonrpc":"2.0","id":"2","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"<新StateObject ref>","method":"get_TargetObjectPath","args":[]}}})
 # ✅ 返回 `.` 等路径 → 是 StateObject
 # ❌ 报 "This state is a root state" → 是根 State，不是 StateObject
 ```
@@ -222,10 +192,10 @@ StateObject（子 State）通过 TargetObjectPath 指向目标节点：
 
 ```python
 # 设置目标节点路径（"." 表示指向父 State 对应的目标节点）— 用 @string: 保证是字符串不被当节点
-mcp({"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"@obj:1431","method":"set_TargetObjectPath","args":["@string:."]}}})
+mcp({"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"<StateObject ref>","method":"set_TargetObjectPath","args":["@string:."]}}})
 
 # 设置文本内容
-mcp({"jsonrpc":"2.0","id":"2","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"@obj:1431","method":"set_Item","args":["TextConcept.Text","@string:KzResourceID:1"]}}})
+mcp({"jsonrpc":"2.0","id":"2","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"<StateObject ref>","method":"set_Item","args":["TextConcept.Text","@string:KzResourceID:1"]}}})
 ```
 
 ### 🚨 批量创建状态机脚本规范（2026-10-20 已根治，UI 线程）
@@ -316,11 +286,11 @@ mcp kz_invoke target=@StateGroup method=CreateTransition args=["@obj:<startState
 > - **默认自动生成的那条"任意→任意"过渡** get_StartState/get_EndState 都返回空(null)
 
 ```python
-# 例：状态0 → 任意（start=@obj393, end=null）
-args=["@obj:393", null]
+# 例：状态0 → 任意（start=<State ref>, end=null）
+args=["<State ref>", null]
 
 # 例：0 ⇄ 2（双向，见下方 Direction）
-args=["@obj:393", "@obj:395"]
+args=["<State ref>", "<目标State ref>"]
 ```
 
 ### 🔀 方向 Direction
@@ -376,18 +346,18 @@ mcp kz_invoke target=@StateGroup method=DeleteTransition args=["@obj:<StateTrans
 
 ```python
 # 创建 状态0(→任意) start≠null,end=null
-@obj424 = SG.CreateTransition("@obj:393", null)   # StartState=0, EndState=null(任意)
-@obj424.set_Duration("@double:15")                 # 15ms
+<新Transition ref> = SG.CreateTransition("<State ref>", null)   # StartState=0, EndState=null(任意)
+<新Transition ref>.set_Duration("@double:15")                 # 15ms
 
 # 创建 0⇄2 双向（== "0和2之间切换"）
-@obj425 = SG.CreateTransition("@obj:393", "@obj:395")
-@obj425.set_Duration("@double:20")
-@obj425.set_StartTime("@double:5")
-@obj425.set_Direction("@enum:BIDIRECTIONAL")
-@obj425.set_AnimationType("@int:11")   # POWER
+<新Transition ref2> = SG.CreateTransition("<State ref>", "<目标State ref>")
+<新Transition ref2>.set_Duration("@double:20")
+<新Transition ref2>.set_StartTime("@double:5")
+<新Transition ref2>.set_Direction("@enum:BIDIRECTIONAL")
+<新Transition ref2>.set_AnimationType("@int:11")   # POWER
 
 # 删除 任意→任意 默认过渡
-@obj421 的 get_StartState/get_EndState 都 null → SG.DeleteTransition("@obj:421")
+<某Transition ref> 的 get_StartState/get_EndState 都 null → SG.DeleteTransition("<某Transition ref>")
 ```
 
 ## 关键类型
@@ -417,13 +387,13 @@ mcp({"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"kz_invoke"
 # 返回中找 "State Managers" 文件夹，获取 ref_id
 
 # 列出 State Managers 文件夹下的所有 StateManager
-mcp({"jsonrpc":"2.0","id":"2","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"@obj47","method":"get_Children"}}})
+mcp({"jsonrpc":"2.0","id":"2","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"<SM库ref>","method":"get_Children"}}})
 
 # 列出 StateManager 下的 StateGroup
-mcp({"jsonrpc":"2.0","id":"3","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"@obj107","method":"get_Children"}}})
+mcp({"jsonrpc":"2.0","id":"3","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"<StateManager ref>","method":"get_Children"}}})
 
 # 列出 StateGroup 下的所有 State
-mcp({"jsonrpc":"2.0","id":"4","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"@obj120","method":"get_Children"}}})
+mcp({"jsonrpc":"2.0","id":"4","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"<StateGroup ref>","method":"get_Children"}}})
 ```
 
 ## 常见错误处理

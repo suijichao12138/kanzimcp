@@ -10,7 +10,7 @@ description: Kanzi Studio Triggers（触发器）创建与配置。TriggerNodeCo
 通过 HTTP MCP 连接 Kanzi Studio 插件。
 
 > ⚠️ **地址规则**：若环境已配置好相关 MCP（如 nlp_worker config.yaml 的 `mcp_servers` 或部署机已建网关），**必须使用已配置的 MCP 地址**；`<kz_mcp_http机IP>` 仅为通用占位符（未配置时的示例写法）。
-- **端点**：`POST http://<kz_mcp_http机IP>:9001/mcp`（Header `X-Kanzi-User: suijichao`）
+- **端点**：`POST http://<kz_mcp_http机IP>:9001/mcp`（Header `X-Kanzi-User: <用户名>`）
 - **调用**：JSON-RPC `tools/call`，参数格式 `{"name":"kz_invoke","arguments":{"target":"X","method":"Y","args":[...]}}`
 - 示例中的 `mcp kz_invoke target=X method=Y args=[...]` 即上一条的简写。
 
@@ -30,32 +30,32 @@ mcp kz_invoke target=@库 method=GetTreeItemsAsList
 
 | Trigger 类型 | NodeComponentType 引用 | 说明 |
 |---|---|---|
-| `Kanzi.DataTrigger` | @obj359 | 数据触发 |
-| `Kanzi.MessageTrigger` | @obj347 | 消息触发（现有页面激活用这个） |
-| `Kanzi.OnAttachedTrigger` | @obj366 | 挂载时触发 |
-| `Kanzi.OnPropertyChangedTrigger` | @obj367 | 属性变化触发 |
-| `Kanzi.TimerTrigger` | @obj372 | 定时触发 |
+| `Kanzi.DataTrigger` | `<NodeComponentType ref>`（现场枚举，编号每次连接变） | 数据触发 |
+| `Kanzi.MessageTrigger` | `<NodeComponentType ref>` | 消息触发（现有页面激活用这个） |
+| `Kanzi.OnAttachedTrigger` | `<NodeComponentType ref>` | 挂载时触发 |
+| `Kanzi.OnPropertyChangedTrigger` | `<NodeComponentType ref>` | 属性变化触发 |
+| `Kanzi.TimerTrigger` | `<NodeComponentType ref>` | 定时触发 |
 
 > ⚠️ 引用号每次连接会变，必须现场枚举获取，不能硬编码。
 
 ### 2. 在目标节点上创建 Trigger
 ```python
-# node = 目标 UI 节点引用（如 RootPage @obj344）
-mcp kz_invoke target=@obj344 method=CreateTrigger args=["@obj359"]   # ✅ 传 NodeComponentType 对象引用
+# node = 目标 UI 节点引用（如 RootPage，ref 现场枚举）
+mcp kz_invoke target=<目标节点ref> method=CreateTrigger args=["<DataTrigger类型ref>"]   # ✅ 传 NodeComponentType 对象引用
 ```
 ✅ 创建成功返回 `TriggerNodeComponentPluginWrapper`，自动命名为 `Kanzi.XXXTrigger`。
 前提：目标节点必须能放 NodeComponent（UI 节点都行）。
 
-> ⚠️ 必须传 **NodeComponentType 对象引用**（如 `@obj359`），传裸字符串（`"DataTrigger"`）会报错。
+> ⚠️ 必须传 **NodeComponentType 对象引用**（`<DataTrigger类型ref>`，从 NodeComponentTypes 库 get_Items 现场枚举），传裸字符串（`"DataTrigger"`）会报错。
 
 ### 3. 配置 Trigger 消息类型（MessageTrigger 专属）
 ```python
 # 消息类型从 MessageTypes 库枚举 (get_Children)
 # 设置 TriggerMessageType = 消息对象引用 (如 sys.startAniFinished)
-mcp kz_invoke target=@新trigger method=set_Item args=["TriggerMessageType","@obj349"]
+mcp kz_invoke target=<新trigger ref> method=set_Item args=["TriggerMessageType","<消息类型ref>"]
 ```
 ✅ 读回 `get_TriggerMessageType` 确认指向 `sys.startAniFinished`。
-MessageTypes 库（@obj129）实测含：`sys.startAniFinished` / `theme.ani_start` / `theme.ani_end` / `sys.chargeAniFinished`。
+MessageTypes 库（`<MessageTypes库ref>`，get_Children 现场枚举）实测含：`sys.startAniFinished` / `theme.ani_start` / `theme.ani_end` / `sys.chargeAniFinished`。
 
 ### 4. Trigger 的其他关键字段（get_ 可读）
 - `get_NodeComponentType()` — 触发器类型
@@ -77,25 +77,25 @@ mcp kz_invoke target=@新建trigger method=Delete   # ✅ 返回 True
 
 ```python
 mcp kz_invoke target=@TriggerActionTypeLibrary method=get_Items
-# 实测得到: @obj3810 Kanzi.DispatchMessageAction
-#           @obj3813 Kanzi.SetPropertyAction   ← 设置属性用这个
-#           @obj3816 Kanzi.ApplyActivationAction / @obj3817 Kanzi.ApplyPropertyAction
-#           @obj3811 ExecuteLuaAction / @obj3814 TrySetFocusAction / @obj3815 WriteLogAction / @obj3812 MoveFocusAction
+# 实测得到: <DispatchMessageAction类型ref> Kanzi.DispatchMessageAction
+#           <SetPropertyAction类型ref> Kanzi.SetPropertyAction   ← 设置属性用这个
+#           <ApplyActivationAction类型ref> Kanzi.ApplyActivationAction / <ApplyPropertyAction类型ref> Kanzi.ApplyPropertyAction
+#           <ExecuteLuaAction类型ref> ExecuteLuaAction / <TrySetFocusAction类型ref> TrySetFocusAction / <WriteLogAction类型ref> WriteLogAction / <MoveFocusAction类型ref> MoveFocusAction
 ```
 
 **给 Trigger 创建 Action**：
 ```python
 # trigger = 已创建的 Trigger 引用,@SetPropertyAction = 上面枚举到的类型对象
-mcp kz_invoke target=@trigger method=CreateAction args=["@obj3813"]   # ✅ 成功
+mcp kz_invoke target=<trigger ref> method=CreateAction args=["<SetPropertyAction类型ref>"]   # ✅ 成功
 # 返回 TriggerActionItemPluginWrapper, 自动命名 Kanzi.SetPropertyAction
 ```
 
 **配置 SetPropertyAction**（设置目标节点属性）：
 ```python
 # 目标节点 = 相对引用(默认) 或绝对路径
-mcp kz_invoke target=@action method=set_Item args=["MessageArgument.SetProperty.TargetItem","@obj295"]
+mcp kz_invoke target=<action ref> method=set_Item args=["MessageArgument.SetProperty.TargetItem","<目标节点ref>"]
 # 要设置的属性类型对象(如 text 的 TextConcept.Text) —— 从目标节点 get_Properties 枚举得到
-mcp kz_invoke target=@action method=set_Item args=["MessageArgument.SetProperty.PropertyType","@obj3829"]
+mcp kz_invoke target=<action ref> method=set_Item args=["MessageArgument.SetProperty.PropertyType","<属性类型ref>"]
 # 设置的值: 固定值模式, 用 @string: 编码 (裸整数 0 / @int:0 都会失败)
 mcp kz_invoke target=@action method=set_Item args=["MessageArgument.SetProperty.PropertyValue","@string:0"]
 # 读回确认
@@ -116,20 +116,20 @@ mcp kz_invoke target=@action method=get_Item args=["MessageArgument.SetProperty.
 ```python
 # ★ 步骤1: DispatchMessageAction 类型 = TriggerActionTypeLibrary.get_Items()
 mcp kz_invoke target=@TriggerActionTypes库 method=get_Items
-# → @obj3810 Kanzi.DispatchMessageAction
+# → <DispatchMessageAction类型ref> Kanzi.DispatchMessageAction
 
 # ★ 步骤2: 给 trigger 追加动作
-mcp kz_invoke target=@trigger method=CreateAction args=["@obj3810"]
+mcp kz_invoke target=<trigger ref> method=CreateAction args=["<DispatchMessageAction类型ref>"]
 # → 返回新 DispatchMessageAction
 
 # ★ 步骤3: 定位 Play/Stop 消息引用 (⚠️ 必须用 get_Items, get_Children 只有自定义4个)
-mcp kz_invoke target=@obj129 method=get_Items   # MessageTypes 库
-# → @obj3881 Message.AnimationPlayer.Play  /  @obj3884 Message.AnimationPlayer.Stop
+mcp kz_invoke target=<MessageTypes库ref> method=get_Items   # MessageTypes 库
+# → <Play消息ref> Message.AnimationPlayer.Play  /  <Stop消息ref> Message.AnimationPlayer.Stop
 
 # ★ 步骤4: 设置消息类型 (⚠️ 缓存时序坑: 必须先多次 get_Name 预热缓存!)
 for _ in range(3):
-    mcp kz_invoke target=@obj3884 method=get_Name   # Stop 消息
-mcp kz_invoke target=@DispatchAction method=set_DispatchMessageActionMessageType args=["@obj3884"]
+    mcp kz_invoke target=<Stop消息ref> method=get_Name   # Stop 消息
+mcp kz_invoke target=<DispatchAction ref> method=set_DispatchMessageActionMessageType args=["<Stop消息ref>"]
 ```
 
 ⚠️ **缓存时序坑**：`set_DispatchMessageActionMessageType` 会偶发报 `类型"System.String"无法转换为...MessageType`。原因是 get_Items 新枚举出的 @obj 引用，bridge 缓存可能还没切成 MessageTypePluginWrapper 类型。**解决：set 前对该消息引用多次 `get_Name`（2-3次）预热缓存**，再 set 就成功。
@@ -159,11 +159,11 @@ mcp kz_invoke target=@PlayAction method=set_Item args=["AnimationPlayer.PlayMess
 
 > ⚠️ **要控制状态机切状态，用 GoToState 消息（直接跳转），不是设控制属性/SetPropertyAction！** 正确流程是 **Dispatch Message Action → State Manager → Go To State**。
 
-**消息**：`Message.StateManager.GoToState`（MessageTypes 库 `@obj129 get_Items` 里有；还有 GoToNextDefinedState/GoToPreviousDefinedState/EnteredState/LeftState 等）。
+**消息**：`Message.StateManager.GoToState`（MessageTypes 库 `<MessageTypes库ref> get_Items` 里有；还有 GoToNextDefinedState/GoToPreviousDefinedState/EnteredState/LeftState 等）。
 
 ```python
 # 1. 创建 DispatchMessageAction
-mcp kz_invoke target=@trigger method=CreateAction args=["@obj3810"]  # DispatchMessageAction类型
+mcp kz_invoke target=<trigger ref> method=CreateAction args=["<DispatchMessageAction类型ref>"]  # DispatchMessageAction类型
 
 # 2. 设消息类型 = GoToState
 mcp kz_invoke target=@新action method=set_DispatchMessageActionMessageType args=["@GoToState消息"]
@@ -172,7 +172,7 @@ mcp kz_invoke target=@新action method=set_DispatchMessageActionMessageType args
 mcp kz_invoke target=@新action method=set_Item args=["MessageArgument.StateManager.StateGroup","warningGroup"]
 mcp kz_invoke target=@新action method=set_Item args=["MessageArgument.StateManager.State","warning_0"]
 # ✅ 裸名(如 "warning_0") / "@state:warning_0" / "@project:...路径" 都能成功
-# ❌ "@obj:4158" / "@obj4158" 报 "given value cannot" (State/StateGroup是StateReference, 接受名称字符串)
+# ❌ 传 @obj 对象引用报 "given value cannot" (State/StateGroup是StateReference, 接受名称字符串)
 
 # 读回验证
 mcp kz_invoke target=@新action method=get_Item args=["MessageArgument.StateManager.State"]  # warning_0
@@ -196,7 +196,7 @@ mcp kz_invoke target=@trigger method=CreateCondition   # ✅ 成功, 自动命�
 
 | 配置项 | 方法 | 值 | 说明 |
 |---|---|---|---|
-| 监控属性(左值) | `set_Item("TriggerCondition.PropertyTypeReferenceA", @属性对象)` | @obj602 | TermA 引用属性 |
+| 监控属性(左值) | `set_Item("TriggerCondition.PropertyTypeReferenceA", @属性对象)` | `<属性对象ref>` | TermA 引用属性 |
 | 操作符 | `set_ConditionOperation` | **`"1"`=EQUALS, `"DIFFERENT"`=不等** | 🌟见下坑 |
 | B侧来源 | `set_TermBSource` | **`"FIXED"`** 或 `"FROM_PROPERTY"`/`"FROM_MESSAGE"` | 用固定值必须 FIXED |
 | 固定值 | `set_FixedPropertyValue` | `"0"` | 具体判断值 |
@@ -226,7 +226,7 @@ mcp kz_invoke target=@condition method=get_PropertyA            # 属性 ref
 触发属性（谁变化时触发）：
 ```python
 # SourcePropertyType = 要监控的属性对象
-mcp kz_invoke target=@trigger method=set_Item args=["OnPropertyChangedTrigger.SourcePropertyType","@obj602"]
+mcp kz_invoke target=<trigger ref> method=set_Item args=["OnPropertyChangedTrigger.SourcePropertyType","<属性对象ref>"]
 # 其它: SourceNode(默认当前节点), IgnoreIdenticalValue, IgnoreInitialValue
 ```
 
@@ -239,7 +239,7 @@ condA.set_Item(PropertyTypeReferenceA, warning.value)
 condA.set_ConditionOperation("1")            # EQUALS
 condA.set_TermBSource("FIXED")
 condA.set_FixedPropertyValue("0")
-actA.set_Item(PropertyType, text.Text@obj)
+actA.set_Item(PropertyType, <text.Text属性ref>)
 actA.set_Item(PropertyValue, "@string:0")
 # 分支B trigger2 + condB + actionB (同样配置)
 condB.set_ConditionOperation("DIFFERENT")     # ≠
@@ -251,7 +251,7 @@ actB.set_Item(PropertyValue, "@string:1")
 - **设置任何枚举值，参数传字符串**（`"1"`/`"DIFFERENT"`/`"FIXED"`/`"@enum:X"`），不要传 Python int
 - **设置固定值/数值用 `@string:` 前缀**（`"@string:0"`），裸 int / `@int:` / `@float:` 都会失败
 - 属性类型对象（如 text 的 TextConcept.Text）：从目标节点 `get_Properties` 枚举拿到 PropertyTypePluginWrapper 类属性对象引用
-- 相对引用 TargetItem/SourceItem 默认 `@obj295`（relative ref, IsAbsoluteReference=False）
+- 相对引用 TargetItem/SourceItem 默认是 relative ref（IsAbsoluteReference=False），ref 现场枚举
 
 ## 已知边界 / 说明
 - CreateTrigger/CreateAction/CreateCondition 均已打通。前置条件：监听对象、触发属性的**对象引用必须先在当前连接通过 get_Name/get_Properties 触发缓存**。
@@ -259,7 +259,7 @@ actB.set_Item(PropertyValue, "@string:1")
 
 ## 已实测验证清单（2026-08-07）
 - ✅ DataTrigger / MessageTrigger / OnAttachedTrigger / OnPropertyChangedTrigger / TimerTrigger 五种创建全部成功，Delete 清理干净
-- ✅ 现有 RootPage 页面激活 trigger（Page: Activated）为 Kanzi.MessageTrigger，NodeComponentType=@obj347，IsMessageTrigger=True
+- ✅ 现有 RootPage 页面激活 trigger（Page: Activated）为 Kanzi.MessageTrigger，IsMessageTrigger=True（NodeComponentType 现场枚举）
 - ✅ 工程无损：所有测试对象已清理
 - ✅ **OnPropertyChangedTrigger 完整链路打通**：info 下 warning+text 节点、绑定、触发warning.value、双分支 Condition(action 判断EQUALS/DIFFERENT + 固定值) → SetPropertyAction 写 text.text=0/1，全部读回验证通过（2026-08-07）
 - ✅ **DispatchMessageAction 控制动画启停打通**：trigger 追加动作，MessageType=Play/Stop，默认 RoutingTarget 指向节点自身；循环（RepeatCount=0）+3倍速（DurationScale=3）配在 PlayMessageArguments（2026-08-07）

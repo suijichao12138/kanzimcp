@@ -70,7 +70,7 @@ bridge 的 `kz_invoke` **只认大写 C# 方法名**。写错大小写 = 找不�
 ### Animation Data 库对象（AnimationLibraryPluginWrapper，= `@project.get_AnimationLibrary()`）
 
 ```python
-mcp kz_invoke target=@project method=get_AnimationLibrary   # 返回库对象（如 @obj44）
+mcp kz_invoke target=@project method=get_AnimationLibrary   # 返回库对象（ref 现场枚举）
 ```
 
 | 函数 | 参数 | 用途 | 实测 |
@@ -110,11 +110,11 @@ Animation_test 上 `Get(属性名)` **实测能读到的属性**：
 ```python
 # 1) 拿到 target 属性类型包装
 mcp kz_invoke target=/Animation Data/Animation_test method=Get args=["AnimationTargetPropertyName"]
-# → ref_id = @obj61, type = IntPropertyTypePluginWrapper, name = Internal.ctrlState
+# → ref_id = <目标属性ref>, type = IntPropertyTypePluginWrapper, name = Internal.ctrlState
 
 # 2) 在包装上用 get_ 前缀读名字（不是 Get！包装对象上 Get 找不到）
-mcp kz_invoke target=@obj61 method=get_Name        # → ✅ Internal.ctrlState
-mcp kz_invoke target=@obj61 method=get_DisplayName # → ✅ Internal.ctrlState-内部使用
+mcp kz_invoke target=<目标属性ref> method=get_Name        # → ✅ Internal.ctrlState
+mcp kz_invoke target=<目标属性ref> method=get_DisplayName # → ✅ Internal.ctrlState-内部使用
 ```
 
 - **target 属性类型**由 `AnimationTargetPropertyName` 返回：Int 型 → `IntPropertyTypePluginWrapper`，Float 型 → `FloatPropertyTypePluginWrapper`（不同动画 target 不同类型）。
@@ -223,9 +223,9 @@ mcp kz_invoke target=@project method=CreateProjectItem args=["Animation","Intern
 mcp kz_invoke target=@project method=CreateProjectItem args=["Animation","Internal.stateAnimationOpacity_1","/Animation Data"]
 # ✅ 返回 AnimationPluginWrapper
 
-# 3) 给每个动画设 target property（用现存真动画的 target 包装对象引用 @objN）
+# 3) 给每个动画设 target property（用现存真动画的 target 包装对象引用，ref 现场枚举）
 #    从 @project 现存同名真动画 Internal.ctrlState 的 AnimationTargetPropertyName 拿 IntPropertyTypePluginWrapper
-mcp kz_invoke target=@新动画 method=set_Item args=["AnimationTargetPropertyName","@obj包装ref"]   # 注意 ref 已含 @，不要再拼 @
+mcp kz_invoke target=<新动画ref> method=set_Item args=["AnimationTargetPropertyName","<包装对象ref>"]   # 注意 ref 已含 @，不要再拼 @
 
 # 4) 加关键帧（自带 kz_modify_animation 工具）
 mcp kz_modify_animation { animation:"@新动画ref", action:"add", keyframes:[{time:0,value:0},{time:1,value:20},{time:2,value:0}] }
@@ -255,10 +255,10 @@ mcp kz_invoke target=@Test组 method=get_Item args=["AnimationDataChildReference
 
 ```python
 # 拿命令执行器
-@studio.get_Commands() → GeneratedCommandInvoker (@obj2)
+@studio.get_Commands() → GeneratedCommandInvoker（<命令执行器ref>）
 
 # ReparentProjectItem(动画完整路径, 动画组完整路径) → 让动画组引用动画 ✅
-kz_invoke target=@obj2 method=ReparentProjectItem \
+kz_invoke target=<命令执行器ref> method=ReparentProjectItem \
   args=["Animation Data/adas.num", "Animation Clips/01circle_innerRadius"]
 → ✅ 调用成功（无返回值）
 ```
@@ -287,14 +287,14 @@ kz_invoke target=@obj2 method=ReparentProjectItem \
 在 **NodeComponentTypeLibrary.get_Items()** 枚举（不是 GetTreeItemsAsList）：
 ```python
 mcp kz_invoke target=@NodeComponentTypes库 method=get_Items
-# 实测含: @obj357 Kanzi.AnimationPlayer  ← 标准动画播放器
-#         @obj369 Kanzi.PropertyDrivenAnimationPlayer  ← 属性驱动播放器
+# 实测含: <AnimationPlayer类型ref> Kanzi.AnimationPlayer  ← 标准动画播放器
+#         <PropertyDrivenAnimationPlayer类型ref> Kanzi.PropertyDrivenAnimationPlayer  ← 属性驱动播放器
 ```
 
 ### 2. 在目标节点上创建 AnimationPlayer 组件
 warning 节点有 `CreateNodeComponent(String, NodeComponentType)` 方法：
 ```python
-mcp kz_invoke target=/Screens/.../warning method=CreateNodeComponent args=["AnimationPlayer","@obj357"]
+mcp kz_invoke target=<目标节点路径> method=CreateNodeComponent args=["AnimationPlayer","<AnimationPlayer类型ref>"]
 # ✅ 成功, 返回 NodeComponentPluginWrapper, 自动命名 AnimationPlayer
 ```
 ⚠️ **Node component 库定位**：`@project.get_Children()` 里 name=="NodeComponentTypes" 的那个；库也有 `get_Items()`（同 get_Children）。引用号每次连接重分配。
@@ -312,15 +312,15 @@ mcp kz_invoke target=/Screens/.../warning method=CreateNodeComponent args=["Anim
 
 ### 4. 让播放器使用指定的 Animation Clip（Timeline 关联）
 ```python
-# clip = 目标动画组的引用（Animation Clips 库里枚举得到，如 "Animation Clip 1HZ"=@obj157）
+# clip = 目标动画组的引用（Animation Clips 库里枚举得到，如 "Animation Clip 1HZ"=<动画组ref>）
 # 直接用对象引用传参数即可（不需要 @anim 前缀）
-mcp kz_invoke target=@播放器 method=set_Item args=["AnimationPlayer.Timeline","@obj157"]
+mcp kz_invoke target=<播放器ref> method=set_Item args=["AnimationPlayer.Timeline","<动画组ref>"]
 # ✅ 实测成功
 
 # 验证引用指向: 读回 Timeline 引用对象的 ToString()
 mcp kz_invoke target=@播放器 method=get_Item args=["AnimationPlayer.Timeline"]
-#   拿到 ResourceReference 引用(如 @obj3870)后:
-mcp kz_invoke target=@obj3870 method=ToString
+#   拿到 ResourceReference 引用(如 <资源引用ref>)后:
+mcp kz_invoke target=<资源引用ref> method=ToString
 #   返回 "Animation Clip 1HZ"  →  确认正确指向目标动画组
 ```
 
@@ -335,9 +335,9 @@ mcp kz_invoke target=@obj3870 method=ToString
 ⚠️ **正确位置**：不要在 AnimationPlayer 组件上设！要在 **DispatchMessageAction(Play) 的消息参数 `AnimationPlayer.PlayMessageArguments.*`** 里设（UI 上就是那个 action 的属性面板）。组件属性是默认播放配置，action 消息参数才是本次 Play 的具体行为。
 ```python
 # Play action (DispatchMessageAction, MessageType=Play) 的槽位:
-#   @objXXX AnimationPlayer.PlayMessageArguments.PlaybackMode
-#   @objXXX AnimationPlayer.PlayMessageArguments.DurationScale
-#   @objXXX AnimationPlayer.PlayMessageArguments.RepeatCount
+#   <属性ref> AnimationPlayer.PlayMessageArguments.PlaybackMode
+#   <属性ref> AnimationPlayer.PlayMessageArguments.DurationScale
+#   <属性ref> AnimationPlayer.PlayMessageArguments.RepeatCount
 
 # 3倍速 = DurationScale
 mcp kz_invoke target=@PlayAction method=set_Item args=["AnimationPlayer.PlayMessageArguments.DurationScale","@float:3"]
@@ -366,24 +366,24 @@ AnimationPlayer 无 Play/Stop 属性可设（反射看不到）。启用停靠**
 ```python
 # TriggerActionType 库 get_Items() 里有 (不是 GetTreeItemsAsList):
 mcp kz_invoke target=@TriggerActionTypes库 method=get_Items
-# → @obj3810 Kanzi.DispatchMessageAction
+# → <DispatchMessageAction类型ref> Kanzi.DispatchMessageAction
 ```
 
 ### 2. 在 trigger 里追加 action（每次连接引用重分配，需现定位 trigger）
 ```python
-mcp kz_invoke target=@triggerRef method=CreateAction args=["@obj3810"]
+mcp kz_invoke target=<trigger ref> method=CreateAction args=["<DispatchMessageAction类型ref>"]
 # → 返回新 DispatchMessageAction
 ```
 
 ### 3. 设置消息类型 MessageType（⚠️ 缓存时序坑）
 ```python
 # 从 MessageTypes 库 get_Items() 拿到 Play/Stop 消息引用 (get_Items 才有全部187个内置消息! get_Children 只有自定义的4个)
-mcp kz_invoke target=@obj129 method=get_Items   # MessageTypes 库
-# → @obj3881 Message.AnimationPlayer.Play  /  @obj3884 Message.AnimationPlayer.Stop
+mcp kz_invoke target=<MessageTypes库ref> method=get_Items   # MessageTypes 库
+# → <Play消息ref> Message.AnimationPlayer.Play  /  <Stop消息ref> Message.AnimationPlayer.Stop
 
 # 设置前必须先多次 get_Name 预热缓存, 否则报参数类型错误!
-for _ in range(3): mcp kz_invoke target=@obj3884 method=get_Name
-mcp kz_invoke target=@DispatchAction method=set_DispatchMessageActionMessageType args=["@obj3884"]  # Stop
+for _ in range(3): mcp kz_invoke target=<Stop消息ref> method=get_Name
+mcp kz_invoke target=<DispatchAction ref> method=set_DispatchMessageActionMessageType args=["<Stop消息ref>"]  # Stop
 ```
 ⚠️ **缓存时序坑**：`set_DispatchMessageActionMessageType` 有时报 `类型"System.String"无法转换为...MessageType`。因为 get_Items 新枚举出的 @obj 引用 bridge 缓存可能还没切成 MessageTypePluginWrapper 类型。**解决：set 前对消息引用多次 get_Name 预热缓存**（2-3次可靠），再 set 就成功。
 

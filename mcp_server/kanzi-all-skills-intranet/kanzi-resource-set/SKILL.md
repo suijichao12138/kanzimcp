@@ -43,10 +43,10 @@ description: Kanzi 设置节点的资源引用：前景色/背景色 ForegroundB
 # 1. AddProperty（ResourceReference 属性需先加）
 mcp kz_invoke target=@节点 method=AddProperty args=["Node2D.ForegroundBrush"]
 # 2. 定位资源拿 @obj 引用（Brushes/Font Families 库 get_Children）
-#    颜色刷：Brushes 库 get_Children → Color Brush_FFFFFF = @obj5736
-#    字体：  Font Families 文件夹 → get_Children → MiSans-Medium = @obj308
+#    颜色刷：Brushes 库 get_Children → Color Brush_FFFFFF = <颜色刷ref>（现场枚举）
+#    字体：  Font Families 文件夹 → get_Children → MiSans-Medium = <字体ref>（现场枚举）
 # 3. 设置（两种写法，按引用对象类型选）
-mcp kz_invoke target=@节点 method=set_Item args=["Node2D.ForegroundBrush","@obj5736"]          # 写法A：@obj 直接引用素材对象（最稳）
+mcp kz_invoke target=<节点ref> method=set_Item args=["Node2D.ForegroundBrush","<颜色刷ref>"]          # 写法A：@obj 直接引用素材对象（最稳）
 mcp kz_invoke target=@节点 method=set_Item args=["Node2D.ForegroundBrush","KzResourceID:FFFFFF"] # 写法B：KzResourceID 引用 Resource 条目
 ```
 
@@ -63,11 +63,11 @@ mcp kz_invoke target=@节点 method=set_Item args=["Node2D.ForegroundBrush","KzR
 
 ```python
 # 颜色刷：Brushes 库
-mcp kz_invoke target=@project method=get_Children   # 找 "Brushes" 行 → @objXX
-mcp kz_invoke target=@objXX method=get_Children     # → Color Brush_FFFFFF = @obj5736
+mcp kz_invoke target=@project method=get_Children   # 找 "Brushes" 行 → <Brushes库ref>
+mcp kz_invoke target=<Brushes库ref> method=get_Children     # → Color Brush_FFFFFF = <颜色刷ref>
 # 字体：Font Families 文件夹
-mcp kz_invoke target=@project method=get_Children   # 找 "Font Families" 行 → @objXX
-mcp kz_invoke target=@objXX method=get_Children     # → MiSans-Medium = @obj308
+mcp kz_invoke target=@project method=get_Children   # 找 "Font Families" 行 → <FontFamilies库ref>
+mcp kz_invoke target=<FontFamilies库ref> method=get_Children     # → MiSans-Medium = <字体ref>
 ```
 
 > 创建颜色刷/纹理/字体等素材 → `kanzi-asset-create`。

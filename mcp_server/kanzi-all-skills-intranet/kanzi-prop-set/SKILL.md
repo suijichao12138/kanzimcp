@@ -36,7 +36,7 @@ mcp({"jsonrpc":"2.0","id":"2","method":"tools/call","params":{"name":"kz_invoke"
 # ✅ 实测: @string:123 回读为字符串 "123" (不是 int)
 
 # ResourceReference 类型（FontFamily, StateManager）：传 @obj 引用
-mcp({"jsonrpc":"2.0","id":"3","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"/path/to/node","method":"Set","args":["Node.FontFamily", "@obj:308"]}}})
+mcp({"jsonrpc":"2.0","id":"3","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"<节点路径>","method":"Set","args":["Node.FontFamily", "<字体ref>"]}}})
 ```
 
 > ⚠️ ResourceReference 属性用 `Set`（不是 `set_Item`），`@obj:` 从项目资源文件夹 get_Children 获取
@@ -44,21 +44,21 @@ mcp({"jsonrpc":"2.0","id":"3","method":"tools/call","params":{"name":"kz_invoke"
 ### 获取属性值：kz_invoke get_Item
 
 ```python
-mcp({"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"@obj:1873","method":"get_Item","args":["TextConcept.Text"]}}})
+mcp({"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"<节点ref>","method":"get_Item","args":["TextConcept.Text"]}}})
 ```
 
 ### 添加属性：AddProperty
 
 ```python
-mcp({"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"@obj:238","method":"AddProperty","args":["@string:warning.value"]}}})
+mcp({"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"<节点ref>","method":"AddProperty","args":["@string:warning.value"]}}})
 # 也支持传 PropertyType 对象引用
-mcp({"jsonrpc":"2.0","id":"2","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"@obj:238","method":"AddProperty","args":["@obj:248"]}}})
+mcp({"jsonrpc":"2.0","id":"2","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"<节点ref>","method":"AddProperty","args":["<属性类型ref>"]}}})
 ```
 
 ### 删除属性：RemoveProperty
 
 ```python
-mcp({"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"@obj:238","method":"RemoveProperty","args":["@obj:248"]}}})
+mcp({"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"<节点ref>","method":"RemoveProperty","args":["<属性类型ref>"]}}})
 ```
 
 ### 批量操作（必须成对）
@@ -136,7 +136,7 @@ def fix_escaped_chinese(s):
 ### 补救（仅限手动修复现有损坏的属性）
 ```python
 # 对已经创建但乱码的 DisplayName，可以用 set_DisplayName 覆盖
-mcp({"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"@obj333","method":"set_DisplayName","args":["mcp创建属性测试"]}}})
+mcp({"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"<属性ref>","method":"set_DisplayName","args":["mcp创建属性测试"]}}})
 ```
 
 ## 常见错误处理

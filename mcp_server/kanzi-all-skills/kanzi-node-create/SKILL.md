@@ -17,11 +17,11 @@ description: Kanzi 节点创建：kz_create_node 创建 EmptyNode2D/TextBlock2D/
 ```python
 # 创建 EmptyNode2D
 mcp({"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"kz_create_node","arguments":{"parent":"/Screens/Screen/RootPage/Info","type":"EmptyNode2D","name":"warning"}}})
-# 返回：✅ 节点已创建: @obj2
+# 返回：✅ 节点已创建: <新节点ref>
 
 # 创建 TextBlock2D
 mcp({"jsonrpc":"2.0","id":"2","method":"tools/call","params":{"name":"kz_create_node","arguments":{"parent":"/Screens/Screen/RootPage/Info/warning","type":"TextBlock2D","name":"text"}}})
-# 返回：✅ 节点已创建: @obj3
+# 返回：✅ 节点已创建: <新节点ref>
 ```
 
 ### 可用节点类型
@@ -53,7 +53,7 @@ mcp({"jsonrpc":"2.0","id":"2","method":"tools/call","params":{"name":"kz_create_
 ```python
 # 在模板 tireItem 的内部根节点下建（父 = /Prefabs/tireItem/tireItem）
 mcp kz_create_node parent=/Prefabs/tireItem/tireItem type=EmptyNode2D name=xxx
-# → ✅ 节点已创建: @obj17（UI 可见）
+# → ✅ 节点已创建: <新节点ref>（UI 可见）
 ```
 
 #### ② 在 Prefabs 下的节点里继续嵌套建节点（✅ 可见）
@@ -65,7 +65,7 @@ mcp kz_create_node parent=/Prefabs/tireItem/tireItem type=EmptyNode2D name=xxx
 ```python
 # 在已建节点 KZMCP_in_105051（挂在 /Prefabs/tireItem/tireItem 下）下面再建
 mcp kz_create_node parent=/Prefabs/tireItem/tireItem/KZMCP_in_105051 type=EmptyNode2D name=xxx
-# → ✅ 节点已创建: @obj25（UI 可见）
+# → ✅ 节点已创建: <新节点ref>（UI 可见）
 ```
 
 #### ③ 直接在 Prefabs 库根下建节点（✅ 可见）
@@ -93,10 +93,10 @@ mcp kz_create_node parent=/Prefabs type=EmptyNode2D name=xxx
 
 ```python
 # 1. 拿 ComponentTypeLibrary（组件类型库，含所有可创建节点类型）
-mcp kz_invoke target=@project method=get_ComponentTypeLibrary   # → @obj19 (ComponentTypeLibraryPluginWrapper)
+mcp kz_invoke target=@project method=get_ComponentTypeLibrary   # → <组件类型库ref> (ComponentTypeLibraryPluginWrapper)
 
 # 2. 列出库内所有注册类型，末尾即插件自定义类型
-mcp kz_invoke target=@obj19 method=get_Items
+mcp kz_invoke target=<组件类型库ref> method=get_Items
 # → 输出 "▪ name = ..." 行:
 #   Kanzi.Activity2D / Kanzi.TextBlock2D / ...  (库内自带 2D/3D 节点类型)
 #   ...
@@ -112,7 +112,7 @@ mcp kz_invoke target=@obj19 method=get_Items
 ```python
 # 用从 ComponentTypeLibrary 查到的真名（本例 PluginTextscroll）
 mcp kz_create_node parent=/Screens/Screen/RootPage/Info type=PluginTextscroll name=TextScroll
-# → ✅ 节点已创建: @obj69 (类型 = ComponentNode2DPluginWrapper)
+# → ✅ 节点已创建: <新节点ref> (类型 = ComponentNode2DPluginWrapper)
 # 树: Info → PluginTextscroll → TextScroll
 ```
 
@@ -132,7 +132,7 @@ mcp kz_create_node parent=/Screens/Screen/RootPage/Info type=PluginTextscroll na
 
 ### 创建（真实类型名是 NinePatchImage2D，带 2D 后缀）
 ```python
-kz_create_node parent=/Screens/Screen/RootPage type=NinePatchImage2D name=bg_9slice  # → @obj11125
+kz_create_node parent=<父节点路径> type=NinePatchImage2D name=bg_9slice  # → <新节点ref>
 ```
 > ⚠️ 不存在的名：`Node9Slice2D` / `Image9Slice2D` / `NinePatchImage`（都报“不支持的节点类型”）。真名只有 `NinePatchImage2D`。
 

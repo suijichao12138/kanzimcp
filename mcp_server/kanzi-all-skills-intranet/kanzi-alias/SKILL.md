@@ -35,33 +35,33 @@ mcp kz_invoke target=<RD ref> method=get_NodeReferences
 ```python
 # 1. 拿节点的资源字典（Screen 默认有字典）
 mcp kz_invoke target=/Screens/Screen method=get_ResourceDictionary
-# → ref_id = @obj5567  (ResourceDictionaryWrapper)
+# → ref_id = <资源字典ref>  (ResourceDictionaryWrapper)
 
 # 2. 遍历节点树拿到目标节点的对象引用（Screen → RootPage → Info）
 mcp kz_invoke target=/Screens/Screen method=get_Children
-# → ref_id = @obj4924 (PageHostPluginWrapper / RootPage)
-mcp kz_invoke target=@obj4924 method=get_Children
-# → ref_id = @obj8466 (EmptyNode2DPluginWrapper / Info)  ← 目标节点
+# → ref_id = <RootPage ref> (PageHostPluginWrapper)
+mcp kz_invoke target=<RootPage ref> method=get_Children
+# → ref_id = <目标节点ref> (EmptyNode2DPluginWrapper / Info)  ← 目标节点
 
 # 3. ⚠️ 创建别名：必须用【对象重载】，第二个参数传节点对象引用
-mcp kz_invoke target=@obj5567 method=CreateNodeAliasEntry args=["@string:Info", "@obj8466"]
+mcp kz_invoke target=<资源字典ref> method=CreateNodeAliasEntry args=["@string:Info", "<目标节点ref>"]
 # → ✅ 调用成功（无返回值）
 # ⚠️ 用字符串重载 CreateNodeAliasEntry("Info", "Screens/Screen/RootPage/Info") 会建出虚别名，
 #    没真正引用到节点（2026-10-14 实测：建完 DeleteEntry 报 No entry exists）！
 
 # 4. 验证：枚举别名，确认 Value 是 NodeReferenceBase（真引用）
-mcp kz_invoke target=@obj5567 method=get_NodeReferences
+mcp kz_invoke target=<资源字典ref> method=get_NodeReferences
 # → name = [Info, Screens/Screen/RootPage/Info]  ✅ 路径正确
-# → 取 Value: ref_id = @obj8468 / type = NodeReferenceBase / name = Screens/Screen/RootPage/Info
+# → 取 Value: ref_id = <NodeReference ref> / type = NodeReferenceBase / name = Screens/Screen/RootPage/Info
 
 # 5. 删除别名（改错时）
-mcp kz_invoke target=@obj5567 method=DeleteEntry args=["@string:Info"]
+mcp kz_invoke target=<资源字典ref> method=DeleteEntry args=["@string:Info"]
 # → ✅ 结果: True
 
 # 6. 保存工程（kz_save_project 内部走 ExecutePluginCommand 会失败！用 GeneratedCommandInvoker）
 mcp kz_invoke target=@studio method=get_Commands
-# → ref_id = @obj1153 (GeneratedCommandInvoker)
-mcp kz_invoke target=@obj1153 method=SaveProject args=["@project"]
+# → ref_id = <命令执行器ref> (GeneratedCommandInvoker)
+mcp kz_invoke target=<命令执行器ref> method=SaveProject args=["@project"]
 # → ✅ 调用成功
 ```
 
