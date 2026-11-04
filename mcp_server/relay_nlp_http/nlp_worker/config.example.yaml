@@ -255,6 +255,8 @@ task_dispatch:
     alias:              [kanzi-alias]
     shader:             [kanzi-shader, kanzi-material-brush]
     save-export:        [kanzi-save-export]
+    # 大文件数据源预处理（主会话阶段3判断数据源大时第一个子任务；只提取数据，不调 Kanzi）
+    data-source-process: [kanzi-data-source]
 
     # ===== 网页控制台（会话管理 + 配置修改，随 nlp_worker 同进程启动）=====
 web:
