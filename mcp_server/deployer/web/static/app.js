@@ -737,12 +737,30 @@ async function loadSkills() {
       <td>${fmtSize(s.size)}</td>
       <td>${s.file_count}</td>
       <td class="row">
-        <button class="btn btn-sm" onclick="downloadSkill('${s.name}', false)">下载</button>
         <button class="btn btn-sm" onclick="downloadSkill('${s.name}', true)">下载zip</button>
         <button class="btn btn-sm" onclick="editSkill('${s.name}')">编辑</button>
         <button class="btn btn-sm btn-warn" onclick="deleteSkill('${s.name}')">删除</button>
       </td>
     </tr>`).join('');
+}
+
+/** 全部 skill 打包下载（all-skills.zip）。 */
+async function downloadAllSkills() {
+  const r = await call('GET', '/api/skills/download_all');
+  if (!r.ok) return toast(r.error || '下载失败', 'err');
+  const data = r.data;
+  const bin = atob(data.file_bytes_b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  const blob = new Blob([bytes], { type: data.mime || 'application/zip' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = data.filename || 'all-skills.zip';
+  document.body.appendChild(a);
+  a.click();
+  URL.revokeObjectURL(a.href);
+  a.remove();
+  toast(`已下载 ${a.download}（${data.skill_count ?? ''} 个 skill）`, 'ok');
 }
 
 /** 下载单个 SKILL.md 或整个 zip。 */
@@ -769,54 +787,30 @@ async function downloadSkill(name, asZip) {
   toast('已下载 ' + a.download, 'ok');
 }
 
-/** 上传弹窗：支持粘贴单文件文本，或选 zip。 */
+/** 上传弹窗：只支持整个 skill 目录（zip，内须含 SKILL.md）。 */
 function uploadSkillModal() {
   openModal({
     title: '上传 skill',
     html: `
-      <p class="muted">两种方式：<br>① 单个 <code>SKILL.md</code>：填名字 + 粘贴内容<br>② 整个目录：上传 <code>.zip</code>（内须含 SKILL.md）</p>
-      <div class="row" style="margin-top:8px">
-        <label class="chk"><input type="radio" name="up-mode" value="single" checked onchange="upModeSwitch()"> 单文件</label>
-        <label class="chk"><input type="radio" name="up-mode" value="zip" onchange="upModeSwitch()"> zip 目录</label>
-      </div>
-      <div id="up-single">
-        <label>skill 名</label>
-        <input id="up-name" placeholder="如 kanzi-foo" style="width:100%">
-        <label>SKILL.md 内容</label>
-        <textarea id="up-content" rows="8" placeholder="---\nname: xxx\ndescription: ...\n---\n..." style="width:100%;font-family:monospace"></textarea>
-      </div>
-      <div id="up-zip" style="display:none">
-        <label>zip 文件（须含 SKILL.md）</label>
-        <input type="file" id="up-file" accept=".zip" style="width:100%">
-      </div>
+      <p class="muted">上传整个 skill 目录的 <code>.zip</code>（内须含 <code>SKILL.md</code>，支持目录内其它文件）。</p>
+      <label>skill 名</label>
+      <input id="up-name" placeholder="如 kanzi-foo" style="width:100%">
+      <label>zip 文件（整个 skill 目录）</label>
+      <input type="file" id="up-file" accept=".zip" style="width:100%">
     `,
     okText: '上传',
     onOk: async () => {
-      const mode = document.querySelector('input[name="up-mode"]:checked').value;
       const name = $('up-name').value.trim();
       if (!name) return toast('请填 skill 名', 'err');
-      if (mode === 'single') {
-        const content = $('up-content').value;
-        if (!content.trim()) return toast('SKILL.md 内容为空', 'err');
-        const r = await call('POST', '/api/skills/upload', { mode: 'single', name, content });
-        if (!r.ok) return toast(r.error || '上传失败', 'err');
-        toast('上传成功', 'ok'); loadSkills();
-      } else {
-        const file = $('up-file').files[0];
-        if (!file) return toast('请选择 zip 文件', 'err');
-        const buf = await file.arrayBuffer();
-        const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
-        const r = await call('POST', '/api/skills/upload', { mode: 'zip', name, data_b64: b64 });
-        if (!r.ok) return toast(r.error || '上传失败', 'err');
-        toast('上传成功 (' + (r.data.files || []).length + ' 个文件)', 'ok'); loadSkills();
-      }
+      const file = $('up-file').files[0];
+      if (!file) return toast('请选择 zip 文件', 'err');
+      const buf = await file.arrayBuffer();
+      const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+      const r = await call('POST', '/api/skills/upload', { mode: 'zip', name, data_b64: b64 });
+      if (!r.ok) return toast(r.error || '上传失败', 'err');
+      toast('上传成功 (' + (r.data.files || []).length + ' 个文件)', 'ok'); loadSkills();
     },
   });
-  window.upModeSwitch = () => {
-    const mode = document.querySelector('input[name="up-mode"]:checked').value;
-    $('up-single').style.display = mode === 'single' ? '' : 'none';
-    $('up-zip').style.display = mode === 'zip' ? '' : 'none';
-  };
 }
 
 /** 编辑 SKILL.md。 */

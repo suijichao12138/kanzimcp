@@ -238,6 +238,31 @@ def skills_download(ctx, name: str, as_zip: bool = False) -> tuple:
     return _ok({"content": text, "filename": f"{name}/SKILL.md", "mime": "text/markdown"})
 
 
+def skills_download_all(ctx) -> tuple:
+    """GET /api/skills/download_all — 全部 skill 打包成一个 zip 下载。
+
+    目录结构：`<skill名>/SKILL.md`（含各 skill 目录内其它文件），供整体备份/迁移。
+    """
+    root = _skills_dir(ctx)
+    buf = io.BytesIO()
+    count = 0
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for child in sorted(root.iterdir()):
+            if not child.is_dir():
+                continue
+            if not (child / "SKILL.md").exists():
+                continue
+            for p in sorted(child.rglob("*")):
+                if p.is_file():
+                    zf.write(p, p.relative_to(root).as_posix())
+            count += 1
+    if count == 0:
+        return _err("没有可下载的 skill", 404)
+    return _ok({"file_bytes_b64": __import__("base64").b64encode(buf.getvalue()).decode(),
+                "filename": "all-skills.zip", "mime": "application/zip",
+                "skill_count": count})
+
+
 def skills_delete(ctx, name: str) -> tuple:
     """POST /api/skills/delete — 删除 skill（回收站优先）。"""
     name = _safe_name(name or "")

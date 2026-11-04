@@ -128,12 +128,13 @@
       <h2>Skill 仓库</h2>
       <div class="row">
         <button class="btn btn-primary" onclick="uploadSkillModal()">上传 skill</button>
+        <button class="btn" onclick="downloadAllSkills()">全部下载</button>
         <button class="btn" onclick="loadSkills()">刷新</button>
         <span id="skills-dir" class="muted"></span>
       </div>
     </div>
     <p class="muted">独立维护的 skill 目录（仅供新增 skill MCP 服务使用，与 nlp_worker 的 skill 隔离）。
-      支持上传单个 <code>SKILL.md</code> 或整个 skill 目录（zip）。</p>
+      上传支持整个 skill 目录（zip，内须含 <code>SKILL.md</code>）。</p>
     <table class="tbl">
       <thead><tr><th>Skill</th><th>说明</th><th>大小</th><th>文件数</th><th>操作</th></tr></thead>
       <tbody id="skills-body"><tr><td colspan="5" class="muted">加载中…</td></tr></tbody>

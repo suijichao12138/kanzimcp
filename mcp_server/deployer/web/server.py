@@ -134,6 +134,8 @@ class Handler(BaseHTTPRequestHandler):
                 name = (qs.get("name") or [""])[0]
                 as_zip = (qs.get("zip") or [""])[0] in ("1", "true", "yes")
                 code, body = skills_api.skills_download(CTX, name, as_zip)
+            elif path == "/api/skills/download_all":
+                code, body = skills_api.skills_download_all(CTX)
             elif path == "/api/skills/get":
                 code, body = skills_api.skills_get(CTX, (qs.get("name") or [""])[0])
             else:
