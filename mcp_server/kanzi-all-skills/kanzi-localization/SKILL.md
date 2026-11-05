@@ -38,6 +38,77 @@ LT="/Localization/Localization Table"
 
 > ⚠️ `@project` 上**没有** `get_LocalizationLibrary`（不存在）；Localization 库是 children 里的普通库。
 
+### 🔍 Localization Table 是否存在判断（2026-11-05 实机验证）
+
+> **操作前必须先判断表是否存在**（协议铁律：不假设任务全新）。实机验证（阿里云中继 + cluster_hmi）：
+
+```python
+# 1) 定位 Localization 库（children 里 name == "Localization"，type = LocaleLibraryPluginWrapper）
+mcp kz_invoke target=@project method=get_Children
+#   → 找到 name = Localization 那行，取其 ref_id（如 <Localization库ref>）
+
+# 2) 枚举库 children，判断是否存在 Localization Table
+mcp kz_invoke target=/Localization method=get_Children
+#   → 若有 type=LocalizationTablePluginWrapper 且 name="Localization Table" 的行 → 存在
+#   → 没有 → 不存在，需创建（见下）
+```
+
+> ⚠️ **不能用路径直接探**：`kz_invoke target=/Localization/Localization Table` 表不存在时会报「无法解析对象路径」，
+> 报错本身可作为「不存在」的确认，但**推荐先用 get_Children 枚举判断**（更明确、不产生误导性报错）。
+>
+> **「无表」实测表现（2026-11-05，cluster_hmi 实机）**：
+> - `get_Children` 返回里**没有** `name = Localization Table` 行（用子串匹配 `"name = Localization Table" in r` 判断，结果为 False）→ 表不存在
+> - 此时对不存在表做路径探测 → `❌ 无法解析对象路径或引用: '/Localization/<表名>'`
+> - 完整流程实测：无表判断 → `CreateProjectItem` 创建 → children 立即出现 → `Delete()` 删除 → 判断不存在 → 无残留
+
+### 🆕 创建 Localization Table（不存在时，2026-11-05 实机验证）
+
+```python
+# 参数顺序 = [@type:完整类型名, @string:表名, <Localization库ref>]（type→名字→库！）
+# ⚠️ 第三参必须是 Localization 库（LocaleLibraryPluginWrapper）的 ref，不是其它对象！
+mcp kz_invoke target=@project method=CreateProjectItem args=[
+  "@type:Rightware.Kanzi.Studio.PluginInterface.LocalizationTable",
+  "@string:Localization Table",
+  "<Localization库ref>"
+]
+# → 返回新表 LocalizationTablePluginWrapper，出现在库 children
+```
+
+> **实机验证（2026-11-05，cluster_hmi）**：`CreateProjectItem(@type:LocalizationTable, "__vfy_loc2__", Localization库ref)`
+> 创建成功（返回 LocalizationTablePluginWrapper，库 children 立即可见）。
+> ⚠️ **类型名必须用接口全名** `Rightware.Kanzi.Studio.PluginInterface.LocalizationTable`；
+> ⚠️ 第三参传**库 ref** 而非表 ref（传错会报 `找不到与参数匹配的 CreateProjectItem`）。
+
+### 🗑️ 删除 Localization Table（2026-11-05 实机验证）
+
+```python
+# 表对象调用 Delete() = 删除整张表（项目项级删除）
+<本地化表ref>.Delete()
+# → 返回 True；库 children 里该表立即消失
+```
+
+> **实机验证（2026-11-05，cluster_hmi）**：建临时表 → `Delete()` → True，children 无残留，真实表不受影响。
+> ⚠️ **Delete() 是删整张表，不是删行！** 删行用 `kz_loc_entry_delete`（按 key 删）。
+> ⚠️ 删除前确认表名/ref 正确（删错 = 整表丢失，参考上方「删除事故警示」）。
+
+### 完整判断 → 创建/复用 → 操作流程（2026-11-05 实机验证）
+
+```python
+# 1) 定位 Localization 库 + 判断表是否存在
+r = mcp kz_invoke target=@project method=get_Children          # 找 Localization 库 ref
+r2 = mcp kz_invoke target=/Localization method=get_Children    # 找 Localization Table
+if 存在 Localization Table:
+    LT = "/Localization/Localization Table"                    # 直接用（不重建）
+else:
+    # 2) 不存在 → 创建
+    mcp kz_invoke target=@project method=CreateProjectItem args=[
+      "@type:Rightware.Kanzi.Studio.PluginInterface.LocalizationTable",
+      "@string:Localization Table",
+      "<Localization库ref>"]
+    LT = "/Localization/Localization Table"
+# 3) 后续 CRUD 一律用 LT（kz_loc_entry_* 或 ExportTranslations）
+```
+
 ## 二、读取（ExportTranslations 读全表 + kz_localized_resources 读字体引用）
 
 ### ⭐ 核心读取通道：ExportTranslations()（2026-08-08 实测打通）

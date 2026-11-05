@@ -194,9 +194,51 @@ StateObject（子 State）通过 TargetObjectPath 指向目标节点：
 # 设置目标节点路径（"." 表示指向父 State 对应的目标节点）— 用 @string: 保证是字符串不被当节点
 mcp({"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"<StateObject ref>","method":"set_TargetObjectPath","args":["@string:."]}}})
 
-# 设置文本内容
+# 设置文本内容（resourceID 写法）
 mcp({"jsonrpc":"2.0","id":"2","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"<StateObject ref>","method":"set_Item","args":["TextConcept.Text","@string:KzResourceID:1"]}}})
 ```
+
+##### StateObject 设置任意属性（含资源引用型）
+
+> StateObject 除了 TargetObjectPath 外，还可以给目标节点设置任意属性（文本/属性值/图片等），与普通节点 `set_Item` 一致。属性名、值类型与 `kanzi-prop-set` / `kanzi-resource-set` 的规则相同。**本节示例 2026-11-05 实机验证通过**（阿里云中继 + cluster_hmi 工程，建临时 SM/SG/State/StateObject + 目标节点实测，读回确认后已清理）。
+
+**① 设置文本（TextConcept.Text）**
+
+```python
+# 方式A：直接文本（@string: 保证字符串不被转义）— 实机读回「报警信息」✅
+mcp({"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"<StateObject ref>","method":"set_Item","args":["TextConcept.Text","@string:报警信息"]}}})
+
+# 方式B：KzResourceID 引用本地化/资源条目（见下方说明）— 实机读回「KzResourceID:1」✅
+mcp({"jsonrpc":"2.0","id":"2","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"<StateObject ref>","method":"set_Item","args":["TextConcept.Text","@string:KzResourceID:1"]}}})
+```
+
+**② 设置属性值（数值/枚举，先 AddProperty 再 set_Item）— 实机读回 21 ✅**
+
+```python
+# 自定义属性（warning.value / warning.level 等）先 AddProperty 再加值
+mcp({"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"<StateObject ref>","method":"AddProperty","args":["warning.value"]}}})
+mcp({"jsonrpc":"2.0","id":"2","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"<StateObject ref>","method":"set_Item","args":["warning.value","@int:21"]}}})
+# 内置属性（IntProperty/FloatProperty 等）直接 set_Item
+mcp({"jsonrpc":"2.0","id":"3","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"<StateObject ref>","method":"set_Item","args":["<属性名>","@int:<值>"]}}})
+```
+
+**③ 设置图片（Image2D.Image，图片路径/名，与 kanzi-prop-set 一致）— 实机读回 ResourceReference ✅**
+
+```python
+# Image2D.Image 属性（先 AddProperty 再 set_Item）
+mcp({"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"<StateObject ref>","method":"AddProperty","args":["Image2D.Image"]}}})
+# 方式1：图片路径（Textures 库里的图片）
+mcp({"jsonrpc":"2.0","id":"2","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"<StateObject ref>","method":"set_Item","args":["Image2D.Image","Textures/adas/green_sig_num"]}}})
+# 方式2：图片名
+mcp({"jsonrpc":"2.0","id":"3","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"<StateObject ref>","method":"set_Item","args":["Image2D.Image","green_sig_num"]}}})
+```
+
+> **⚠️ resourceID 说明（`KzResourceID:` 前缀）**：
+> - `TextConcept.Text` 的 `KzResourceID:1` 写法是设置 **Resource 条目**（ResourceDictionary 里用 resourceID 注册的条目，如本地化文本 key），不是直接文本。
+> - 前缀拼写：是 **`KzResourceID:`**，不是 `resourceID:` / `resource:`（少 `Kz` 会失败，实测踩了很久的坑，与 `kanzi-resource-set` / `kanzi-skills-index` 一致）。
+> - 读回时返回的是**原样字符串** `KzResourceID:1`（2026-11-05 实机验证：get_Item 读回 `KzResourceID:1`），即存的是资源 ID 标识本身，引擎在运行时才解析成对应资源——这是正常现象，不是设值失败。
+> - 想直接显示固定文本 → 用方式A（`@string:直接文本`）；要引用资源条目/本地化 key → 用 `KzResourceID:<资源名>`。
+> - 资源条目的创建见 `kanzi-resource-create`；资源引用的设置规则见 `kanzi-resource-set`。
 
 ### 🚨 批量创建状态机脚本规范（2026-10-20 已根治，UI 线程）
 
