@@ -165,6 +165,7 @@ mcp({"jsonrpc":"2.0","id":"2","method":"tools/call","params":{"name":"kz_invoke"
 ```
 
 #### State 控制属性值（用 @int: 避免数值歧义）
+⚠️ **注意**: 同一个StateGroup下State 控制属性值必须唯一，不能有两个State 用相同的控制属性值
 
 ```python
 mcp({"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"<State ref>","method":"set_Item","args":["warning.value", "@int:0"]}}})
@@ -280,7 +281,7 @@ mcp({"jsonrpc":"2.0","id":"3","method":"tools/call","params":{"name":"kz_invoke"
 
 2. **设置 StateObject 的 TargetObjectPath 用 `set_TargetObjectPath` 方法，且参数必须是合法节点路径！**
    - ✅ `mcp kz_invoke target=@so_ref method=set_TargetObjectPath args=["@string:."]`（`.` = 指向父 State 对应的目标节点，**skill 实测值**）
-   - ⚠️ **参数不能是裸节点名**（如 `'popup'`）—— 必须是路径格式：`.` 或 `/Screens/Screen/RootPage/popup`。裸名解析不了 → 报错。
+   - ⚠️ **参数不能是裸节点名**（如 `'popup'`）—— 必须是路径格式：`.` 或 `./popup`。裸名解析不了 → 报错。
    - ❌ `mcp kz_invoke target=@so_ref method=set_Item args=["StateObject.TargetObjectPath", ...]`（set_Item 属性名不存在 → 报错）
 
 3. **自定义属性（warning.value / warning.level 等）先 `AddProperty` 再 `set_Item`**：

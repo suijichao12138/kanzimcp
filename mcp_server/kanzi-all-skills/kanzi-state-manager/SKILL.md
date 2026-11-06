@@ -14,9 +14,10 @@ description: Kanzi Studio 状态机创建/配置。StateManager、StateGroup、S
 
 **MCP (Model Context Protocol)** 通过 WebSocket JSON-RPC 调用 Kanzi Studio 插件。
 
-### 接入（本机中继桥）
+### 接入（HTTP MCP）
 
-客户端 `kanzi-mcp-client.mjs`（workspace 根目录）：中继 `ws://123.57.85.81:58080`，channel `openclaw-main`，调用 `node kanzi-mcp-client.mjs '<tools/call 参数 JSON>'`。返回 `ref_id = @objN` 自动进缓存，Studio 重启后（**仅人工操作**）编号失效须重新枚举。
+> ⚠️ **地址规则**：若环境已配置好相关 MCP（如 nlp_worker config.yaml 的 `mcp_servers` 或部署机已建网关），**必须使用已配置的 MCP 地址**；`<kz_mcp_http机IP>` 仅为通用占位符（未配置时的示例写法）。
+通过 HTTP 端点 `POST http://<kz_mcp_http机IP>:9001/mcp`（Header `X-Kanzi-User: <用户名>`，JSON-RPC `tools/call`）连接 Kanzi Studio 插件。返回 `ref_id = @objN` 自动进缓存，Studio 重启后（**仅人工操作**）编号失效须重新枚举。
 
 ### 基本请求格式
 
@@ -55,6 +56,24 @@ mcp({"..","name":"kz_invoke","arguments":{"target":"<某对象ref>","method":"ge
 调用成功后 `<某对象ref>` 就在缓存中了。
 
 下面的调用统一走 `kz_invoke`（工具名，参数遵循 v4 标识符 @type/@int/@string/@enum/@obj/@color 等）。
+
+### 🔍 创建前查重（幂等，2026-10-26 加，协议铁律第17条）
+
+> 子会话可能被重派重试，**不假设本次任务全新**。创建状态机前先查 StateGroup/State 是否已存在，**已存在则跳过创建**，回报注明「N 个已存在跳过」。
+
+```python
+# 1) 枚举 StateManagerLibrary 下所有 StateGroup：
+mcp({"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"@project","method":"get_StateManagerLibrary","args":[]}}})
+mcp({"jsonrpc":"2.0","id":"2","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"<StateManagerLibrary ref>","method":"get_Children","args":[]}}})
+# → 比对 StateGroup 名，已存在则跳过该组创建
+
+# 2) StateGroup 内查 State：
+mcp({"jsonrpc":"2.0","id":"3","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"<StateGroup ref>","method":"get_Children","args":[]}}})
+# → 比对 State 名（注意 get_Children 的 type 字段不可靠，用 get_TargetObjectPath 判别），
+#   已存在则跳过该 State 创建
+```
+
+> ⚠️ 查重顺序与创建顺序一致：先组后 State；StateObject 也按名称查重。
 
 ## 创建状态机
 
@@ -146,6 +165,7 @@ mcp({"jsonrpc":"2.0","id":"2","method":"tools/call","params":{"name":"kz_invoke"
 ```
 
 #### State 控制属性值（用 @int: 避免数值歧义）
+⚠️ **注意**: 同一个StateGroup下State 控制属性值必须唯一，不能有两个State 用相同的控制属性值
 
 ```python
 mcp({"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"<State ref>","method":"set_Item","args":["warning.value", "@int:0"]}}})
@@ -261,7 +281,7 @@ mcp({"jsonrpc":"2.0","id":"3","method":"tools/call","params":{"name":"kz_invoke"
 
 2. **设置 StateObject 的 TargetObjectPath 用 `set_TargetObjectPath` 方法，且参数必须是合法节点路径！**
    - ✅ `mcp kz_invoke target=@so_ref method=set_TargetObjectPath args=["@string:."]`（`.` = 指向父 State 对应的目标节点，**skill 实测值**）
-   - ⚠️ **参数不能是裸节点名**（如 `'popup'`）—— 必须是路径格式：`.` 或 `/Screens/Screen/RootPage/popup`。裸名解析不了 → 报错。
+   - ⚠️ **参数不能是裸节点名**（如 `'popup'`）—— 必须是路径格式：`.` 或 `./popup`。裸名解析不了 → 报错。
    - ❌ `mcp kz_invoke target=@so_ref method=set_Item args=["StateObject.TargetObjectPath", ...]`（set_Item 属性名不存在 → 报错）
 
 3. **自定义属性（warning.value / warning.level 等）先 `AddProperty` 再 `set_Item`**：
@@ -443,7 +463,7 @@ mcp({"jsonrpc":"2.0","id":"4","method":"tools/call","params":{"name":"kz_invoke"
 
 | 错误信息 | 原因 | 解决 |
 |----------|------|------|
-| Kanzi Studio 卡死，所有 API 返回空 | BeginBatchModification 无对应的 CommitBatchModification | **不要重启 Studio！** 停止当前批量操作，重新枚举 ref 恢复连接；如必须人工干预，请老隋处理 |
+| Kanzi Studio 卡死，所有 API 返回空 | BeginBatchModification 无对应的 CommitBatchModification | **不要重启 Studio！** 停止当前批量操作，重新枚举 ref 恢复连接；如必须人工干预，请用户处理 |
 | 子项看起来像 StatePluginWrapper，怀疑不是 StateObject | 只看了 get_Children 的 type 字段 | 用 `get_TargetObjectPath` 判别：能返回 `.` 就是 StateObject，确非根 State |
 | ref 不存在 | Studio 重启过（**仅人工**） | 重新获取所有 ref |
 
