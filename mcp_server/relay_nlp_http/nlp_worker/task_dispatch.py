@@ -374,10 +374,26 @@ class TaskDispatcher:
         # 注意：此时 in-flight 已释放，主会话被唤醒后若派发下一个任务不会被误拒。
         # 取消场景不注入（task_cancel 已直接回复用户）。
         if not result.startswith("🛑"):
+            # 注入前发明确提示：用户立即知道主会话被唤醒在干活（2026-11-06）
+            try:
+                await self._emit(
+                    f"🔔 子会话回报已收到，主会话正在继续处理"
+                    f"（检查完成度/派发下一步）…",
+                    kind="event",
+                )
+            except Exception:
+                pass
+
+            # 注入 send 必须传 on_progress：否则主会话处理期间的全部中间输出
+            # （💬/🧠/✍️/↪️）都被 send 内部丢弃（_progress_on=False），用户看不到。
+            async def _inject_progress(text: str) -> None:
+                await self._emit(f"[主会话] {text}", kind="progress")
+
             try:
                 await self.runtime.send(
                     conversation_key,
                     f"子会话回报（{task_type} 已完成）：\n{result}",
+                    on_progress=_inject_progress,
                 )
             except Exception as exc:
                 log.warning("注入主会话回报失败 [%s]: %s", conversation_key, exc)
