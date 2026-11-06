@@ -2125,12 +2125,12 @@ class CopilotRuntime:
             kwargs["excluded_tools"] = copilot.agent.excluded_tools
         if self.config.artifacts.enabled:
             kwargs["tools"] = self.artifacts.build_tools()
-        # 主会话注册 task_dispatch 工具（子会话派发，见 task_dispatch.py）
+        # 主会话注册 task_dispatch / task_status 工具（子会话派发，见 task_dispatch.py）
         # 子会话（task_type 非 None）不注册 —— 避免子会话再派发
         if task_type is None and self.config.task_dispatch.enabled:
-            task_tool = self.dispatcher.build_tool()
+            task_tools = self.dispatcher.build_tool()
             existing = kwargs.get("tools") or []
-            kwargs["tools"] = list(existing) + [task_tool]
+            kwargs["tools"] = list(existing) + list(task_tools)
         return kwargs
 
     def _session_kwargs_for(self, session_id: str, task_type: str | None = None) -> dict[str, Any]:

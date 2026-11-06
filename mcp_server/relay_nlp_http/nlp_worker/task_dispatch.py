@@ -115,6 +115,25 @@ class TaskDispatcher:
         # 每个对话的每种类型一个子会话：{ (conversation_key, type): session_key }
         self._sessions: dict[tuple[str, str], str] = {}
         self._locks: dict[str, asyncio.Lock] = {}
+        # 全局 in-flight（2026-11-06 异步派发版）：Kanzi 单工程，同一时间只允许
+        # 一个任务在子会话执行。存 conversation_key；None = 空闲。
+        self._inflight: str | None = None
+        # 任务状态详情（供 task_status 查询）：
+        # { conversation_key: {type, started_at, status: busy/done/failed, result} }
+        self._task_status: dict[str, dict[str, Any]] = {}
+
+    # ---- 全局 in-flight 保护（一次只执行一个任务）----
+    def _mark_busy(self, conv: str) -> bool:
+        """尝试占用 in-flight。成功占用返回 True；已有任务在跑返回 False。"""
+        if self._inflight is not None:
+            return False
+        self._inflight = conv
+        return True
+
+    def _release(self, conv: str) -> None:
+        """释放 in-flight（仅当是自己占用的才释放，防误放别人的）。"""
+        if self._inflight == conv:
+            self._inflight = None
 
     # ---- 类型 ----------------
     def _all_types(self) -> set[str]:
@@ -152,6 +171,40 @@ class TaskDispatcher:
         except (OSError, ValueError) as exc:
             log.warning("读取任务文件失败 %s: %s", path_str, exc)
             return None
+
+    # ---- 任务进度落盘（2026-11-06：主会话恢复进度不从头开始）----
+    def _plan_path(self, conversation_key: str) -> Path:
+        """对话的任务进度文件：workfile/plan/<conv>.json。"""
+        base = Path(self.config.task_dir).parent / "plan"
+        if not base.is_absolute():
+            base = Path(self.runtime.config.copilot.working_directory) / base
+        return base / f"{conversation_key}.json"
+
+    def read_plan(self, conversation_key: str) -> dict | None:
+        """读对话的任务进度（steps 列表 + current 进度）。不存在返回 None。"""
+        try:
+            return json.loads(self._plan_path(conversation_key).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+
+    def update_plan(self, conversation_key: str, task_type: str, status: str, result: str | None = None) -> None:
+        """追加/更新一条任务到进度文件：status ∈ running/done/failed/cancelled。"""
+        p = self._plan_path(conversation_key)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        plan = self.read_plan(conversation_key) or {"conversation": conversation_key, "steps": []}
+        steps = plan.setdefault("steps", [])
+        # 找同名+同目标的进行中条目（更新）；没有则追加
+        idx = next((i for i, s in enumerate(steps) if s.get("type") == task_type
+                    and s.get("status") in ("running", "pending")), None)
+        entry = {"type": task_type, "status": status, "updated_at": int(asyncio.get_event_loop().time())}
+        if result is not None:
+            entry["result"] = result[:300]
+        if idx is not None:
+            steps[idx].update(entry)
+        else:
+            steps.append(entry)
+        p.write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
+        log.info("进度落盘 [%s]: %s %s", conversation_key, task_type, status)
 
     # ---- 子会话 ----
     def _session_key(self, conversation_key: str, task_type: str) -> str:
@@ -195,7 +248,7 @@ class TaskDispatcher:
             except Exception:  # noqa: BLE001
                 pass
 
-    async def dispatch(
+    async def _execute(
         self,
         conversation_key: str,
         task_type: str,
@@ -205,7 +258,7 @@ class TaskDispatcher:
         project: str | None = None,
         instructions: str | None = None,
     ) -> str:
-        """派发任务到子会话执行，返回结果文本。
+        """同步执行任务到子会话，返回结果文本（后台 _run_task 调用）。
 
         主会话只传 objective/constraints/data_source/project（描述单，无参数值）。
         子会话从数据源自行提取具体参数并执行。
@@ -267,16 +320,205 @@ class TaskDispatcher:
             await self._emit(f"❌ 子会话异常：{task_type} {exc}", kind="event")
             return f"❌ {task_type} 子会话执行异常: {exc}"
 
+    async def _run_task(
+        self,
+        conversation_key: str,
+        task_type: str,
+        objective: str,
+        constraints: list[str] | None = None,
+        data_source: str | None = None,
+        project: str | None = None,
+        instructions: str | None = None,
+    ) -> None:
+        """后台任务：执行子会话 → 释放 in-flight → 回报注入主会话唤醒。
+
+        子会话完成（成功/失败/异常/取消）后，把回报文本作为消息注入主会话
+        （runtime.send 主会话 key），主会话 AI 收到后自行判断下一步
+        （继续派下一个 / 收尾汇报 / 续跑被取消的任务），实现主动回报闭环。
+        """
+        result = ""
+        try:
+            result = await self._execute(
+                conversation_key, task_type, objective, constraints,
+                data_source, project, instructions,
+            )
+        except asyncio.CancelledError:
+            # 任务被取消（task_cancel）：标记取消，不注入回报
+            result = f"🛑 {task_type} 任务已取消"
+            try:
+                await self._emit(f"🛑 任务已取消：{task_type}", kind="event")
+            except Exception:
+                pass
+        except Exception as exc:
+            result = f"❌ {task_type} 子会话执行异常: {exc}"
+            try:
+                await self._emit(f"❌ 子会话异常：{task_type} {exc}", kind="event")
+            except Exception:
+                pass
+        finally:
+            # 更新任务状态（先于释放锁，保证 task_status 能读到结果）+ 进度落盘
+            if conversation_key in self._task_status:
+                self._task_status[conversation_key].update(
+                    status="failed" if result.startswith("❌") else "done",
+                    result=result[:500],
+                    finished_at=asyncio.get_event_loop().time(),
+                )
+            self.update_plan(
+                conversation_key, task_type,
+                "failed" if result.startswith("❌") else "done",
+                result,
+            )
+            self._release(conversation_key)
+
+        # 回报注入主会话（主动唤醒）：主会话 AI 看到回报后继续决策。
+        # 注意：此时 in-flight 已释放，主会话被唤醒后若派发下一个任务不会被误拒。
+        # 取消场景不注入（task_cancel 已直接回复用户）。
+        if not result.startswith("🛑"):
+            try:
+                await self.runtime.send(
+                    conversation_key,
+                    f"子会话回报（{task_type} 已完成）：\n{result}",
+                )
+            except Exception as exc:
+                log.warning("注入主会话回报失败 [%s]: %s", conversation_key, exc)
+
+    async def submit(
+        self,
+        conversation_key: str,
+        task_type: str,
+        objective: str,
+        constraints: list[str] | None = None,
+        data_source: str | None = None,
+        project: str | None = None,
+        instructions: str | None = None,
+    ) -> str:
+        """异步派发入口（秒回，不阻塞）：占用 in-flight → 后台执行 → 立即返回。
+
+        根治 task_dispatch 同步等待导致的外部工具 1800s 超时：handler 秒回，
+        子会话在后台执行，完成后主动回报注入主会话。
+        """
+        if not self._valid_type(task_type):
+            valid = ", ".join(sorted(self._all_types()))
+            return f"❌ 未知任务类型: {task_type}。可用类型: {valid}"
+
+        if not self._mark_busy(conversation_key):
+            return (
+                "⏳ 上一个任务还在执行中（Kanzi 单工程同一时间只执行一个任务）。"
+                "等子会话完成回报后再派发下一个任务。"
+            )
+
+        # 记录任务状态（供 task_status 查询）+ 进度落盘
+        self._task_status[conversation_key] = {
+            "type": task_type,
+            "objective": objective[:80],
+            "started_at": asyncio.get_event_loop().time(),
+            "status": "busy",
+            "result": None,
+        }
+        self.update_plan(conversation_key, task_type, "running")
+
+        try:
+            asyncio.create_task(
+                self._run_task(
+                    conversation_key, task_type, objective, constraints,
+                    data_source, project, instructions,
+                )
+            )
+        except Exception as exc:  # noqa: BLE001
+            self._release(conversation_key)
+            return f"❌ 派发失败: {exc}"
+
+        return (
+            f"⏳ 已派发 {task_type} 任务给子会话执行（后台运行）。\n"
+            "完成后我会收到子会话回报并继续。\n"
+            "⚠️ 子会话执行期间可随时：\n"
+            "  - 回复「暂停」→ 我调用 task_cancel 暂停当前任务（进度已落盘，可续跑）\n"
+            "  - 回复「取消」→ 我调用 task_cancel 取消当前任务\n"
+            "  - 描述修改需求 → 我调整任务描述单后重新派发（进度不丢）\n"
+        )
+
     # ---- 工具 ----
+    def _status_text(self, conv: str) -> str:
+        """生成当前任务状态文本（供 task_status 工具返回）。"""
+        st = self._task_status.get(conv)
+        if st is None:
+            return "🟢 空闲：当前没有任务在执行，可以派发新任务。"
+        if st["status"] == "busy":
+            elapsed = asyncio.get_event_loop().time() - st["started_at"]
+            return (
+                f"🟡 任务执行中：{st['type']}（已耗时 {elapsed:.0f}s）\n"
+                f"目标：{st['objective']}\n"
+                f"状态：子会话后台执行中，等待完成回报。"
+            )
+        return (
+            f"🟢 空闲：上一个任务已完成。\n"
+            f"类型：{st['type']} 结果：{'✅' if st['status'] == 'done' else '❌'} "
+            f"{st.get('result', '')[:200]}"
+        )
+
     def build_tool(self):
-        """注册 task_dispatch 工具（用 SDK define_tool 包装成 Tool）。"""
+        """注册 task_dispatch + task_status 工具（用 SDK define_tool 包装成 Tool）。"""
+        async def status_handler(params: Any, invocation: ToolInvocation) -> str:
+            conv = getattr(params, "conversation_key", None) or self.runtime.key_for_session_id(
+                invocation.session_id
+            )
+            return self._status_text(conv)
+
+        status_tool = define_tool(
+            name="task_status",
+            description=(
+                "查询当前对话的任务执行状态（busy 执行中 / idle 空闲）和进度。"
+                "非必须轮询；主会话一般等子会话回报即可。"
+            ),
+            params_type=TaskDispatchParams,
+            handler=status_handler,
+            skip_permission=True,
+            defer="never",
+        )
+
+        async def cancel_handler(params: Any, invocation: ToolInvocation) -> str:
+            """暂停/取消当前任务：abort 子会话 + 释放 in-flight + 进度标记 cancelled。"""
+            conv = getattr(params, "conversation_key", None) or self.runtime.key_for_session_id(
+                invocation.session_id
+            )
+            if self._inflight != conv:
+                return "🟢 当前没有任务在执行（或任务已完成），无需取消。"
+            # 找到当前正在跑的 task 类型（从 _task_status）
+            st = self._task_status.get(conv)
+            task_type = st.get("type", "未知") if st else "未知"
+            skey = self._session_key(conv, task_type)
+            try:
+                await self.runtime.cancel(skey)
+            except Exception as exc:
+                log.warning("取消子会话失败 [%s]: %s", conv, exc)
+            # 释放 + 标记 cancelled + 进度落盘
+            self._release(conv)
+            if st is not None:
+                st["status"] = "cancelled"
+                st["result"] = "已取消"
+            self.update_plan(conv, task_type, "cancelled", "用户取消/暂停")
+            await self._emit(f"🛑 任务已取消：{task_type}（进度已保存，可后续续跑）", kind="event")
+            return f"🛑 已取消任务：{task_type}。进度已落盘保存，需要时可重新派发续跑。"
+
+        cancel_tool = define_tool(
+            name="task_cancel",
+            description=(
+                "暂停/取消当前正在执行的子会话任务（用户要求暂停/取消时调用）。"
+                "取消后进度落盘保存，可重新派发续跑。当前无任务时返回提示。"
+            ),
+            params_type=TaskDispatchParams,
+            handler=cancel_handler,
+            skip_permission=True,
+            defer="never",
+        )
+
         async def handler(params: TaskDispatchParams, invocation: ToolInvocation) -> str:
             try:
                 # 用主会话 session_id 反查主会话 key（没有就用 default）
                 conv = params.conversation_key or self.runtime.key_for_session_id(
                     invocation.session_id
                 )
-                return await self.dispatch(
+                return await self.submit(
                     conv,
                     params.type,
                     params.objective,
@@ -288,16 +530,20 @@ class TaskDispatcher:
             except Exception as exc:
                 return f"❌ 派发失败: {exc}"
 
-        return define_tool(
+        dispatch_tool = define_tool(
             name="task_dispatch",
             description=(
                 "把 Kanzi 任务派发给指定类型的子会话执行（子会话上下文与主会话隔离）。"
                 "主会话只传客观描述（objective/constraints/data_source/project，不含具体参数值）；"
-                "子会话从数据源自行提取参数、生成命令序列并执行，完成后回报成功/失败原因。"
-                "注意：执行步骤必须顺序派发，一次只派发一个子任务，等上一个完成后才派下一个。"
+                "子会话从数据源自行提取参数、生成命令序列并执行。"
+                "异步派发：本工具立即返回（不阻塞），子会话在后台执行；"
+                "子会话完成后会主动回报给主会话（注入消息），主会话收到回报后再派发下一个任务。"
+                "同一时间只能有一个任务在执行：若返回『上一个任务还在执行中』，说明有任务未完成。"
+                "用户要求暂停/取消时调用 task_cancel。任务进度自动落盘，主会话可随时查 task_status。"
             ),
             params_type=TaskDispatchParams,
             handler=handler,
             skip_permission=True,
             defer="never",
         )
+        return [dispatch_tool, status_tool, cancel_tool]

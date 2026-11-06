@@ -188,14 +188,34 @@ mcp({"jsonrpc":"2.0","id":"2","method":"tools/call","params":{"name":"kz_invoke"
 
 #### StateObject 配置（TargetObjectPath 指向目标节点）
 
-StateObject（子 State）通过 TargetObjectPath 指向目标节点：
+StateObject（子 State）通过 TargetObjectPath 指向目标节点。**路径是相对路径**，相对于**该 StateObject 所属 State 对应的目标节点**（父 State 的 TargetObjectPath 指向的节点）：
+
+| 写法 | 含义 | 示例 |
+|------|------|------|
+| `.` | 状态机使用的节点本身（父 State 的目标节点） | `@string:.` → 指向目标节点自己 |
+| `./<子节点名>` | 状态机使用节点的**子节点** | `@string:./popup` → 指向目标节点的 popup 子节点 |
+| `./<子>/<孙>` | 更深层子节点（相对路径可多级） | `@string:./popup/title` |
+
+> 📖 **官方定义**（doc-mcp 查证，Kanzi 4.1.2 文档）：
+> - Studio 插件 API `StateObject.TargetObjectPath`：*“Gets or sets the path to the node to which Kanzi applies the state of the selected state object”*（获取/设置 Kanzi 对选中 StateObject 应用状态的目标节点路径）。
+> - Runtime API `StateObject::setPath(string_view path)`：*“Sets target object path for this state object”*。
+> - Studio 命令 `CreateStateWithTarget parent name stateObjectPath selectNewItems` 的 `stateObjectPath` 参数：*“The value of the Target Object Path property of the state object”*。
+> - 官方文档未给出 `.` / `./popup` 的具体写法示例；相对路径格式（`.` = 目标节点自身，`./<子节点>` = 其子节点）为**实际使用验证的约定**（2026-11-06 老隋确认）。
+
+> ⚠️ **路径语法要点**：
+> - **必须相对路径，用 `.` 开头**（`.` 当前节点；`./xxx` 子节点）。**不能写成绝对路径**（如 `/Screens/...`）或裸名字（如 `popup`）。
+> - **用 `@string:` 前缀**保证是字符串，不被当节点引用解析。
+> - `./popup` 表示「状态机使用节点的 popup 子节点」——当 State 控制的是父节点、但某个 StateObject 要操作它的子节点（如弹窗、文本）时用。
 
 ```python
-# 设置目标节点路径（"." 表示指向父 State 对应的目标节点）— 用 @string: 保证是字符串不被当节点
+# 设置目标节点路径（"." 表示指向父 State 对应的目标节点；"./popup" 表示该节点的 popup 子节点）— 用 @string: 保证是字符串不被当节点
 mcp({"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"<StateObject ref>","method":"set_TargetObjectPath","args":["@string:."]}}})
 
+# 指向目标节点的 popup 子节点（示例：State 控制父节点，StateObject 操作其弹窗）
+mcp({"jsonrpc":"2.0","id":"2","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"<StateObject ref>","method":"set_TargetObjectPath","args":["@string:./popup"]}}})
+
 # 设置文本内容（resourceID 写法）
-mcp({"jsonrpc":"2.0","id":"2","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"<StateObject ref>","method":"set_Item","args":["TextConcept.Text","@string:KzResourceID:1"]}}})
+mcp({"jsonrpc":"2.0","id":"3","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"<StateObject ref>","method":"set_Item","args":["TextConcept.Text","@string:KzResourceID:1"]}}})
 ```
 
 ##### StateObject 设置任意属性（含资源引用型）
