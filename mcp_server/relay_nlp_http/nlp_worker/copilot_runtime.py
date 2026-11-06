@@ -2540,8 +2540,9 @@ class CopilotRuntime:
                 except Exception:
                     return False  # 探测失败 → 保守不延长
 
-            # 活动刷新式超时循环: 有活动续期; 工具进行中则探测插件活性;
-            # 只有"非工具期 + 超阈值无事件"或"工具期探测空闲"才判真死寂。
+            # 活动刷新式超时循环: 有活动续期; 工具进行中则无条件续期
+            # (工具挂着 = copilot 在干活, 不探测插件活性, 避免误杀长工具/长等待);
+            # 只有非工具期 + 超阈值无事件才判真死寂。
             try:
                 while True:
                     try:
@@ -2552,16 +2553,16 @@ class CopilotRuntime:
                         idle_for = now - self._last_activity
                         if idle_for < max_idle:
                             continue
-                        # 达到死寂阈值: 若有工具进行中, 探测插件是否还活着
+                        # 达到死寂阈值: 若有工具进行中, 无条件续期继续等
+                        # (工具调用挂着 = copilot 在执行长工具/等待子会话回报,
+                        #  不依赖 kz_health 探测 —— 插件忙时探测会假阴性误杀)
                         if _tool_started_ts is not None:
-                            if await _probe_kanzi_active():
-                                # 插件还在执行长工具 → 刷新活动继续等
-                                self._last_activity = time.time()
-                                log.info(
-                                    f"⏳ [{key}] 长工具执行中探测到 Kanzi 活跃, "
-                                    f"已执行 {now - _tool_started_ts:.0f}s, 继续等待"
-                                )
-                                continue
+                            self._last_activity = time.time()
+                            log.info(
+                                f"⏳ [{key}] 工具调用进行中 {now - _tool_started_ts:.0f}s, "
+                                f"继续等待"
+                            )
+                            continue
                         raise TimeoutError(
                             f"Copilot timed out after {max_idle:.0f}s of inactivity"
                         )
