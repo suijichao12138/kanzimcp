@@ -105,9 +105,15 @@ mcp kz_invoke target=<命令执行器ref> method=SaveProject args=["@project"]  
 
 > 创建一个 `SingleTexture`（纹理）并绑定图片文件。纹理是图片在工程 Textures 库里的项（实例是 `SingleTexturePluginWrapper`）。
 
-### ⚠️🌟 最关键的坑：泛型 T 必须用**完整类型名**
+### ⚠️🌟 最关键的坑：没有明确说明时纹理路径必须与图片路径相同，名称也必须相同**不带后缀**
 
-推荐用 `CreateProjectItem<SingleTexture>(name, textureLibrary)`。MCP 里泛型 T 用 `@type:` 前缀，**必须是完整类型名**：
+**创建纹理（SingleTexture）时，若需求/约束没明确指定纹理路径，遵循默认规则**：
+- **纹理路径 = 源图片路径**：纹理创建到与图片相同的 Textures 库位置（如图片在 `Textures/adas/`，纹理也建在 `Textures/adas/`）；
+- **纹理名称 = 图片文件名（不带后缀）**：源图片 `green_sig_num.png` → 纹理名 `green_sig_num`（去 `.png`/`.jpg` 等扩展名）；
+- **含义**：这样设置图片引用时（`Image2D.Image` / 九宫格），用纹理路径 `Textures/adas/green_sig_num` 直接命中，不用额外改名/换路径。
+- 需求明确指定了纹理名/位置时，按需求来，不受此默认约束。
+
+**泛型 T 必须用完整类型名**：推荐用 `CreateProjectItem<SingleTexture>(name, textureLibrary)`。MCP 里泛型 T 用 `@type:` 前缀，**必须是完整类型名**：
 
 | 写法 | 结果 |
 |---|---|
