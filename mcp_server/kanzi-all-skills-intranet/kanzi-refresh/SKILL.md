@@ -27,6 +27,18 @@ kz_invoke target=@objN method=SelectProjectItems args=["/Screens/Screen/RootPage
 kz_invoke target=@objN method=SelectProjectItems args=["@obj:xxx"]
 ```
 
+**重载签名（2026-11-09 实机探测确认）**：`SelectProjectItems` 真实重载只有两个，都收 **ProjectItem 对象/集合**（没有 string 路径重载，但反射桥会把字符串路径自动解析成节点对象）：
+
+| 重载 | 参数 | 何时用 |
+|------|------|--------|
+| `SelectProjectItems(ProjectItem itemToSelect)` | **单个 ProjectItem**（字符串路径或 `@obj:X` 引用均可，桥自动解析） | 选中**单个**工程项 —— 最常用 |
+| `SelectProjectItems(IEnumerable<ProjectItem> itemsToSelect)` | **ProjectItem 集合**（多个 ref 用 `@list:` 前缀包数组） | 批量选中**多个**工程项 |
+
+- **字符串路径直接传即可**（`["/Screens/Screen/RootPage/新建节点名"]`），桥自动解析成 ProjectItem —— 2026-11-09 实机验证 ✅ 调用成功。
+- 单个引用传 `["@obj:X"]` 同样成功 ✅。
+- 批量多选：`args=["@list:类型名@obj1,@obj2"]` —— `@list:` 的**类型名必须是完整类型名**（元素类型，不是占位符）：
+  - 例：选中 2 个节点 → `args=["@list:Rightware.Kanzi.Tool.Logic.Project.Plugin.EmptyNode2DPluginWrapper@obj1,@obj2"]`（元素类型用 EmptyNode2DPluginWrapper 时；不同节点类型用各自的 PluginWrapper 类型名）。
+  - 记不清元素类型名时，先 `kz_ref_methods` 看 `SelectProjectItems` 的签名（元素类型 = `IEnumerable<...>` 泛型参数），或直接枚举 ref 的 type 字段拿完整类型名。
 - 作用：选中该工程项 → 工程树滚动定位 + 刷新显示，新内容立即可见。
 - 批量创建后选最后一个/代表节点即可。
 

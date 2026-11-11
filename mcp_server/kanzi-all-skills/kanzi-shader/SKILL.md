@@ -15,7 +15,7 @@ description: Kanzi Studio Shader 操作 skill（给 nlp/Copilot 用）—— 通
 
 ```bash
 # 中继桥连接（本 skill 实测走这条）
-ws://123.57.85.81:58080，通道 <用户名>，用 client.mjs 调 kz_invoke
+ws://<中继IP>:58080，通道 <用户名>，用 client.mjs 调 kz_invoke
 
 # 定位三个库
 kz_invoke target=@project method=get_Children          # → Material Types 库 @objMT
@@ -156,7 +156,7 @@ kz_get_raw_ref target=@objNewBI method=get_IsBindingEnabled    # True
 
 ## 7. 官方文档参考（用 kanzidocmcp 查）
 
-**方法**：`kanzi_doc_mcp` 端点（`http://123.57.85.81:9001/kanzi_doc_mcp`，头 `X-Kanzi-User: <用户名>`）→ `search_docs(query)` 定位 → `get_page(page_url)` 取全文 → `ask_question(question)` 问细节。
+**方法**：`kanzi_doc_mcp` 端点（`http://<kz_mcp_http机IP>:9001/kanzi_doc_mcp`，头 `X-Kanzi-User: <用户名>`）→ `search_docs(query)` 定位 → `get_page(page_url)` 取全文 → `ask_question(question)` 问细节。
 
 **常用页面**（4.1.1）：
 - Shaders 总览：`.../working-with/shaders/shaders.html`（shader 类型、自带库）

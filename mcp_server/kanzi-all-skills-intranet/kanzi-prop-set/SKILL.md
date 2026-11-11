@@ -82,6 +82,20 @@ mcp({"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"kz_invoke"
 mcp({"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"/path/to/node","method":"GetAddableProperties"}}})
 ```
 
+### ⚠️ 读回验证用「节点实际注册属性名」，不是绑定写法（2026-11-09 加）
+
+**设置属性时写的是“绑定写法”（如 `NinePatchImage.TopImage`），但 `get_Item` 读回验证、`AddProperty` 必须用节点上实际注册的属性名（如 `NinePatchImage2D.ImageTop`）** —— 两者不一致是常见报错根源（`NinePatchImage2D.ImageTop was not found`）：
+
+| 节点类型 | 绑定写法（设置/绑定用） | 实际注册属性名（读回/AddProperty 用） |
+|---------|----------------------|----------------------------------|
+| NinePatchImage2D | `NinePatchImage.TopImage` | `NinePatchImage2D.ImageTop` |
+| Image2D | `Image2D.Image` | `Image2D.Image`（同名） |
+| TextBlock2D | `TextConcept.Text` | `TextConcept.Text`（同名） |
+
+- **映射规则**：九宫格的 9 块图绑定写法是 `NinePatchImage.XxxImage`（TopLeftImage/TopImage/TopRightImage/LeftImage/CenterImage/RightImage/BottomLeftImage/BottomImage/BottomRightImage），实际注册属性名是 `NinePatchImage2D.ImageXxx`（ImageTopLeft/ImageTop/ImageTopRight/ImageLeft/ImageCenter/ImageRight/ImageBottomLeft/ImageBottom/ImageBottomRight）—— **「Image」前缀在绑定写法里在后、实际注册名里在前**，且实际注册名**带方位全称**（无缩写）。9 块图完整对照见下方「九宫格节点设置 9 块图片」段的 ASCII 布局图。
+- 不确定实际属性名时：先 `get_Properties` 看节点实际注册名，再 `get_Item("<实际名>")` 读回验证；报 `was not found` 就换实际注册名。
+- `AddProperty` 也必须用实际注册名（自定义属性才需要 AddProperty；内置自带属性如 ImageTop 无需 AddProperty）。
+
 ## ⚠️ 中文/Unicode 属性值设置注意事项
 
 ### 问题背景
@@ -167,12 +181,24 @@ mcp kz_invoke target=@image_1 method=set_Item args=["Image2D.Image", "green_sig_
 > 九宫格节点创建见 `kanzi-node-create`（类型 NinePatchImage2D）。9 块图属性创建节点时就自带（无需 AddProperty），直接设图片即可。
 
 ```python
-# 9 块图属性：ImageTopLeft/Top/TopRight/Left/Center/Right/BottomLeft/Bottom/BottomRight
+# 9 块图属性（实际注册名，共 9 个，全列）：
+#   NinePatchImage2D.ImageTopLeft / ImageTop / ImageTopRight
+#   NinePatchImage2D.ImageLeft    / ImageCenter / ImageRight
+#   NinePatchImage2D.ImageBottomLeft / ImageBottom / ImageBottomRight
+# 布局对应九宫格：
+#   ┌─────────┬────────┬──────────┐
+#   │ ImageTopLeft│ ImageTop │ ImageTopRight │
+#   ├─────────┼────────┼──────────┤
+#   │ ImageLeft│ ImageCenter │ ImageRight │
+#   ├─────────┼────────┼──────────┤
+#   │ ImageBottomLeft│ ImageBottom │ ImageBottomRight │
+#   └─────────┴────────┴──────────┘
+
 # 方式1：直接给图片路径（Textures 库里的图片）
 mcp kz_invoke target=@bg_9slice method=set_Item args=["NinePatchImage2D.ImageTopLeft", "Textures/adas/green_sig_num"]
 # 方式2：直接给图片名
 mcp kz_invoke target=@bg_9slice method=set_Item args=["NinePatchImage2D.ImageCenter", "center_tex"]
-# 其余 7 块同理（Top/TopRight/Left/Right/BottomLeft/Bottom/BottomRight）
+# 其余 7 块同理（ImageTop/ImageTopRight/ImageLeft/ImageRight/ImageBottomLeft/ImageBottom/ImageBottomRight）
 ```
 
 ### 图片来源（Textures 库）

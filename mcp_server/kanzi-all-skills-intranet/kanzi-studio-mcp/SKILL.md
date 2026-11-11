@@ -136,6 +136,14 @@ print(urllib.request.urlopen(req, timeout=60).read().decode())
 - `kz_ref_properties` / `kz_ref_methods` / `kz_list_refs`：探引用能干什么
 - `kz_type_probe`：只读探测类型构造/方法签名
 
+> ⚠️ **强制前置步骤：先探测 → 再调用（2026-11-09 加）**
+> `kz_invoke` 是**反射调用**，Kanzi 插件 API 是**精确方法签名匹配**（方法名 + 参数类型 + 参数个数全对上才调得动）。skill 里只给了方法名，没给精确参数类型/重载 —— **调用任何反射方法前，必须先探测目标对象能干什么、按探测结果匹配签名**：
+> 1. 拿到 ref 后，先 `kz_ref_methods(target=<ref>)` 看目标对象有哪些方法及重载签名（或 `kz_ref_properties` 看属性）；
+> 2. 按探测到的签名确定参数类型/个数（用 `@string:`/`@int:`/`@obj:`/`@list:` 等标识符对齐类型）；
+> 3. 签名不确定的重载，先 `kz_type_probe` 探测类型构造/方法签名；
+> 4. **探测确认后再调 `kz_invoke`**，不要凭 skill 里的方法名直接猜参（猜错报「找不到与参数匹配」）。
+> 5. 同一个 `kz_ref_*` 结果在**同一连接内**有效（ref 编号每次连接变，探测与调用要在同一连接内完成）。
+
 ### 📦 节点/属性/保存
 - `kz_create_node`（parent + type + name）
 - `kz_set_property` / `kz_get_property` / `kz_delete_node` / `kz_get_node_tree`

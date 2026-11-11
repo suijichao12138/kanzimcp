@@ -25,7 +25,7 @@ node <client.mjs路径> '{"name":"kz_invoke","arguments":{"target":"@project","m
 - 相关脚本：`kanzi-mcp-client.mjs`（通用调用）、`kanzi-mcp-list-tools.mjs`（列工具）、`kanzi-shot-save.mjs`（截图落盘）
 - ⚠️ ws 直连是 **client 槽**：同通道里 server（Kanzi 插件）是对方。多 client 并存已支持（2026-09-14 实测）。
 
-### 🔌 脚本单连接铁律（批量/多调用脚本必读！2026-10-19 老隋要求）
+### 🔌 脚本单连接铁律（批量/多调用脚本必读）
 
 **一个脚本只建一次连接，所有调用复用同一连接提交。**
 
@@ -70,7 +70,7 @@ Header: Content-Type: application/json
 Header: X-Kanzi-User: <用户名>       ← 必需
 ```
 
-- 阿里云实测：`http://123.57.85.81:9001/kanzistudio_mcp`（2026-09-14 实测可用）
+- 实机实测：`http://<kz_mcp_http机IP>:9001/kanzistudio_mcp`（2026-09-14 实测可用）
 - **三端点并存**（copilot 就是这么配的）：
   - `/kanzistudio_mcp` → 操作 Kanzi Studio（**标准端点**；`/mcp` 是等价别名，实测两者结果一致）
   - `/kanzi_api_mcp` → 官方 API 代理
@@ -92,7 +92,7 @@ Header: X-Kanzi-User: <用户名>       ← 必需
 import json, urllib.request
 
 req = urllib.request.Request(
-    "http://123.57.85.81:9001/mcp",
+    "http://<kz_mcp_http机IP>:9001/mcp",
     data=json.dumps({
         "jsonrpc": "2.0",
         "id": "my-request-1",          # 唯一 id（字符串/数字均可）
@@ -133,6 +133,14 @@ print(urllib.request.urlopen(req, timeout=60).read().decode())
 - `kz_invoke`：通用反射调用（最核心，`target` + `method` + `args`）
 - `kz_ref_properties` / `kz_ref_methods` / `kz_list_refs`：探引用能干什么
 - `kz_type_probe`：只读探测类型构造/方法签名
+
+> ⚠️ **强制前置步骤：先探测 → 再调用（2026-11-09 加）**
+> `kz_invoke` 是**反射调用**，Kanzi 插件 API 是**精确方法签名匹配**（方法名 + 参数类型 + 参数个数全对上才调得动）。skill 里只给了方法名，没给精确参数类型/重载 —— **调用任何反射方法前，必须先探测目标对象能干什么、按探测结果匹配签名**：
+> 1. 拿到 ref 后，先 `kz_ref_methods(target=<ref>)` 看目标对象有哪些方法及重载签名（或 `kz_ref_properties` 看属性）；
+> 2. 按探测到的签名确定参数类型/个数（用 `@string:`/`@int:`/`@obj:`/`@list:` 等标识符对齐类型）；
+> 3. 签名不确定的重载，先 `kz_type_probe` 探测类型构造/方法签名；
+> 4. **探测确认后再调 `kz_invoke`**，不要凭 skill 里的方法名直接猜参（猜错报「找不到与参数匹配」）。
+> 5. 同一个 `kz_ref_*` 结果在**同一连接内**有效（ref 编号每次连接变，探测与调用要在同一连接内完成）。
 
 ### 📦 节点/属性/保存
 - `kz_create_node`（parent + type + name）

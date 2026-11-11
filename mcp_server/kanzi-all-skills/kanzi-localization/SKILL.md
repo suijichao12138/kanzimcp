@@ -40,7 +40,7 @@ LT="/Localization/Localization Table"
 
 ### 🔍 Localization Table 是否存在判断（2026-11-05 实机验证）
 
-> **操作前必须先判断表是否存在**（协议铁律：不假设任务全新）。实机验证（阿里云中继 + cluster_hmi）：
+> **操作前必须先判断表是否存在**（协议铁律：不假设任务全新）。实机验证（实机 + cluster_hmi）：
 
 ```python
 # 1) 定位 Localization 库（children 里 name == "Localization"，type = LocaleLibraryPluginWrapper）

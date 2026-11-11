@@ -26,14 +26,14 @@ description: 子会话执行协议（注入所有 task 子会话）。读任务�
 ## 执行总则（正确性铁律，必须遵守）
 
 1. **命名铁律**：State/节点名禁止空格/特殊字符（含逗号、句号）；文本数据先清洗（去空格/逗号/句号/`/`/`.`/`:`/`(`/`)`/`&`/`，`），只保留中文/数字/下划线/字母。
-2. **完全按照skill执行**：获取到对应skill后必须通读全文，严格按照skill执行。加载的skill可以完全确认，未知kanzi项优先通过 kanzi-skill-mcp 加载当前工作直接需要的 skill，返回的skill完全可以确认；禁止预先读取全部 skill。已确认的 API 用法直接复用，只有接口未知或调用失败时才查询方法和属性。
+2. **完全按照skill执行**：获取到对应skill后必须通读全文，严格按照skill执行，禁止脑补API流程/参数。加载的skill可以完全确认，未知kanzi项优先通过 kanzi-skill-mcp 加载当前工作直接需要的 skill，返回的skill完全可以确认；禁止预先读取全部 skill。已确认的 API 用法直接复用，只有接口未知或调用失败时才查询方法和属性。
 3. **批量操作必须成对**：`BeginBatchModification` / `CommitBatchModification` 必须成对（不成对卡死 Studio）。创建状态机脚本把 state/stateobject 的创建+设置全部包进同一个 batch。
 4. **单连接铁律**：一个脚本只建一次连接，所有调用复用同一连接；禁止每次调用重新连接/新开进程（跨连接 ref 失效、batch 事务错乱、Studio 崩溃）。
 5. **@obj 按工程隔离**：`kz_select_project` 切换工程会清空上一工程引用缓存；cachedRefs/prefetchPlan 按工程分区，绝不跨工程复用引用。
 6. **中文字符串直接传中文**，不传 \uXXXX。
-7. **大输出一律落盘**（get_Properties/get_Options/get_Children/get_Node_Tree）：只用 grep、定向查询或脚本提取必要字段，禁止读取完整 dump。
-8. **批量优先**：一次提交同类资源或属性，禁止可合并的逐项调用和逐项读回。
-9. **返回检查（抽样 + 关键步骤必查，2026-10-21 老隋调整）**：
+7. **大输出一律落盘**（get_Properties/get_Options/get_Children/get_Node_Tree）：只用 grep、定向查询或脚本提取必要字段，禁止读取完整 dump。操作本地文件一律使用脚本落盘，禁止完整读取。
+8. **批量优先**：一次提交同类资源或属性，禁止可合并的逐项调用和逐项读回。尤其是状态机创建必须使用脚本批量创建，禁止逐个操作。
+9. **返回检查（抽样 + 关键步骤必查）**：
    - **批量同类调用**（如 set_Item 20 次）：必须检查首项和末项的返回；同时记录“预期数量”与“实际返回数量”，两者相等才视为通过。不相等时逐项检查，不允许只抽样。
    - **关键步骤必查**：`BeginBatchModification`/`CommitBatchModification`、创建类（Create*/kz_create_node）、有依赖的衔接步骤 —— 这些必须看返回，error/❌/空立即停。
    - 一旦发现一个 error，**立即停**并查原因（说明前面可能系统性出错），不硬闯下一批。
@@ -44,6 +44,16 @@ description: 子会话执行协议（注入所有 task 子会话）。读任务�
 14. **创建后必须刷新工程树**：任何创建操作（节点/模板/属性/状态机/多国语表/纹理/动画/笔刷/资源/别名）完成后，必须 `Commands.SelectProjectItems` 刷新工程树，否则 Studio 里不可见，详细说明见 kanzi-refresh skill。
 15. **截图前必须先刷新 Preview**：`Commands.RestartPreview()`（若本任务需要截图），详细说明见 kanzi-refresh skill。
 16. **绝不重启/关闭/退出 Kanzi Studio**：`CloseProject()`/`CloseSolution()`/`ExitApplication()`/杀进程 禁止；卡死时停止当前操作、重新枚举 ref 恢复连接。
+17. **幂等查重铁律（2026-10-26 加，防重复创建）**：子会话可能因超时/失败被重派重试，**绝不假设本次任务全新**。所有创建类操作（节点/绑定/状态机/属性类型/资源条目/别名/动画/纹理/笔刷/材质/多国语 key）执行前，**必须先查目标是否已存在**（按该类型 skill 的「创建前查重」小节，用 工程+类型+名称/路径/Key 定位）：
+   - **已存在 → 跳过创建**（不调创建方法），在回报里注明「N 个已存在跳过（名称列表）」；
+   - **实际新建数量 = 创建的个数（不含已存在跳过）**，回报成功时写「新建 X 个，已存在跳过 Y 个」；
+   - **查询失败（库枚举不了/连不上）→ 立即停**，先查原因；**在无法确认是否已存在的情况下禁止直接创建**（否则重派必重复）；
+   - 创建后按各类型 skill 的验证方式核对实际数量，与预期不符（多了/少了）立即停并查明原因。
+18. **JSON 转义规范（含数据文本的工具调用必须用 json.dumps 构造，禁止手拼）**：凡工具调用参数含**数据文本**（文本/文案/日志，可能带换行、双引号、反斜杠），请求体必须用 `json.dumps({...}, ensure_ascii=False)` 构造，**禁止字符串拼接**。
+   - 数据源文本常含换行（如 `动力电池状态无法监控\n请联系经销商`，文件里是字面 `\n`，读取后是**真换行符**）和双引号（如 `报警信息"故障"详情`）。
+   - ❌ 手拼：`'{"arguments":{"args":["' + text + '"]}}'` → 真换行符/引号直接破坏 JSON → `Unterminated string in JSON at position N` / `Expecting ',' delimiter`。
+   - ✅ `json.dumps({"name":"kz_invoke","arguments":{"args":[text]}}, ensure_ascii=False)` → 库自动转义（换行→`\n`、引号→`\"`、反斜杠→`\\`），回读原样。
+   - 中文用 `ensure_ascii=False` 保持原文（与第 6 条一致，不传 \uXXXX）。
 
 ## 保存/导出（若任务要求）
 - 用 `@studio.get_Commands()` 动态取 GeneratedCommandInvoker（不写死编号），`SaveProject("@project")`，按需 `ExportBinary("@project")`。

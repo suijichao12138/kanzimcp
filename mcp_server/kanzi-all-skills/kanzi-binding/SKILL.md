@@ -13,7 +13,7 @@ description: Kanzi Studio 动态数据绑定创建与表达式语法。CreateBin
 
 ### 接入（本机中继桥）
 
-客户端 `kanzi-mcp-client.mjs`（workspace 根目录）：中继 `ws://123.57.85.81:58080`，channel `openclaw-main`，调用 `node kanzi-mcp-client.mjs '<tools/call 参数 JSON>'`。返回 `ref_id = @objN` 自动进缓存；Studio 重启后（**仅人工操作，助手绝不重启 Studio**）编号失效须重新枚举。
+客户端 `kanzi-mcp-client.mjs`（workspace 根目录）：中继 `ws://<中继IP>:58080`，channel `openclaw-main`，调用 `node kanzi-mcp-client.mjs '<tools/call 参数 JSON>'`。返回 `ref_id = @objN` 自动进缓存；Studio 重启后（**仅人工操作，助手绝不重启 Studio**）编号失效须重新枚举。
 
 ### 基本请求格式
 

@@ -49,6 +49,11 @@ description: 子会话执行协议（注入所有 task 子会话）。读任务�
    - **实际新建数量 = 创建的个数（不含已存在跳过）**，回报成功时写「新建 X 个，已存在跳过 Y 个」；
    - **查询失败（库枚举不了/连不上）→ 立即停**，先查原因；**在无法确认是否已存在的情况下禁止直接创建**（否则重派必重复）；
    - 创建后按各类型 skill 的验证方式核对实际数量，与预期不符（多了/少了）立即停并查明原因。
+18. **JSON 转义规范（含数据文本的工具调用必须用 json.dumps 构造，禁止手拼）**：凡工具调用参数含**数据文本**（文本/文案/日志，可能带换行、双引号、反斜杠），请求体必须用 `json.dumps({...}, ensure_ascii=False)` 构造，**禁止字符串拼接**。
+   - 数据源文本常含换行（如 `动力电池状态无法监控\n请联系经销商`，文件里是字面 `\n`，读取后是**真换行符**）和双引号（如 `报警信息"故障"详情`）。
+   - ❌ 手拼：`'{"arguments":{"args":["' + text + '"]}}'` → 真换行符/引号直接破坏 JSON → `Unterminated string in JSON at position N` / `Expecting ',' delimiter`。
+   - ✅ `json.dumps({"name":"kz_invoke","arguments":{"args":[text]}}, ensure_ascii=False)` → 库自动转义（换行→`\n`、引号→`\"`、反斜杠→`\\`），回读原样。
+   - 中文用 `ensure_ascii=False` 保持原文（与第 6 条一致，不传 \uXXXX）。
 
 ## 保存/导出（若任务要求）
 - 用 `@studio.get_Commands()` 动态取 GeneratedCommandInvoker（不写死编号），`SaveProject("@project")`，按需 `ExportBinary("@project")`。

@@ -136,7 +136,7 @@ mcp({"jsonrpc":"2.0","id":"5","method":"tools/call","params":{"name":"kz_invoke"
 ```
 
 > **要点**：
-> - `kz_get_raw_ref` 是插件已有工具（KzMCPServerClient 实现），**不改代码**；HTTP 网关 `tools/call` 原样转发（不过滤工具名），ws 直连中继同样可用。
+> - `kz_get_raw_ref` 是插件已有工具（KzMCPServerClient 实现），**不改代码**；HTTP 网关 `tools/call` 原样转发（不过滤工具名）。
 > - 三个方法参数：`Add(键, 值)` 新增；`set_Item(键, 新值)` 修改已存在键；`Remove(键)` 删除。
 > - `Add` 遇到已存在键会抛异常（Dictionary 语义），改值用 `set_Item`；`Remove` 删除不存在的键返回 False 不抛错。
 

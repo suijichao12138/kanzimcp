@@ -201,7 +201,7 @@ StateObject（子 State）通过 TargetObjectPath 指向目标节点。**路径�
 > - Studio 插件 API `StateObject.TargetObjectPath`：*“Gets or sets the path to the node to which Kanzi applies the state of the selected state object”*（获取/设置 Kanzi 对选中 StateObject 应用状态的目标节点路径）。
 > - Runtime API `StateObject::setPath(string_view path)`：*“Sets target object path for this state object”*。
 > - Studio 命令 `CreateStateWithTarget parent name stateObjectPath selectNewItems` 的 `stateObjectPath` 参数：*“The value of the Target Object Path property of the state object”*。
-> - 官方文档未给出 `.` / `./popup` 的具体写法示例；相对路径格式（`.` = 目标节点自身，`./<子节点>` = 其子节点）为**实际使用验证的约定**（2026-11-06 老隋确认）。
+> - 官方文档未给出 `.` / `./popup` 的具体写法示例；相对路径格式（`.` = 目标节点自身，`./<子节点>` = 其子节点）为**实际使用验证的约定**。
 
 > ⚠️ **路径语法要点**：
 > - **必须相对路径，用 `.` 开头**（`.` 当前节点；`./xxx` 子节点）。**不能写成绝对路径**（如 `/Screens/...`）或裸名字（如 `popup`）。
@@ -221,7 +221,9 @@ mcp({"jsonrpc":"2.0","id":"3","method":"tools/call","params":{"name":"kz_invoke"
 
 ##### StateObject 设置任意属性（含资源引用型）
 
-> StateObject 除了 TargetObjectPath 外，还可以给目标节点设置任意属性（文本/属性值/图片等），与普通节点 `set_Item` 一致。属性名、值类型与 `kanzi-prop-set` / `kanzi-resource-set` 的规则相同。**本节示例 2026-11-05 实机验证通过**（阿里云中继 + cluster_hmi 工程，建临时 SM/SG/State/StateObject + 目标节点实测，读回确认后已清理）。
+> StateObject 除了 TargetObjectPath 外，还可以给目标节点设置任意属性（文本/属性值/图片等），与普通节点 `set_Item` 一致。属性名、值类型与 `kanzi-prop-set` / `kanzi-resource-set` 的规则相同。**本节示例 2026-11-05 实机验证通过**（实机 + cluster_hmi 工程，建临时 SM/SG/State/StateObject + 目标节点实测，读回确认后已清理）。
+>
+> ⚠️ **读回验证用实际注册属性名，不是绑定写法（2026-11-09 加）**：设置时写的“绑定写法”（如 `NinePatchImage.TopImage`），`get_Item` 读回验证必须用节点实际注册属性名（如 `NinePatchImage2D.ImageTop`）—— 两者不一致报 `was not found`。映射规则见 `kanzi-prop-set`「读回验证属性名 ≠ 绑定写法」段（NinePatchImage2D 的 9 块图：绑定写法 `NinePatchImage.XxxImage` → 实际注册名 `NinePatchImage2D.ImageXxx`）。
 
 **① 设置文本（TextConcept.Text）**
 

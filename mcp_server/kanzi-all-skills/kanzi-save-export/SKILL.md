@@ -112,13 +112,16 @@ r = mcp({
 
 成功返回：`✅ 调用成功（无返回值）`
 
+> ⚠️ **地址规则**：若环境已配置好相关 MCP（如 nlp_worker config.yaml 的 `mcp_servers` 或部署机已建网关），**必须使用已配置的 MCP 地址**；`<kz_mcp_http机IP>` 仅为通用占位符（未配置时的示例写法）。
+
 ## 完整 Python 示例
 
+> 💡 以下脚本 = 上方第 1~3 步的完整拼装版（同一调用序列：get_Commands → SaveProject → ExportBinary），便于直接复制执行；不是另一套流程。
+
 ```python
-# 本机中继桥：通过 ws://123.57.85.81:58080 调用 kz_invoke（客户端 kanzi-mcp-client.mjs）
-# 调用：node kanzi-mcp-client.mjs '{"name":"kz_invoke","arguments":{"target":...,"method":...,"args":[...]}}'
-# 下面 mcp({...}) 调用 = 对中继桥 kz_invoke 工具的一次调用（tools/call JSON-RPC）。
-# 说明：此例保留了手动 tools/call 结构，仅作底层反射调用参考；日常用 kanzi-mcp-client.mjs 只需传 tools/call 参数 JSON。
+# HTTP MCP：POST http://<kz_mcp_http机IP>:9001/mcp（Header X-Kanzi-User: <用户名>）
+# 调用：JSON-RPC tools/call {"name":"kz_invoke","arguments":{"target":...,"method":...,"args":[...]}}
+# 下面 mcp({...}) 调用 = 对 kz_invoke 工具的一次调用（tools/call JSON-RPC）。
 
 # 1. 获取命令执行器
 r = mcp({
@@ -175,12 +178,13 @@ ws.close()
 
 | 方法 | 说明 |
 |------|------|
-| `SaveProject(Project)` | 保存指定工程 |
-| `SaveProject(Project, String, Boolean...)` | 保存到指定路径（含各种选项） |
+| `SaveProject(Project)` | 保存指定工程（实测 ✅） |
+| `SaveProject(Project, String, Boolean, Boolean, Boolean, Boolean)` | 保存到指定路径（第二参 savePath，另存） |
 | `SaveAllProjects()` | 保存所有打开工程 |
-| `ExportBinary(Project)` | 导出指定工程的 kzb |
-| `ExportBinary(Project, Boolean)` | 导出，第二个参数控制是否覆盖 |
-| `ExportBinary(Project, Boolean, Boolean)` | 导出，第三参数控制是否清理 |
+| `ExportBinary(Project)` | 导出指定工程的 kzb（实测 ✅） |
+| `ExportBinary(Project, Boolean)` | 导出，第二参 = 主题/本地化资源是否分开导出 |
+| `ExportBinary(Project, Boolean, Boolean)` | 导出，第二参同上 + 第三参是否导出 XML |
+| `ExportBinary(Project, FileInfo)` | 导出到指定文件（第二参必须是 FileInfo 对象） |
 | `ExportAllProjectBinaries()` | 导出所有工程的 kzb |
 | `ExportBinaryWithApplication(Project)` | 导出含 application 配置的 kzb |
 | `RestartPreview()` | **刷新 Preview**（重启 Preview 进程；截图前必须先调它，见 kanzi-refresh） |
@@ -189,12 +193,22 @@ ws.close()
 
 > 🔁 **刷新工程树 / 刷新 Preview 的完整用法见 `kanzi-refresh` skill**（拿 Commands → SelectProjectItems / RestartPreview 三步）。
 
+> ⚠️ **重载签名区分（2026-11-09 实机探测确认）**：反射桥按参数类型自动匹配重载，传参必须对号（下面签名是 kz_type_probe 对 GeneratedCommandInvoker 的实测结果）：
+> - **`SaveProject` 常用形态**：
+>   - `SaveProject(Project)` → 传 `["@project"]` → 保存工程到当前路径（**最常用，实测 ✅**）；
+>   - `SaveProject(Project, string savePath, bool continueWorkingInOldPath, bool isAsynchronous, bool clearDirtyFlag, ...)` → 第二参 `@string:` 绝对路径另存（参数多，不常用）。
+> - **`ExportBinary` 常用形态**：
+>   - `ExportBinary(Project)` → 传 `["@project"]` → 导出到 Binary Export Directory（**最常用，实测 ✅**）；
+>   - `ExportBinary(Project, FileInfo fileName)` → 第二参必须是 **FileInfo 对象**（字符串路径不能直接转，实测 `@string:` 路径报「找不到与参数 (Project, String) 匹配的重载」）；指定路径导出需先构造 FileInfo（反射桥暂不支持直接传，如确需指定路径改用官方命令 `ExportBinary "路径.kzb"`）。
+>   - `ExportBinary(Project, bool exportThemesAndLocaleResourcesSeparately[, bool exportXml])` → 第二参 bool 控制**主题/本地化资源是否分开导出**（不是“覆盖”）。
+> - **判断口诀**：默认位置保存/导出传 `["@project"]`；要传第二参先 `kz_type_probe` 确认该参数类型再传。参数类型写错会报「找不到与参数匹配的重载」。
+
 > 🚫 **禁止调用的方法（会造成关闭/退出，绝不能用）**：
 > - `CloseProject()`（关闭当前工程）
 > - `CloseSolution()`（关闭解决方案）
 > - `ExitApplication()`（退出 Kanzi Studio）
 >
-> 关闭/退出 Studio 会丢失未保存内容，且断连后可能再也连不上。**助手绝不执行这些**；需要关闭/退出时交给老隋人工操作。
+> 关闭/退出 Studio 会丢失未保存内容，且断连后可能再也连不上。**助手绝不执行这些**；需要关闭/退出时交给用户人工操作。
 
 ## 相关路径
 

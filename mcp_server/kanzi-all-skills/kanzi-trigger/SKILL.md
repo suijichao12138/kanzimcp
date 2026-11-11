@@ -9,7 +9,7 @@ description: Kanzi Studio Triggers（触发器）创建与配置。TriggerNodeCo
 
 通过中继 WebSocket 连接 Kanzi Studio 插件。客户端 `kanzi-mcp-client.mjs`（workspace 根目录）。
 
-- **中继**：`ws://123.57.85.81:58080`，channel = `openclaw-main`
+- **中继**：`ws://<中继IP>:58080`，channel = `openclaw-main`
 - **调用**：`node kanzi-mcp-client.mjs '<tools/call 参数 JSON>'`，参数格式 `{"name":"kz_invoke","arguments":{"target":"X","method":"Y","args":[...]}}`
 - 示例中的 `mcp kz_invoke target=X method=Y args=[...]` 即上一条的简写。
 
