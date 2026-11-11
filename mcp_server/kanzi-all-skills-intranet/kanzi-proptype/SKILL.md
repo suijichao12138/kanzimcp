@@ -66,6 +66,7 @@ mcp({"jsonrpc":"2.0","id":"2","method":"tools/call","params":{"name":"kz_invoke"
 # 用 @dict:k=v,k=v 传 options（v4 实测通过）
 mcp({"jsonrpc":"2.0","id":"3","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":ptlib,"method":"CreateCustomEnumProperty","args":["mcptest.state", "mcp创建属性测试", "mcptest", "@dict:off=0,on=1,ss=3"]}}})
 # 也兼容直接传 dict: args:["...", "...", "...", {"off":0,"on":1,"ss":3}]
+# 优先使用@dict:一次性创建。
 ```
 
 ### 3a. 枚举属性创建后单键值对增删改（2026-11-03 实测通过）

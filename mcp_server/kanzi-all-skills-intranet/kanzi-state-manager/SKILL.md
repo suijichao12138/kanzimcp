@@ -111,12 +111,23 @@ sm_ref = "@obj" + re.search(r'@obj(\d+)', r["result"]["content"][0]["text"]).gro
 r = mcp({"jsonrpc":"2.0","id":"3","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"@project","method":"CreateProjectItem","args":["@type:StateGroup","V4TestGroup","@obj:"+sm_ref[4:]]}}})
 sg_ref = "@obj" + re.search(r'@obj(\d+)', r["result"]["content"][0]["text"]).group(1)
 
+# 3.5 【必做，不可省略】设置 StateGroup 控制属性引用（ControllerProperty）！
+#     不设置 = StateGroup 没有控制属性，状态机永远无法根据属性值切状态！
+#     <目标属性PropertyType ref> 必须是【需求指定的自定义属性】（如 warning.value / warning.level）
+#     的 PropertyType 对象 ref —— 从工程属性库枚举定位，见下方「控制属性设置」章节。
+#     ⚠️ 严禁照抄本示例或文档示例里的演示属性（如 offset / FontStyleConcept.Size）！
+mcp kz_invoke target=<sg_ref> method=set_Item args=["StateGroupControllerPropertyTypeReference", "<需求指定的PropertyType ref>"]
+
 # 4. 创建 State（parent=SG）
 mcp({"jsonrpc":"2.0","id":"4","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"@project","method":"CreateProjectItem","args":["@type:State","V4TestState","@obj:"+sg_ref[4:]]}}})
 
 # 5. 【同一 batch 内】批量设置 state / stateobject（含但不限于：
 #    State 控制属性值、StateObject 的 TargetObjectPath/文本内容）
-mcp kz_invoke target=<State ref> method=set_Item args=["StateControllerPropertyValue", "@int:0"]
+# 5a. State 控制属性值【必做，不可省略】—— 不设控制值的 State 永远不会被激活！
+#     自定义属性先 AddProperty 再 set_Item，属性名 = 需求指定的控制属性（如 warning.value）：
+mcp kz_invoke target=<State ref> method=AddProperty args=["warning.value"]
+mcp kz_invoke target=<State ref> method=set_Item args=["warning.value", "@int:0"]
+# 5b. StateObject 的 TargetObjectPath / 属性内容
 mcp kz_invoke target=<State ref> method=CreateProjectItem args=["@type:StateObject","V4TestSO","@obj:<State ref>"]
 mcp kz_invoke target=<StateObject ref> method=set_Item args=["StateObject.TargetObjectPath", "@string:."]
 # 全部创建+设置都在 Begin...Commit 之间
@@ -150,6 +161,12 @@ mcp({"jsonrpc":"2.0","id":"sm","method":"tools/call","params":{"name":"kz_invoke
 
 ### 控制属性设置
 
+> 🚨 **铁律（2026-11-11 实测教训）**：
+> 1. **每个 StateGroup 创建后必须立刻设置控制属性引用**（`StateGroupControllerPropertyTypeReference`），不设 = 状态机无控制属性、整组废掉。
+> 2. **控制属性引用必须指向需求指定的自定义属性**（如 warning.value / warning.level）。**严禁**使用本 skill 或文档示例中的演示属性值（`offset`、`FloatPropertyType`、`FontStyleConcept.Size` 等）——曾发生子会话照抄示例把 warningGroup 控制属性设成 `offset` 的事故。
+> 3. **每个 State 必须设置控制属性值**（AddProperty + set_Item），同组内值必须唯一；漏设 = 该 State 永不激活。
+> 4. 完成后用 `get_Item ["StateGroupControllerPropertyTypeReference"]` 回读验证指向正确。
+
 #### StateGroup 控制属性引用
 
 ```python
@@ -161,7 +178,10 @@ mcp({"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"kz_invoke"
 mcp({"jsonrpc":"2.0","id":"2","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"<StateGroup ref>","method":"set_Item","args":["StateGroupControllerPropertyTypeReference", "<目标属性PropertyType ref>"]}}})
 # <目标属性PropertyType ref> = 目标属性的 PropertyType 对象（如 FloatPropertyTypePluginWrapper），
 #           从目标节点 get_Properties 获取（如 FontStyleConcept.Size）
+# ⚠️ 上一行的 FloatPropertyType / FontStyleConcept.Size 只是【类型示例】！
+#    实际必须传需求指定的控制属性（如 warning.value / warning.level）的 PropertyType ref。
 # ✅ v4 实测：set_Item 控制属性引用 + get_Item 回读均成功
+# ✅ 设置后必须回读验证：get_Item ["StateGroupControllerPropertyTypeReference"] 返回的 name 应为需求属性名
 ```
 
 #### State 控制属性值（用 @int: 避免数值歧义）

@@ -21,6 +21,7 @@ description: Kanzi 本地化全流程：读取（定位表/ExportTranslations �
 > 2. `Delete()` 在项目项上 = 删除整个项，危险。v13 删单行用 `kz_loc_entry_delete`（底层 Remove(key,true)），**不能用项目项的 Delete 删单行**。
 > 3. 探测删除方法名时，先在**备份/测试工程**上做，别在真实数据上试。
 > 4. 出事第一时间停写操作、检查 Undo/版本控制恢复，并如实报告。
+> 5. 优先使用多行或脚本一次创建，禁止单行逐个添加。脚本内`BeginBatchModification`/`CommitBatchModification`必须成对。
 
 ## 一、定位 Localization Table（底层）
 
