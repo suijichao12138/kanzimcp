@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from copilot import ToolInvocation, define_tool
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, create_model
 
 log = logging.getLogger("nlp-worker.task")
 
@@ -42,6 +42,9 @@ TASK_SKILLS: dict[str, list[str]] = {
     "alias": ["kanzi-alias"],
     "shader": ["kanzi-shader", "kanzi-material-brush"],
     "save-export": ["kanzi-save-export"],
+    # 大文件数据源预处理（主会话阶段3判断数据源大时第一个子任务；只提取数据，不调 Kanzi）
+    # 注：此类型 config.session_types 里也有，代码默认表加一行保证 AI 的 type 枚举提示包含它
+    "data-source-process": ["kanzi-data-source"],
 }
 
 # 所有子会话共用的通用支撑 skill（导航 + 总入口 + 工程切换 + 高频属性 + 子会话执行协议）
@@ -526,6 +529,23 @@ class TaskDispatcher:
 
     def build_tool(self):
         """注册 task_dispatch + task_status 工具（用 SDK define_tool 包装成 Tool）。"""
+        # 动态参数模型：type 枚举描述 = 代码默认表 + config session_types 合并
+        # （模块级 TaskDispatchParams 的 description 是静态的，只有代码默认 11 类；
+        #   config 里自定义的类型如 data-source-process 要运行时才出现，必须动态生成）
+        # 用 pydantic create_model 继承+覆盖字段（type() 动态创建无注解属性会报
+        #   PydanticUserError: Field overridden by non-annotated attribute）
+        all_types = sorted(self._all_types())
+        DynamicParams = create_model(
+            "TaskDispatchParams",
+            __base__=TaskDispatchParams,
+            type=(str, Field(description=f"任务类型: {', '.join(all_types)}")),
+        )
+        # task_status / task_cancel 的轻量参数模型：只需要可选 conversation_key，
+        # 不要求 type/objective（此前共用 TaskDispatchParams 导致 SDK 强制校验
+        # type+objective 报 Field required）
+        class LightParams(BaseModel):
+            conversation_key: str | None = Field(default=None, description="对话 key（一般省略）")
+
         async def status_handler(params: Any, invocation: ToolInvocation) -> str:
             conv = getattr(params, "conversation_key", None) or self.runtime.key_for_session_id(
                 invocation.session_id
@@ -538,7 +558,7 @@ class TaskDispatcher:
                 "查询当前对话的任务执行状态（busy 执行中 / idle 空闲）和进度。"
                 "非必须轮询；主会话一般等子会话回报即可。"
             ),
-            params_type=TaskDispatchParams,
+            params_type=LightParams,
             handler=status_handler,
             skip_permission=True,
             defer="never",
@@ -574,7 +594,7 @@ class TaskDispatcher:
                 "暂停/取消当前正在执行的子会话任务（用户要求暂停/取消时调用）。"
                 "取消后进度落盘保存，可重新派发续跑。当前无任务时返回提示。"
             ),
-            params_type=TaskDispatchParams,
+            params_type=LightParams,
             handler=cancel_handler,
             skip_permission=True,
             defer="never",
@@ -609,7 +629,7 @@ class TaskDispatcher:
                 "同一时间只能有一个任务在执行：若返回『上一个任务还在执行中』，说明有任务未完成。"
                 "用户要求暂停/取消时调用 task_cancel。任务进度自动落盘，主会话可随时查 task_status。"
             ),
-            params_type=TaskDispatchParams,
+            params_type=DynamicParams,
             handler=handler,
             skip_permission=True,
             defer="never",
