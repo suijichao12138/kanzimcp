@@ -162,7 +162,7 @@ async function loadGroup(key) {
     const form = $("#config-form");
     form.innerHTML = "";
 
-    if (g.kind === "fields") {
+    if (g.kind === "fields" || g.kind === "fields_with_models") {
       for (const f of g.fields) {
         const row = document.createElement("div");
         row.className = "form-row";
@@ -204,19 +204,27 @@ async function loadGroup(key) {
           input.value = f.value ?? f.default ?? "";
         } else if (f.type === "dict") {
           // dict 字段：每行一个 key → 逗号分隔值列表，可增删行
+          // 特殊：session_types 值可能是 {skills: [...], model: id} 结构，
+          // 拆成两列（skills + model）显示/编辑
           input = document.createElement("div");
           const dictVal = (f.value && typeof f.value === "object") ? f.value : {};
           const addDictRow = (k, v) => {
+            let skills = v, model = "";
+            if (v && typeof v === "object" && !Array.isArray(v)) {
+              skills = Array.isArray(v.skills) ? v.skills.join(", ") : String(v.skills || "");
+              model = v.model || "";
+            }
             const line = document.createElement("div");
             line.className = "dict-row";
             line.innerHTML = `
-              <input type="text" data-dict-key placeholder="类型名" value="${esc(k)}" style="width:150px">
-              <input type="text" data-dict-val placeholder="skill1, skill2" value="${esc(v)}" style="width:420px">
+              <input type="text" data-dict-key placeholder="类型名" value="${esc(k)}" style="width:130px">
+              <input type="text" data-dict-val placeholder="skill1, skill2" value="${esc(skills)}" style="width:320px">
+              <input type="text" data-dict-model placeholder="模型id(可选)" value="${esc(model)}" style="width:110px">
               <button type="button" class="small danger" data-dict-del>删除</button>`;
             line.querySelector("[data-dict-del]").addEventListener("click", () => line.remove());
             input.appendChild(line);
           };
-          Object.entries(dictVal).forEach(([k, v]) => addDictRow(k, Array.isArray(v) ? v.join(", ") : String(v)));
+          Object.entries(dictVal).forEach(([k, v]) => addDictRow(k, Array.isArray(v) ? v.join(", ") : v));
           const addBtn = document.createElement("button");
           addBtn.type = "button";
           addBtn.textContent = "+ 添加类型";
@@ -406,7 +414,7 @@ async function saveGroup(g) {
   try {
     const form = $("#config-form");
     const payload = { fields: {} };
-    if (g.kind === "fields") {
+    if (g.kind === "fields" || g.kind === "fields_with_models") {
       form.querySelectorAll("[data-key]").forEach((el) => {
         const key = el.dataset.key;
         const type = el.dataset.type;
@@ -420,8 +428,17 @@ async function saveGroup(g) {
           const dict = {};
           el.querySelectorAll("[data-dict-key]").forEach((line) => {
             const k = line.value.trim();
-            const v = line.closest(".dict-row").querySelector("[data-dict-val]").value;
-            if (k) dict[k] = v.split(",").map((x) => x.trim()).filter(Boolean);
+            const row = line.closest(".dict-row");
+            const v = row.querySelector("[data-dict-val]").value;
+            const model = row.querySelector("[data-dict-model]")?.value?.trim() || "";
+            const skills = v.split(",").map((x) => x.trim()).filter(Boolean);
+            if (!k) return;
+            // 有 model → 存 {skills, model} 结构；否则存纯列表（兼容旧格式）
+            if (model) {
+              dict[k] = { skills, model };
+            } else {
+              dict[k] = skills;
+            }
           });
           val = dict;
         } else val = el.value;
