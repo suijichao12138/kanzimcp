@@ -42,12 +42,14 @@ from session_store import SessionStore
 
 log = logging.getLogger("nlp-worker")
 
-CommandName = Literal["new", "status", "cancel", "help"]
+CommandName = Literal["new", "status", "cancel", "help", "models", "model"]
 HELP_TEXT = (
     "Commands:\n"
     "/new - create a new Copilot session\n"
     "/status - show current session\n"
     "/cancel - cancel the active turn\n"
+    "/models - list available models\n"
+    "/model <id> - switch main session model (takes effect on /new)\n"
     "/help - show this help"
 )
 _FILE_MARKER = re.compile(
@@ -60,13 +62,21 @@ _FILE_MARKER = re.compile(
 @dataclass(frozen=True, slots=True)
 class Command:
     name: CommandName
+    arg: str | None = None
 
 
 def parse_command(text: str) -> Command | None:
-    name = text.strip().partition(" ")[0].removeprefix("/").lower()
-    if not text.strip().startswith("/") or name not in {"new", "status", "cancel", "help"}:
+    stripped = text.strip()
+    if not stripped.startswith("/"):
         return None
-    return Command(cast(CommandName, name))
+    head, _, rest = stripped.partition(" ")
+    name = head.removeprefix("/").lower()
+    if name not in {"new", "status", "cancel", "help", "models", "model"}:
+        return None
+    arg = rest.strip() or None
+    if name == "models" and arg:
+        return None
+    return Command(cast(CommandName, name), arg=arg)
 
 
 def split_message(text: str, limit: int) -> list[str]:
@@ -426,6 +436,16 @@ class NLPWorker:
             text = self.copilot.status(key)
         elif command.name == "new":
             text = f"Created new Copilot session: {await self.copilot.new_session(key)}"
+        elif command.name == "models":
+            text = self.copilot.list_models()
+        elif command.name == "model":
+            if not command.arg:
+                text = (
+                    self.copilot.list_models()
+                    + "\n\n用法: /model <模型id> —— 切换主会话模型（/new 后生效）"
+                )
+            else:
+                text = self.copilot.switch_model(key, command.arg)
         else:
             text = (
                 "Cancellation sent."

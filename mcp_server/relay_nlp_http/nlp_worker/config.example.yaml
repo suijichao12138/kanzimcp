@@ -34,25 +34,57 @@ copilot:
   infinite_session:
     # 自动压缩上下文（SDK 1.0.26 无限会话）：利用率到阈值自动后台压缩历史，防长对话溢出
     enabled: true
-    background_compaction_threshold: 0.80
-    buffer_exhaustion_threshold: 0.95
+    background_compaction_threshold: 0.85
+    buffer_exhaustion_threshold: 0.85
   large_output:
     enabled: true
     max_size_bytes: 51200
     # {session_id} is required: every SDK session writes to its own safe files folder.
     output_directory: ./.copilot-data/session-state/{session_id}/files
-  model:
-    #name: gpt-5.6-sol
-    #reasoning_effort: medium
-    #provider:
-    #  type: github
+  # ===== 模型配置（单模型 或 多模型注册表）=====
+  # 写法 A：单模型（兼容旧版）——直接配 model，行为与旧版完全一致。
+  #model:
+  #  name: deepseek-v4-flash-fp8
+  #  provider:
+  #    type: openai
+  #    base_url: https://oneapi.pateo.com.cn/v1
+  #    api_key: ${OPENAI_API_KEY}
+  #    wire_api: completions
+  #
+  # 写法 B：多模型注册表（可配任意多个，id 是内部引用名）——
+  #   - 主会话 /models 列出、/model <id> 切换（/new 后生效）；
+  #   - 子会话类型可在 task_dispatch.session_types.<type>.model 指定默认模型；
+  #   - default_model 不配 = 取第一个。
+  models:
+    - id: gpt-5.6-sol
+      name: gpt-5.6-sol
+      reasoning_effort: medium
+      provider:
+        type: github
     
-    name: deepseek-v4-flash-fp8
-    provider:
-      type: openai
-      base_url: https://oneapi.pateo.com.cn/v1
-      api_key: ${OPENAI_API_KEY}
-      wire_api: completions   #responses
+    - id: deepseek-v4-flash-fp8
+      name: deepseek-v4-flash-fp8
+      provider:
+        type: openai
+        base_url: https://oneapi.pateo.com.cn/v1
+        api_key: ${OPENAI_API_KEY}
+        wire_api: completions   #responses
+    
+    - id: GLM-5.3
+      name: GLM-5.3
+      provider:
+        type: openai
+        base_url: https://airdgw-pro.pateo.com.cn/api/v2
+        api_key: ${PATEO_API_KEY}
+        wire_api: completions
+    
+    - id: GLM-5.3-Flash
+      name: GLM-5.3-Flash
+      provider:
+        type: openai
+        base_url: https://airdgw-pro.pateo.com.cn/api/v2
+        api_key: ${PATEO_API_KEY}
+        wire_api: completions
     
     #name: deepseek-ai/DeepSeek-V4-Flash
     #provider:
@@ -73,6 +105,8 @@ copilot:
     #  wire_api: completions   #responses
     # Optional SDK 1.0.11 fields: transport, headers, model_id, wire_model,
     # max_prompt_tokens, max_output_tokens. Azure supports azure_api_version.
+  # 默认模型 id（不配 = models 第一个）
+  default_model: GLM-5.3
   agent:
     system_prompt: |
       你是通过飞书提供服务的 GitHub Copilot 助手。需要操作 Kanzi 时使用已配置的 MCP。
@@ -212,7 +246,7 @@ compatibility:
   # working_directory and .copilot-data/session-state/<session-id>/files are
   # allowed automatically; never add the entire .copilot-data directory here.
   upload_allowed_roots: 
-    - ./test
+    - ./
 
 messages:
   max_input_chars: 12000
@@ -239,36 +273,67 @@ task_dispatch:
   task_dir: ./workfile/tasks
   # 汇报模式：success_fail_only = 只报成功/失败原因（不回过程）
   report: success_fail_only
+  # 子会话默认模型 id：子会话类型没指定 model 时用它；
+  # 这个也没配 → 用 copilot.default_model。
+  default_model: GLM-5.3-Flash
   # 主会话注入的 skill（调度协议；不配则用代码默认：main-protocol + index + highfreq）
   main_skills:
     - kanzi-main-protocol
     - kanzi-skills-index
-    - kanzi-properties-highfreq
+    - kanzi-studio-mcp
   # 所有子会话共用的 skill（执行协议；不配则用代码默认：task-execution-protocol + index + studio-mcp + project-switch + highfreq）
   common_skills:
     - kanzi-task-execution-protocol
     - kanzi-skills-index
     - kanzi-properties-highfreq
+    - kanzi-studio-mcp
+    - kanzi-node-create
   # 子会话类型 → 该类型注入的专属 skill（不配则用代码默认表；每个类型再自动叠加 common_skills）
+  # 每个类型可额外配 model: <模型id> 指定该类型子会话默认模型（不配 = 全局 default_model）
+  # 旧写法 `类型: [skill列表]` 仍兼容。
   session_types:
-    create-node:        [kanzi-node-create, kanzi-layout, kanzi-textblock, kanzi-transform, kanzi-prefab]
-    create-state-machine: [kanzi-state-manager, kanzi-trigger]
-    create-property:    [kanzi-proptype, kanzi-prop-set]
-    create-resource:    [kanzi-resource-create, kanzi-resource-set, kanzi-asset-create]
-    localization:       [kanzi-localization]
-    texture:            [kanzi-asset-create]
-    animation:          [kanzi-animation]
-    binding:            [kanzi-binding]
-    alias:              [kanzi-alias]
-    shader:             [kanzi-shader, kanzi-material-brush]
-    save-export:        [kanzi-save-export]
+    create-node:
+      skills: [kanzi-node-create, kanzi-layout, kanzi-textblock, kanzi-transform, kanzi-prefab, kanzi-asset-create]
+      model: GLM-5.3-Flash   # 可选：该类型子会话默认模型
+    create-state-machine:
+      skills: [kanzi-state-manager, kanzi-trigger, kanzi-prop-set, kanzi-proptype]
+      model: GLM-5.3
+    create-property:
+      skills: [kanzi-proptype, kanzi-prop-set]
+      model: GLM-5.3
+    create-resource:
+      skills: [kanzi-resource-create, kanzi-resource-set, kanzi-asset-create]
+      model: GLM-5.3-Flash
+    localization:
+      skills: [kanzi-localization]
+      model: GLM-5.3
+    texture:
+      skills: [kanzi-asset-create]
+      model: GLM-5.3-Flash
+    animation:
+      skills: [kanzi-animation]
+      model: GLM-5.3
+    binding:
+      skills: [kanzi-binding, kanzi-prop-set, kanzi-alias, kanzi-prefab]
+      model: GLM-5.3-Flash
+    alias:
+      skills: [kanzi-alias]
+      model: GLM-5.3-Flash
+    shader:
+      skills: [kanzi-shader, kanzi-material-brush]
+      model: GLM-5.3
+    save-export:
+      skills: [kanzi-save-export]
+      model: GLM-5.3-Flash
     # 大文件数据源预处理（主会话阶段3判断数据源大时第一个子任务；只提取数据，不调 Kanzi）
-    data-source-process: [kanzi-data-source]
+    data-source-process:
+      skills: [kanzi-data-source]
+      model: GLM-5.3
 
-    # ===== 网页控制台（会话管理 + 配置修改，随 nlp_worker 同进程启动）=====
+# ===== 网页控制台（会话管理 + 配置修改，随 nlp_worker 同进程启动）=====
 web:
   enabled: true
   # 仅本机访问；改 0.0.0.0 或局域网 IP 可被其他机器访问（无鉴权，注意安全）
-  listen_host: 127.0.0.1
+  listen_host: 0.0.0.0
   listen_port: 8400
   

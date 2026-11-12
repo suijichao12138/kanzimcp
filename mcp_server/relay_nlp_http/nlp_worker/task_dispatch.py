@@ -79,6 +79,31 @@ class TaskDispatchParams(BaseModel):
 
 
 @dataclass
+class SessionTypeSpec:
+    """子会话类型配置：专属 skill 列表 + 可选模型 id。
+
+    兼容旧写法 `session_types: {type: [skill1, skill2]}`：
+    解析时 list → skills，model 缺省。
+    """
+    skills: list[str] = field(default_factory=list)
+    model: str | None = None
+
+    @classmethod
+    def from_config(cls, value: Any) -> "SessionTypeSpec":
+        if isinstance(value, list):
+            return cls(skills=[str(s) for s in value])
+        if isinstance(value, dict):
+            skills = value.get("skills") or []
+            if not isinstance(skills, list):
+                skills = [str(skills)]
+            return cls(
+                skills=[str(s) for s in skills],
+                model=value.get("model"),
+            )
+        raise ValueError(f"session_types 条目必须是 list 或 dict，收到: {value!r}")
+
+
+@dataclass
 class TaskDispatchConfig:
     enabled: bool = True
     task_dir: str = DEFAULT_TASK_DIR
@@ -88,8 +113,21 @@ class TaskDispatchConfig:
     main_skills: list[str] = field(default_factory=list)
     # 所有子会话共用的 skill（config 配；不配则用代码默认 COMMON_SKILLS）
     common_skills: list[str] = field(default_factory=list)
-    # 子会话类型 → 该类型注入的专属 skill（覆盖默认 TASK_SKILLS）
-    session_types: dict[str, list[str]] = field(default_factory=dict)
+    # 子会话默认模型 id：子会话类型没指定 model 时用它；
+    # 这个也没配 → 用 copilot.default_model。
+    default_model: str | None = None
+    # 子会话类型 → 该类型注入的专属 skill + 可选模型（覆盖默认 TASK_SKILLS）
+    # 兼容旧写法 dict[str, list[str]]：Any 类型 + _normalize_types 运行时转换
+    session_types: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        # 旧写法 dict[str, list[str]] → SessionTypeSpec 转换（直接构造时生效）
+        self._normalize_types()
+
+    def _normalize_types(self) -> None:
+        for k, v in list(self.session_types.items()):
+            if not isinstance(v, SessionTypeSpec):
+                self.session_types[k] = SessionTypeSpec.from_config(v)
 
     def main_skills_for(self) -> list[str]:
         """主会话 skill：config 优先，没有则用代码默认 MAIN_SKILLS。"""
@@ -101,9 +139,23 @@ class TaskDispatchConfig:
 
     def skills_for(self, task_type: str) -> list[str]:
         """取某类型的专属 skill：config 优先，没有则用代码默认。"""
-        if task_type in self.session_types:
-            return self.session_types[task_type]
+        self._normalize_types()
+        spec = self.session_types.get(task_type)
+        if spec is not None and spec.skills:
+            return spec.skills
         return TASK_SKILLS.get(task_type, [])
+
+    def model_for(self, task_type: str) -> str | None:
+        """取某类型的模型 id：config 指定则返回，没有返回 None（调用方用默认模型）。"""
+        self._normalize_types()
+        spec = self.session_types.get(task_type)
+        if spec is not None:
+            return spec.model
+        return None
+
+    def sub_session_default_model(self) -> str | None:
+        """子会话默认模型 id（未配返回 None → 调用方用 copilot.default_model）。"""
+        return self.default_model
 
 
 class TaskDispatcher:

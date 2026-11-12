@@ -696,9 +696,15 @@ class ProviderConfig(StrictModel):
 
 
 class ModelConfig(StrictModel):
+    # 模型 id：多模型注册表里的引用名（/model 命令、子会话类型 model 字段用它）。
+    # 缺省时自动取 name（保持单模型写法兼容）。
+    id: str | None = None
     name: str = Field(min_length=1)
     reasoning_effort: Literal["low", "medium", "high", "xhigh", "max"] | None = None
     provider: ProviderConfig = Field(default_factory=ProviderConfig)
+
+    def model_id(self) -> str:
+        return self.id or self.name
 
 
 class LargeOutputConfig(StrictModel):
@@ -763,7 +769,14 @@ class CopilotConfig(StrictModel):
     enable_session_store: bool = True
     large_output: LargeOutputConfig = Field(default_factory=LargeOutputConfig)
     infinite_session: InfiniteSessionConfig = Field(default_factory=InfiniteSessionConfig)
-    model: ModelConfig
+    # 兼容字段：单模型写法（copilot.model 直接配）。
+    # 配了 copilot.models 时忽略本字段（用 models + default_model）。
+    model: ModelConfig | None = None
+    # 多模型注册表：可配任意多个，id 为内部引用名；子会话类型/命令按 id 引用。
+    models: list[ModelConfig] = Field(default_factory=list)
+    # 默认模型 id：主会话默认 + 子会话未指定时兜底。
+    # 不配 = 取 models[0]；只配了 model 时 = 该模型的 id。
+    default_model: str | None = None
     agent: AgentConfig = Field(default_factory=AgentConfig)
     permissions: PermissionConfig = Field(default_factory=PermissionConfig)
 
@@ -772,6 +785,45 @@ class CopilotConfig(StrictModel):
         if not self.github_token and not self.use_logged_in_user:
             raise ValueError("github_token is required when use_logged_in_user=false")
         return self
+
+    @model_validator(mode="after")
+    def validate_models(self) -> CopilotConfig:
+        # 单模型写法：自动转成 models 注册表（id = name），行为与旧版完全一致。
+        if not self.models:
+            if self.model is None:
+                raise ValueError("copilot.model or copilot.models is required")
+            self.models = [self.model]
+        # 模型 id 唯一性校验 + 填充缺省 id（= name）
+        seen: dict[str, int] = {}
+        for i, m in enumerate(self.models):
+            mid = m.model_id()
+            if mid in seen:
+                raise ValueError(
+                    f"copilot.models 模型 id 重复: '{mid}' (第 {seen[mid]+1} 和 {i+1} 个)"
+                )
+            seen[mid] = i
+            if m.id is None:
+                m.id = m.name
+        if self.default_model is None:
+            self.default_model = self.models[0].model_id()
+        if self.default_model not in seen:
+            raise ValueError(
+                f"copilot.default_model '{self.default_model}' 不在 models 注册表中"
+            )
+        # 兼容：旧代码可能引用 self.config.copilot.model.name，把默认模型也填回 model 字段。
+        self.model = self._model_by_id(self.default_model)
+        return self
+
+    def _model_by_id(self, model_id: str) -> ModelConfig:
+        """按 id 查模型；未知 id 报错。"""
+        for m in self.models:
+            if m.model_id() == model_id:
+                return m
+        raise ValueError(f"未知模型 id: '{model_id}'。可用: {', '.join(m.model_id() for m in self.models)}")
+
+    def model_names(self) -> list[str]:
+        """所有模型 id 列表（供 /models 命令展示）。"""
+        return [m.model_id() for m in self.models]
 
 
 class SkillEntry(StrictModel):
@@ -1290,22 +1342,15 @@ def _client_options(
 
 
 def _config_secrets(config: AppConfig) -> list[str]:
-    provider = config.copilot.model.provider
-    return [
-        value
-        for value in (
-            config.copilot.github_token,
-            provider.api_key,
-            provider.bearer_token,
-            *(
-                value
-                for server in config.mcp_servers.values()
-                for value in getattr(server, "headers", {}).values()
-            ),
-            *provider.headers.values(),
-        )
-        if value
-    ]
+    # 收集所有模型 provider 的密钥（多模型场景每个模型的 api_key 都要脱敏）
+    values: list[str] = [config.copilot.github_token] if config.copilot.github_token else []
+    for m in config.copilot.models:
+        p = m.provider
+        values.extend(v for v in (p.api_key, p.bearer_token) if v)
+        values.extend(v for v in p.headers.values() if v)
+    for server in config.mcp_servers.values():
+        values.extend(v for v in getattr(server, "headers", {}).values() if v)
+    return values
 
 
 def _safe_config_error(config: AppConfig, error: BaseException) -> str:
@@ -2073,8 +2118,37 @@ class CopilotRuntime:
                 f"{EXPECTED_RUNTIME_VERSION}"
             )
 
+    def _model_for(self, task_type: str | None = None) -> ModelConfig:
+        """取某会话应使用的模型。
+
+        优先级：
+        - 子会话（task_type 非 None）：
+          1. task_dispatch.session_types[type].model 指定；
+          2. task_dispatch.default_model（子会话默认模型）；
+          3. copilot.default_model 兜底。
+        - 主会话：运行时切换的模型（/model 命令设置）→ 默认模型兜底。
+        """
+        if task_type:
+            # 子会话：类型指定 → 子会话默认 → 全局默认
+            type_model = self.config.task_dispatch.model_for(task_type)
+            if type_model:
+                return self.config.copilot._model_by_id(type_model)
+            sub_default = self.config.task_dispatch.sub_session_default_model()
+            if sub_default:
+                return self.config.copilot._model_by_id(sub_default)
+            return self.config.copilot._model_by_id(self.config.copilot.default_model)
+        # 主会话：运行时切换的模型覆盖（/model 命令设置，不持久化）
+        override = getattr(self, "_model_override", None)
+        if override:
+            try:
+                return self.config.copilot._model_by_id(override)
+            except ValueError:
+                pass
+        return self.config.copilot._model_by_id(self.config.copilot.default_model)
+
     def _build_session_kwargs(self, task_type: str | None = None) -> dict[str, Any]:
         copilot = self.config.copilot
+        model = self._model_for(task_type)
         # skill-mcp 远程配置（本地 entries 未命中时从它拉取 skill 内容；团队统一维护点）
         skill_mcp_cfg = self.config.mcp_servers.get("kanzi-skill-mcp")
         skill_mcp = (
@@ -2100,16 +2174,16 @@ class CopilotRuntime:
                 f"{prompt}\n\n<configured_skills>\n{skills}\n</configured_skills>"
             ).strip()
         kwargs: dict[str, Any] = {
-            "model": copilot.model.name,
+            "model": model.name,
             "working_directory": str(copilot.working_directory),
             "mcp_servers": convert_mcp_servers(self.config.mcp_servers),
             "on_permission_request": build_permission_handler(copilot.permissions),
             "enable_session_store": copilot.enable_session_store,
             "streaming": False,
         }
-        if copilot.model.reasoning_effort:
-            kwargs["reasoning_effort"] = copilot.model.reasoning_effort
-        if provider := copilot.model.provider.to_sdk():
+        if model.reasoning_effort:
+            kwargs["reasoning_effort"] = model.reasoning_effort
+        if provider := model.provider.to_sdk():
             kwargs["provider"] = provider
         if prompt:
             kwargs["system_message"] = {
@@ -2185,16 +2259,26 @@ class CopilotRuntime:
             for name, server in sorted(self.config.mcp_servers.items())
             if server.enabled
         }
+        # 多模型：全部模型表参与指纹（任一模型/provider 变更都触发重建），
+        # 保证切换模型后会话不会误复用旧配置。
+        models_payload = [
+            {
+                "id": m.model_id(),
+                "name": m.name,
+                "reasoning": m.reasoning_effort,
+                "provider": m.provider.model_dump(
+                    exclude={"api_key", "bearer_token", "headers"}
+                ),
+                "secret_hash": hashlib.sha256(
+                    f"{m.provider.api_key or ''}\0{m.provider.bearer_token or ''}\0"
+                    f"{json.dumps(m.provider.headers, sort_keys=True)}".encode()
+                ).hexdigest(),
+            }
+            for m in copilot.models
+        ]
         payload = {
-            "model": copilot.model.name,
-            "reasoning": copilot.model.reasoning_effort,
-            "provider": provider.model_dump(
-                exclude={"api_key", "bearer_token", "headers"}
-            ),
-            "provider_secret_hash": hashlib.sha256(
-                f"{provider.api_key or ''}\0{provider.bearer_token or ''}\0"
-                f"{json.dumps(provider.headers, sort_keys=True)}".encode()
-            ).hexdigest(),
+            "models": models_payload,
+            "default_model": copilot.default_model,
             "working_directory": str(copilot.working_directory),
             "system_prompt_hash": hashlib.sha256(
                 copilot.agent.system_prompt.encode()
@@ -2282,7 +2366,7 @@ class CopilotRuntime:
             key,
             self.config.relay.channel,
             session.session_id,
-            self.config.copilot.model.name,
+            self._model_for(task_type).name,
             self.config_fingerprint,
         )
         return session
@@ -2611,6 +2695,37 @@ class CopilotRuntime:
             await old.disconnect()
         self.store.delete(key)
         return (await self._create(key)).session_id
+
+    def switch_model(self, key: str, model_id: str) -> str:
+        """运行时切换主会话模型（/model 命令）。
+
+        只影响【主会话】新建的会话（下次新建生效，不打断当前会话）：
+        - 设置 _model_override，后续 _create/_resume 主会话用新模型；
+        - 已存在的会话继续用旧模型直到 /new 重建。
+        """
+        try:
+            model = self.config.copilot._model_by_id(model_id)
+        except ValueError as exc:
+            return f"❌ {exc}"
+        self._model_override = model.model_id()
+        return (
+            f"✅ 主会话模型已切换为 [{model.model_id()}]（{model.name}）。\n"
+            "当前会话继续用旧模型；发送 /new 后新会话使用新模型。"
+        )
+
+    def list_models(self) -> str:
+        """列出所有可用模型（/models 命令）。"""
+        lines = ["📋 可用模型："]
+        for m in self.config.copilot.models:
+            marker = "⭐" if m.model_id() == self.config.copilot.default_model else "  "
+            prov = m.provider.base_url or m.provider.type
+            lines.append(f"{marker} {m.model_id()}（{m.name} · {prov}）")
+        override = getattr(self, "_model_override", None)
+        if override:
+            lines.append(f"\n当前主会话使用：{override}")
+        else:
+            lines.append(f"\n当前主会话使用（默认）：{self.config.copilot.default_model}")
+        return "\n".join(lines)
 
     async def cancel(self, key: str) -> bool:
         if session := self.sessions.get(key):

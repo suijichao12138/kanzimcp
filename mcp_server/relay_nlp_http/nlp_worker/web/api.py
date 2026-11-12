@@ -327,7 +327,7 @@ def config_get(group: str) -> tuple[int, dict]:
     refs = _find_env_refs(raw)
     group_raw = raw.get(group)
 
-    if g.kind == "fields":
+    if g.kind in ("fields", "fields_with_models"):
         fields = []
         for f in g.fields:
             value = _get_path(group_raw, f.key, f.default) if isinstance(group_raw, dict) else f.default
@@ -345,7 +345,7 @@ def config_get(group: str) -> tuple[int, dict]:
                 "enum_values": f.enum_values,
                 "is_env_placeholder": isinstance(value, str) and ENV_PATTERN.search(value) is not None,
             })
-        return 200, _ok({
+        result: dict = {
             "group": g.key,
             "key": g.key,
             "title": g.title,
@@ -353,7 +353,39 @@ def config_get(group: str) -> tuple[int, dict]:
             "kind": g.kind,
             "fields": fields,
             "env_refs": refs,
-        })
+        }
+        if g.kind == "fields_with_models":
+            # 多模型注册表：同 model_entries 提取逻辑
+            models = []
+            cp = raw.get("copilot") or {}
+            for m in cp.get("models", []) or []:
+                if not isinstance(m, dict):
+                    continue
+                prov = m.get("provider") or {}
+                models.append({
+                    "id": m.get("id", ""),
+                    "name": m.get("name", ""),
+                    "reasoning_effort": m.get("reasoning_effort") or "",
+                    "provider_type": prov.get("type", "openai"),
+                    "base_url": prov.get("base_url", ""),
+                    "api_key": prov.get("api_key", ""),
+                    "wire_api": prov.get("wire_api", ""),
+                })
+            if not models:
+                single = cp.get("model") or {}
+                if isinstance(single, dict) and single.get("name"):
+                    prov = single.get("provider") or {}
+                    models.append({
+                        "id": single.get("id") or single.get("name", ""),
+                        "name": single.get("name", ""),
+                        "reasoning_effort": single.get("reasoning_effort") or "",
+                        "provider_type": prov.get("type", "openai"),
+                        "base_url": prov.get("base_url", ""),
+                        "api_key": prov.get("api_key", ""),
+                        "wire_api": prov.get("wire_api", ""),
+                    })
+            result["models"] = models
+        return 200, _ok(result)
     if g.kind == "dict_of_servers":
         servers = {}
         if isinstance(group_raw, dict):
@@ -388,6 +420,42 @@ def config_get(group: str) -> tuple[int, dict]:
             "max_total_bytes": max_total_bytes,
             "entries": entries, "env_refs": refs,
         })
+    if g.kind == "model_entries":
+        # copilot.models 多模型注册表：list of dict（id/name/reasoning_effort/provider）
+        models = []
+        cp = raw.get("copilot") or {}
+        for m in cp.get("models", []) or []:
+            if not isinstance(m, dict):
+                continue
+            prov = m.get("provider") or {}
+            entry = {
+                "id": m.get("id", ""),
+                "name": m.get("name", ""),
+                "reasoning_effort": m.get("reasoning_effort") or "",
+                "provider_type": prov.get("type", "openai"),
+                "base_url": prov.get("base_url", ""),
+                "api_key": prov.get("api_key", ""),
+                "wire_api": prov.get("wire_api", ""),
+            }
+            models.append(entry)
+        # 兼容单模型写法：copilot.model 存在且未配 models 时也显示出来
+        if not models:
+            single = cp.get("model") or {}
+            if isinstance(single, dict) and single.get("name"):
+                prov = single.get("provider") or {}
+                models.append({
+                    "id": single.get("id") or single.get("name", ""),
+                    "name": single.get("name", ""),
+                    "reasoning_effort": single.get("reasoning_effort") or "",
+                    "provider_type": prov.get("type", "openai"),
+                    "base_url": prov.get("base_url", ""),
+                    "api_key": prov.get("api_key", ""),
+                    "wire_api": prov.get("wire_api", ""),
+                })
+        return 200, _ok({
+            "group": g.key, "key": g.key, "title": g.title, "kind": g.kind,
+            "models": models, "env_refs": refs,
+        })
     return _err(400, f"不支持的组类型: {g.kind}")
 
 
@@ -398,7 +466,7 @@ def config_put(group: str, body: dict) -> tuple[int, dict]:
         return _err(404, f"未知配置组: {group}")
     raw = _read_raw_config()
 
-    if g.kind == "fields":
+    if g.kind in ("fields", "fields_with_models"):
         fields = (body or {}).get("fields", {})
         cur = raw.get(group)
         if cur is None or not isinstance(cur, dict):
@@ -441,6 +509,38 @@ def config_put(group: str, body: dict) -> tuple[int, dict]:
                     except json.JSONDecodeError:
                         value = {}
             _set_path(cur, f.key, value)
+        # fields_with_models：同时写回多模型注册表
+        if g.kind == "fields_with_models":
+            models_raw = (body or {}).get("models", [])
+            models = []
+            for m in models_raw:
+                if not isinstance(m, dict):
+                    continue
+                name = str(m.get("name", "")).strip()
+                if not name:
+                    continue
+                mid = str(m.get("id", "")).strip() or name
+                entry: dict = {"id": mid, "name": name}
+                re_eff = str(m.get("reasoning_effort", "")).strip()
+                if re_eff:
+                    entry["reasoning_effort"] = re_eff
+                prov: dict = {"type": str(m.get("provider_type", "openai")).strip() or "openai"}
+                base_url = str(m.get("base_url", "")).strip()
+                if base_url:
+                    prov["base_url"] = base_url
+                api_key = m.get("api_key")
+                if api_key is not None and str(api_key).strip():
+                    prov["api_key"] = str(api_key).strip()
+                wire_api = str(m.get("wire_api", "")).strip()
+                if wire_api:
+                    prov["wire_api"] = wire_api
+                if prov:
+                    entry["provider"] = prov
+                models.append(entry)
+            if models:
+                cur["models"] = models
+            else:
+                cur.pop("models", None)
     elif g.kind == "dict_of_servers":
         servers = (body or {}).get("servers", {})
         new_servers = {}
@@ -463,6 +563,43 @@ def config_put(group: str, body: dict) -> tuple[int, dict]:
             "max_total_bytes": max_total_bytes,
             "entries": [{"path": e.get("path", ""), "enabled": bool(e.get("enabled", True))} for e in entries],
         }
+    elif g.kind == "model_entries":
+        # 写回 copilot.models 多模型注册表
+        models_raw = (body or {}).get("models", [])
+        models = []
+        for m in models_raw:
+            if not isinstance(m, dict):
+                continue
+            name = str(m.get("name", "")).strip()
+            if not name:
+                continue
+            mid = str(m.get("id", "")).strip() or name
+            entry: dict = {"id": mid, "name": name}
+            re = str(m.get("reasoning_effort", "")).strip()
+            if re:
+                entry["reasoning_effort"] = re
+            prov: dict = {"type": str(m.get("provider_type", "openai")).strip() or "openai"}
+            base_url = str(m.get("base_url", "")).strip()
+            if base_url:
+                prov["base_url"] = base_url
+            api_key = m.get("api_key")
+            if api_key is not None and str(api_key).strip():
+                prov["api_key"] = str(api_key).strip()
+            wire_api = str(m.get("wire_api", "")).strip()
+            if wire_api:
+                prov["wire_api"] = wire_api
+            if prov:
+                entry["provider"] = prov
+            models.append(entry)
+        cp = raw.get("copilot")
+        if cp is None or not isinstance(cp, dict):
+            cp = {}
+            raw["copilot"] = cp
+        if models:
+            cp["models"] = models
+        else:
+            cp.pop("models", None)
+        # default_model 也在 copilot 组表单里，但由 fields 分支处理；这里不动
     else:
         return _err(400, f"不支持的组类型: {g.kind}")
 

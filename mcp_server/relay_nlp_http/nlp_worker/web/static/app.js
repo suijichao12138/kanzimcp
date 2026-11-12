@@ -245,6 +245,58 @@ async function loadGroup(key) {
         }
         form.appendChild(row);
       }
+      // 多模型注册表（copilot 组混合模式）：fields 渲染完后追加 models 编辑区
+      if (g.kind === "fields_with_models") {
+        const modelBox = document.createElement("div");
+        modelBox.className = "form-row";
+        modelBox.innerHTML = `<label>多模型注册表 <span class="env-tag">models</span>
+          <div class="help">id 是内部引用名（/model 命令、子会话类型 model 字段用它）；name 是发网关的模型名。
+          默认模型填上方「默认模型 id」字段。</div></label>`;
+        const modelList = document.createElement("div");
+        modelList.id = "model-entries";
+        const addModelRow = (m) => {
+          const line = document.createElement("div");
+          line.className = "mcp-box";
+          line.innerHTML = `
+            <div class="mcp-grid">
+              <div class="mcp-item"><div class="mcp-label">id</div>
+                <input type="text" data-model-field="id" value="${esc(m.id || "")}" placeholder="如 glm53"></div>
+              <div class="mcp-item"><div class="mcp-label">name（发网关）</div>
+                <input type="text" data-model-field="name" value="${esc(m.name || "")}" placeholder="如 GLM-5.3"></div>
+              <div class="mcp-item"><div class="mcp-label">推理强度</div>
+                <select data-model-field="reasoning_effort">
+                  <option value="">-</option>
+                  <option value="low" ${m.reasoning_effort === "low" ? "selected" : ""}>low</option>
+                  <option value="medium" ${m.reasoning_effort === "medium" ? "selected" : ""}>medium</option>
+                  <option value="high" ${m.reasoning_effort === "high" ? "selected" : ""}>high</option>
+                </select></div>
+              <div class="mcp-item"><div class="mcp-label">provider 类型</div>
+                <select data-model-field="provider_type">
+                  <option value="openai" ${m.provider_type === "openai" ? "selected" : ""}>openai</option>
+                  <option value="github" ${m.provider_type === "github" ? "selected" : ""}>github</option>
+                  <option value="azure" ${m.provider_type === "azure" ? "selected" : ""}>azure</option>
+                  <option value="anthropic" ${m.provider_type === "anthropic" ? "selected" : ""}>anthropic</option>
+                </select></div>
+              <div class="mcp-item mcp-wide"><div class="mcp-label">base_url</div>
+                <input type="text" data-model-field="base_url" value="${esc(m.base_url || "")}" placeholder="https://.../v1"></div>
+              <div class="mcp-item"><div class="mcp-label">api_key</div>
+                <input type="text" data-model-field="api_key" value="${esc(m.api_key || "")}" placeholder="${OPENAI_API_KEY}"></div>
+              <div class="mcp-item"><div class="mcp-label">wire_api</div>
+                <input type="text" data-model-field="wire_api" value="${esc(m.wire_api || "")}" placeholder="completions"></div>
+            </div>
+            <div class="mcp-footer"><button type="button" class="small danger" data-model-del>删除该模型</button></div>`;
+          line.querySelector("[data-model-del]").addEventListener("click", () => line.remove());
+          modelList.appendChild(line);
+        };
+        (g.models || []).forEach(addModelRow);
+        modelBox.appendChild(modelList);
+        const addModelBtn = document.createElement("button");
+        addModelBtn.type = "button";
+        addModelBtn.textContent = "+ 添加模型";
+        addModelBtn.addEventListener("click", () => addModelRow({ id: "", name: "", reasoning_effort: "", provider_type: "openai", base_url: "", api_key: "", wire_api: "" }));
+        modelBox.appendChild(addModelBtn);
+        form.appendChild(modelBox);
+      }
     } else if (g.kind === "dict_of_servers") {
       // 每个 server 一个字段块
       const servers = g.servers || {};
@@ -375,6 +427,23 @@ async function saveGroup(g) {
         } else val = el.value;
         payload.fields[key] = val;
       });
+      if (g.kind === "fields_with_models") {
+        const models = [];
+        form.querySelectorAll(".mcp-box").forEach((box) => {
+          if (!box.querySelector("[data-model-field]")) return;
+          const get = (f) => box.querySelector(`[data-model-field="${f}"]`)?.value ?? "";
+          models.push({
+            id: get("id").trim(),
+            name: get("name").trim(),
+            reasoning_effort: get("reasoning_effort"),
+            provider_type: get("provider_type"),
+            base_url: get("base_url").trim(),
+            api_key: get("api_key").trim(),
+            wire_api: get("wire_api").trim(),
+          });
+        });
+        payload.models = models.filter((m) => m.name || m.id);
+      }
     } else if (g.kind === "dict_of_servers") {
       const servers = {};
       form.querySelectorAll("[data-mcp]").forEach((el) => {
