@@ -121,12 +121,25 @@ def _del_path(obj: dict, dotted: str) -> None:
 
 
 def _env_map() -> dict[str, str]:
-    """读 .env 全部变量（不区分启用，纯 KV）。"""
+    """读 .env 全部变量（不区分启用，纯 KV）。
+
+    编码兜底与 copilot_runtime.load_config 一致：Windows 中文系统 .env 常存 GBK，
+    先试 utf-8-sig（兼容 BOM），失败再试 gbk，避免因编码读不到变量。
+    """
     path = _env_path()
     result: dict[str, str] = {}
     if not path.exists():
         return result
-    for line in path.read_text(encoding="utf-8").splitlines():
+    text = None
+    for _enc in ("utf-8-sig", "gbk"):
+        try:
+            text = path.read_text(encoding=_enc)
+            break
+        except (UnicodeDecodeError, LookupError):
+            continue
+    if text is None:
+        return result
+    for line in text.splitlines():
         line = line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
