@@ -294,7 +294,7 @@ task_dispatch:
   session_types:
     create-node:
       skills: [kanzi-node-create, kanzi-layout, kanzi-textblock, kanzi-transform, kanzi-prefab, kanzi-asset-create]
-      model: GLM-5.3-Flash   # 可选：该类型子会话默认模型
+      # model: GLM-5.3-Flash   # 可选：该类型子会话默认模型
     create-state-machine:
       skills: [kanzi-state-manager, kanzi-trigger, kanzi-prop-set, kanzi-proptype]
       model: GLM-5.3
@@ -303,28 +303,22 @@ task_dispatch:
       model: GLM-5.3
     create-resource:
       skills: [kanzi-resource-create, kanzi-resource-set, kanzi-asset-create]
-      model: GLM-5.3-Flash
     localization:
       skills: [kanzi-localization]
       model: GLM-5.3
     texture:
       skills: [kanzi-asset-create]
-      model: GLM-5.3-Flash
     animation:
       skills: [kanzi-animation]
-      model: GLM-5.3
     binding:
       skills: [kanzi-binding, kanzi-prop-set, kanzi-alias, kanzi-prefab]
-      model: GLM-5.3-Flash
     alias:
       skills: [kanzi-alias]
-      model: GLM-5.3-Flash
     shader:
       skills: [kanzi-shader, kanzi-material-brush]
       model: GLM-5.3
     save-export:
       skills: [kanzi-save-export]
-      model: GLM-5.3-Flash
     # 大文件数据源预处理（主会话阶段3判断数据源大时第一个子任务；只提取数据，不调 Kanzi）
     data-source-process:
       skills: [kanzi-data-source]

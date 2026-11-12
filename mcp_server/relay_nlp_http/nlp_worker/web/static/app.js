@@ -163,7 +163,11 @@ async function loadGroup(key) {
     form.innerHTML = "";
 
     if (g.kind === "fields" || g.kind === "fields_with_models") {
+      // 多模型模式：有 models 注册表时隐藏顶部单模型字段（model.name / model.provider.*），
+      // 避免两套配置同时显示误导；纯单模型配置（无 models）时照常显示。
+      const isMulti = g.kind === "fields_with_models" && Array.isArray(g.models) && g.models.length > 0;
       for (const f of g.fields) {
+        if (isMulti && f.key.startsWith("model.")) continue;
         const row = document.createElement("div");
         row.className = "form-row";
         const label = document.createElement("label");
@@ -288,7 +292,7 @@ async function loadGroup(key) {
               <div class="mcp-item mcp-wide"><div class="mcp-label">base_url</div>
                 <input type="text" data-model-field="base_url" value="${esc(m.base_url || "")}" placeholder="https://.../v1"></div>
               <div class="mcp-item"><div class="mcp-label">api_key</div>
-                <input type="text" data-model-field="api_key" value="${esc(m.api_key || "")}" placeholder="${OPENAI_API_KEY}"></div>
+                <input type="text" data-model-field="api_key" value="${esc(m.api_key || "")}" placeholder="\${OPENAI_API_KEY} 或真实 key"></div>
               <div class="mcp-item"><div class="mcp-label">wire_api</div>
                 <input type="text" data-model-field="wire_api" value="${esc(m.wire_api || "")}" placeholder="completions"></div>
             </div>
@@ -415,6 +419,7 @@ async function saveGroup(g) {
     const form = $("#config-form");
     const payload = { fields: {} };
     if (g.kind === "fields" || g.kind === "fields_with_models") {
+      const isMulti = g.kind === "fields_with_models" && Array.isArray(g.models) && g.models.length > 0;
       form.querySelectorAll("[data-key]").forEach((el) => {
         const key = el.dataset.key;
         const type = el.dataset.type;
@@ -444,6 +449,15 @@ async function saveGroup(g) {
         } else val = el.value;
         payload.fields[key] = val;
       });
+      // 多模型模式：隐藏的单模型字段（model.*）不在表单里，保存时显式清空，
+      // 后端 _set_path 收到空值会删除，避免 config.yaml 残留单模型配置（如 gpt-5.4）
+      if (isMulti) {
+        g.fields.forEach((f) => {
+          if (f.key.startsWith("model.")) {
+            payload.fields[f.key] = "";
+          }
+        });
+      }
       if (g.kind === "fields_with_models") {
         const models = [];
         form.querySelectorAll(".mcp-box").forEach((box) => {
