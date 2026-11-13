@@ -225,6 +225,7 @@ StateObject（子 State）通过 TargetObjectPath 指向目标节点。**路径�
 
 > ⚠️ **路径语法要点**：
 > - **必须相对路径，用 `.` 开头**（`.` 当前节点；`./xxx` 子节点）。**不能写成绝对路径**（如 `/Screens/...`）或裸名字（如 `popup`）。
+> - **解析基准是 StateManager 实际挂接的节点**；挂接/拆分/复用组后路径可能失效，必须按下方「挂接基准与多状态机检查清单」回读验证。
 > - **用 `@string:` 前缀**保证是字符串，不被当节点引用解析。
 > - `./popup` 表示「状态机使用节点的 popup 子节点」——当 State 控制的是父节点、但某个 StateObject 要操作它的子节点（如弹窗、文本）时用。
 
@@ -238,6 +239,24 @@ mcp({"jsonrpc":"2.0","id":"2","method":"tools/call","params":{"name":"kz_invoke"
 # 设置文本内容（resourceID 写法）
 mcp({"jsonrpc":"2.0","id":"3","method":"tools/call","params":{"name":"kz_invoke","arguments":{"target":"<StateObject ref>","method":"set_Item","args":["TextConcept.Text","@string:KzResourceID:1"]}}})
 ```
+
+##### 🚨 挂接基准与多状态机检查清单（2026-11-13 test 工程报警弹窗事故教训）
+
+> **教训 1：「N 个状态机」= N 个独立 StateManager 资源。**
+> 需求写「创建 warning_level 状态机」「创建 warning 状态机」时，曾被实现成**一个 StateManager 下的两个 StateGroup**，且只挂到根节点 —— 与需求「两个状态机分别应用到 popup / warning 节点」不符。
+> 规则：
+> - 需求说「N 个状态机 / 分别应用到 X、Y 节点」→ 创建 **N 个独立 StateManager 资源**（各自命名、各自挂接），**禁止**合并为一个 StateManager 下的 N 个 StateGroup。
+> - 只有需求明确写「同一状态机下的多个状态组」才允许合并到一个 StateManager。
+> - 完成度核查时必须回读：工程中 StateManager 资源数量 = 需求数量，且每个目标节点的 StateManager 引用各自正确。
+
+> **教训 2：TargetObjectPath 的解析基准 = StateManager 实际挂接的节点。**
+> 拆分前组挂在 warning 根（StateObject 路径 `./popup/bg` 正确）；拆出独立 StateManager 改挂 popup 后，`./popup/bg` 按新基准解析为 popup/popup/bg —— **不存在，状态机静默失效**。
+> 规则（挂接/拆分/复用已有 StateGroup 后必做）：
+> 1. **回读全部 StateObject 的 TargetObjectPath**（逐 State 调 `get_TargetObjectPath`，不要只抽查挂接属性）。
+> 2. 以**当前挂接节点**为基准拼接完整路径，逐一确认目标节点存在（kz_get_node_tree 或节点 get_Name 探测）。
+> 3. 基准变了路径必须重算：`./<挂接节点到目标的相对路径>`（例：挂 popup、控制其子 bg → `./bg`；挂 warning 根、控制其子 popup → `./popup`）。
+> 4. 验证时机：① 首次挂接后；② 挂接节点变更 / 拆分 / 复用已有组之后；③ 回报「挂接通过」**之前** —— 只验证 StateManager 引用和状态数**不足以**判定正确，路径解析必须单独验证。
+> 5. 回报格式必须包含：每个 StateManager 的挂接节点 + 全部 StateObject 路径值（去重集合）+ 按基准的解析结果。
 
 ##### StateObject 设置任意属性（含资源引用型）
 
