@@ -7,7 +7,16 @@ description: 子会话执行协议（注入所有 task 子会话）。读任务�
 
 > 你是 Kanzi 某类型的执行子会话。上下文与主会话隔离：主会话只给你「任务描述单」（objective + constraints + data_source），**具体参数值由你从数据源自行提取**，你不依赖主会话给参数。
 
-## 执行流程（七步）
+## 任务类型分流（第一步先判定）
+
+**先看你的任务类型（type）**，走对应分支：
+
+- **Studio 操作类**（create-node / create-state-machine / create-property / create-resource / localization / texture / animation / binding / alias / shader / save-export / data-source-process 等）：**执行下方七步**（读描述单 → 摘要 → 提参数 → 命令序列 → 分组 → 批量执行）。
+- **实机/设备测试类**（kanzi-monitor）：**不走七步**，改走 `kanzi-monitor-task` skill——直接通读该 skill（已注入）全文，按其「连接 → 命令参考 → 测试配方 → 回报格式」执行，用 `monitor_tools\*.py` 脚本发命令，**不生成 MCP 命令序列表格、不调 Kanzi Studio 工具**。
+
+> ⚠️ 实机测试（串口/控制台命令）与 Studio 操作（kz_* MCP 调用）是两套完全不同的执行方式，**绝不混用**：实机任务禁止调 Studio 工具，Studio 任务禁止发串口命令。
+
+## 执行流程（七步）（仅 Studio 操作类任务）
 
 1. **读任务描述单**：objective（目标）、constraints（约束）、data_source（数据源路径）、project（工程）、type（你的类型）。
 2. **生成需求理解摘要**：根据完整任务清单生成需求理解摘要，提取并列出：涉及工程、涉及资源（Property Type / Texture / Localization / 字体 / 状态机 / 动画）、节点结构（新建/修改/删除）、每个对象的属性、绑定、动画、触发器清单。。
@@ -32,7 +41,7 @@ description: 子会话执行协议（注入所有 task 子会话）。读任务�
 5. **@obj 按工程隔离**：`kz_select_project` 切换工程会清空上一工程引用缓存；cachedRefs/prefetchPlan 按工程分区，绝不跨工程复用引用。
 6. **中文字符串直接传中文**，不传 \uXXXX。
 7. **大输出一律落盘**（get_Properties/get_Options/get_Children/get_Node_Tree）：只用 grep、定向查询或脚本提取必要字段，禁止读取完整 dump。操作本地文件一律使用脚本落盘，禁止完整读取。
-8. **批量优先**：一次提交同类资源或属性，禁止可合并的逐项调用和逐项读回。尤其是状态机创建和多国语表操作必须使用脚本批量创建，禁止逐个操作。属性创建优先使用 @dict:k=v,k=v 传 options一次性创建。
+8. **批量优先**：一次提交同类资源或属性，禁止可合并的逐项调用和逐项读回。尤其是状态机创建必须使用脚本批量创建，禁止逐个操作。
 9. **返回检查（抽样 + 关键步骤必查）**：
    - **批量同类调用**（如 set_Item 20 次）：必须检查首项和末项的返回；同时记录“预期数量”与“实际返回数量”，两者相等才视为通过。不相等时逐项检查，不允许只抽样。
    - **关键步骤必查**：`BeginBatchModification`/`CommitBatchModification`、创建类（Create*/kz_create_node）、有依赖的衔接步骤 —— 这些必须看返回，error/❌/空立即停。

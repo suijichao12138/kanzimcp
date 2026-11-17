@@ -7,7 +7,16 @@ description: 子会话执行协议（注入所有 task 子会话）。读任务�
 
 > 你是 Kanzi 某类型的执行子会话。上下文与主会话隔离：主会话只给你「任务描述单」（objective + constraints + data_source），**具体参数值由你从数据源自行提取**，你不依赖主会话给参数。
 
-## 执行流程（七步）
+## 任务类型分流（第一步先判定）
+
+**先看你的任务类型（type）**，走对应分支：
+
+- **Studio 操作类**（create-node / create-state-machine / create-property / create-resource / localization / texture / animation / binding / alias / shader / save-export / data-source-process 等）：**执行下方七步**（读描述单 → 摘要 → 提参数 → 命令序列 → 分组 → 批量执行）。
+- **实机/设备测试类**（kanzi-monitor）：**不走七步**，改走 `kanzi-monitor-task` skill——直接通读该 skill（已注入）全文，按其「连接 → 命令参考 → 测试配方 → 回报格式」执行，用 `monitor_tools\*.py` 脚本发命令，**不生成 MCP 命令序列表格、不调 Kanzi Studio 工具**。
+
+> ⚠️ 实机测试（串口/控制台命令）与 Studio 操作（kz_* MCP 调用）是两套完全不同的执行方式，**绝不混用**：实机任务禁止调 Studio 工具，Studio 任务禁止发串口命令。
+
+## 执行流程（七步）（仅 Studio 操作类任务）
 
 1. **读任务描述单**：objective（目标）、constraints（约束）、data_source（数据源路径）、project（工程）、type（你的类型）。
 2. **生成需求理解摘要**：根据完整任务清单生成需求理解摘要，提取并列出：涉及工程、涉及资源（Property Type / Texture / Localization / 字体 / 状态机 / 动画）、节点结构（新建/修改/删除）、每个对象的属性、绑定、动画、触发器清单。。

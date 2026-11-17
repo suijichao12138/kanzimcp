@@ -10,8 +10,6 @@ description: Kanzi skills 导航索引（小模型适配版）。唯一常驻的
 
 ## 🛠️ 使用规则（必须遵守）
 
-> ⚠️ **地址规则**：若环境已配置好相关 MCP（如 nlp_worker config.yaml 的 `mcp_servers` 或部署机已建网关），**必须使用已配置的 MCP 地址**；`<kz_mcp_http机IP>` 仅为通用占位符（未配置时的示例写法）。
-
 skill MCP 提供 **3 个工具**（9001 网关 `/kanzi_skill_mcp`）：
 
 | 工具 | 用途 | 用法 |
@@ -26,7 +24,7 @@ skill MCP 提供 **3 个工具**（9001 网关 `/kanzi_skill_mcp`）：
 2. **要操作步骤** → `list_skills()` 找到对应 skill → `get_skill("skill名")` 拿完整步骤照着做。
 3. **禁止**：直接读 `skills/*/SKILL.md` 文件、反复查 docmcp、多次调工具试错。
 4. `search_property` 查不到 → 换更短关键词再试一次，还不行才考虑读全量属性文件对应段落。
-5. **完全按照skill执行**：获取到对应skill后必须通读全文，严格按照skill执行，禁止脑补API流程/参数。
+5. **完全按照skill执行**：获取到对应skill后必须通读全文，严格按照skill执行。
 
 ## 📋 高频属性（常驻，不用查工具）
 
@@ -87,6 +85,14 @@ skill MCP 提供 **3 个工具**（9001 网关 `/kanzi_skill_mcp`）：
 | 截图 | `kanzi-screenshot` |
 | **刷新工程树 / 刷新 Preview**（创建后必刷/截图前必刷） | `kanzi-refresh` |
 
+### 实机/设备测试（QNX 仪表，非 Studio 操作）
+| 任务 | skill 名 |
+|------|---------|
+| 主会话调度（串口探测/起桥/启程序/验收/派发/收尾） | `kanzi-monitor-main` |
+| 子会话执行（monitor 控制台命令/测试配方/回报） | `kanzi-monitor-task` |
+
+> ⚠️ 实机测试与 Studio 操作是**两套独立体系**：实机用 monitor 插件控制台（串口/网络），**不用** kz_* Studio 工具；Studio 操作**不用**串口命令。主会话/子会话按任务类型各自注入对应 skill，不混用。
+
 ### 属性全量（离线，不加载）
 | 文件 | 用途 |
 |------|------|
@@ -98,10 +104,10 @@ skill MCP 提供 **3 个工具**（9001 网关 `/kanzi_skill_mcp`）：
 2. **一切操作内容走工具**（get_skill 一次拿全小 skill）。
 3. **绝不**整读 `kanzi-properties-all`（254KB）。
 4. **绝不**反复调 docmcp / 工具试错 —— 拿不到就换关键词再试一次，或直接问。
-5. **🚫 绝不重启 / 关闭 / 退出 Kanzi Studio！** 这些操作会造成未保存内容丢失、且断连后可能再也连不上。**禁止**：重启 Studio、`CloseProject()`、`CloseSolution()`、`ExitApplication()`、杀 Studio 进程。遇到 Studio 卡死/异常 → 停止当前操作、重新枚举 ref 恢复连接；需要真重启/关闭时交给用户人工处理，不自己操作。
+5. **🚫 绝不重启 / 关闭 / 退出 Kanzi Studio！** 这些操作会造成未保存内容丢失、且断连后可能再也连不上。**禁止**：重启 Studio、`CloseProject()`、`CloseSolution()`、`ExitApplication()`、杀 Studio 进程。遇到 Studio 卡死/异常 → 停止当前操作、重新枚举 ref 恢复连接；需要真重启/关闭时交给人工处理，不自己操作。
 6. **🔁 批量操作必须成对**：`BeginBatchModification` 和 `CommitBatchModification` **必须成对出现**（不成对会卡死 Studio）。创建状态机的脚本必须把 state/stateobject 的**创建 + 设置**（含但不限于：State 控制属性值、StateObject 的 TargetObjectPath/文本内容）全部包进同一个 batch。
 7. **🔌 脚本必须单连接执行所有调用**：一个脚本**只建一次连接**（一个 WS client 连接/一个进程），**所有调用复用同一连接**提交。**禁止每次调用都重新连接/新开进程/新开连接**（会造成 @obj ref 缓存失效、batch 事务跨连接错乱、触发 Studio 崩溃）。批量脚本的正确结构：`建连接 → BeginBatchModification → 循环内复用同一连接发 N 次调用 → CommitBatchModification → 关闭连接`。
-8. **🔁 创建后必须刷新工程树 + 截图前必须刷新 Preview！****任何创建操作完成后，必须刷新工程树**，否则新建内容在 Kanzi Studio 里不可见。**适用于所有创建**：新建节点、模板（Prefab）、属性、状态机（StateManager/StateGroup/State/StateObject）、多国语表、纹理、动画、笔刷、资源条目、别名等，**创建之后必须 SelectProjectItems**。截图前必须先 RestartPreview。**完整步骤见 `kanzi-refresh` skill**（拿 Commands → SelectProjectItems / RestartPreview）。
+8. **🔁 创建后必须刷新工程树 + 截图前必须刷新 Preview！**（2026-10-21 要求）**任何创建操作完成后，必须刷新工程树**，否则新建内容在 Kanzi Studio 里不可见。**适用于所有创建**：新建节点、模板（Prefab）、属性、状态机（StateManager/StateGroup/State/StateObject）、多国语表、纹理、动画、笔刷、资源条目、别名等，**创建之后必须 SelectProjectItems**。截图前必须先 RestartPreview。**完整步骤见 `kanzi-refresh` skill**（拿 Commands → SelectProjectItems / RestartPreview）。
 
 ## 🚫 命名铁律（所有创建/命名操作通用）
 

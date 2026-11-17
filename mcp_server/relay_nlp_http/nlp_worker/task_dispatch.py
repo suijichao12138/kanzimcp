@@ -45,6 +45,8 @@ TASK_SKILLS: dict[str, list[str]] = {
     # 大文件数据源预处理（主会话阶段3判断数据源大时第一个子任务；只提取数据，不调 Kanzi）
     # 注：此类型 config.session_types 里也有，代码默认表加一行保证 AI 的 type 枚举提示包含它
     "data-source-process": ["kanzi-data-source"],
+    # 设备测试（串口中继桥 + monitor 插件控制台）：子会话只跑测试命令，环境由主会话就绪
+    "kanzi-monitor": ["kanzi-monitor-task"],
 }
 
 # 所有子会话共用的通用支撑 skill（导航 + 总入口 + 工程切换 + 高频属性 + 子会话执行协议）
@@ -63,6 +65,12 @@ MAIN_SKILLS = [
     "kanzi-main-protocol",      # 主会话调度协议（必装）
     "kanzi-skills-index",
     "kanzi-properties-highfreq",
+]
+
+# 设备测试类主会话额外注入的调度 skill（与 Studio 操作类主会话隔离，
+# 避免无关会话被注入串口/测试内容；由 nlp_worker 侧按需求注入）
+MONITOR_MAIN_SKILLS = [
+    "kanzi-monitor-main",
 ]
 
 # 默认任务参数目录（相对 working_directory；config 可覆盖）

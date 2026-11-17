@@ -85,6 +85,14 @@ skill MCP 提供 **3 个工具**（9001 网关 `/kanzi_skill_mcp`）：
 | 截图 | `kanzi-screenshot` |
 | **刷新工程树 / 刷新 Preview**（创建后必刷/截图前必刷） | `kanzi-refresh` |
 
+### 实机/设备测试（QNX 仪表，非 Studio 操作）
+| 任务 | skill 名 |
+|------|---------|
+| 主会话调度（串口探测/起桥/启程序/验收/派发/收尾） | `kanzi-monitor-main` |
+| 子会话执行（monitor 控制台命令/测试配方/回报） | `kanzi-monitor-task` |
+
+> ⚠️ 实机测试与 Studio 操作是**两套独立体系**：实机用 monitor 插件控制台（串口/网络），**不用** kz_* Studio 工具；Studio 操作**不用**串口命令。主会话/子会话按任务类型各自注入对应 skill，不混用。
+
 ### 属性全量（离线，不加载）
 | 文件 | 用途 |
 |------|------|
