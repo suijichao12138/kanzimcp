@@ -62,16 +62,18 @@ copilot:
       provider:
         type: github
     
-    - id: deepseek-v4-flash-fp8
-      name: deepseek-v4-flash-fp8
+    - id: deepseek-v4.1-flash
+      name: deepseek-v4.1-flash
+      reasoning_effort: medium
       provider:
         type: openai
-        base_url: https://oneapi.pateo.com.cn/v1
-        api_key: ${OPENAI_API_KEY}
+        base_url: https://airdgw-pro.pateo.com.cn/api/v2
+        api_key: ${PATEO_API_KEY}
         wire_api: completions   #responses
     
     - id: GLM-5.3
       name: GLM-5.3
+      reasoning_effort: low
       provider:
         type: openai
         base_url: https://airdgw-pro.pateo.com.cn/api/v2
@@ -80,11 +82,20 @@ copilot:
     
     - id: GLM-5.3-Flash
       name: GLM-5.3-Flash
+      reasoning_effort: medium
       provider:
         type: openai
         base_url: https://airdgw-pro.pateo.com.cn/api/v2
         api_key: ${PATEO_API_KEY}
         wire_api: completions
+    
+    - id: deepseek-v4-flash-fp8
+      name: deepseek-v4-flash-fp8
+      provider:
+        type: openai
+        base_url: https://oneapi.pateo.com.cn/v1
+        api_key: ${OPENAI_API_KEY}
+        wire_api: completions   #responses
     
     #name: deepseek-ai/DeepSeek-V4-Flash
     #provider:
@@ -106,7 +117,7 @@ copilot:
     # Optional SDK 1.0.11 fields: transport, headers, model_id, wire_model,
     # max_prompt_tokens, max_output_tokens. Azure supports azure_api_version.
   # 默认模型 id（不配 = models 第一个）
-  default_model: GLM-5.3
+  default_model: deepseek-v4.1-flash
   agent:
     system_prompt: |
       你是通过飞书提供服务的 GitHub Copilot 助手。需要操作 Kanzi 时使用已配置的 MCP。
@@ -137,6 +148,7 @@ copilot:
       - kanzi-studio-mcp-*
       - kanzi-api-mcp-*
       - kanzi-doc-mcp-*
+      - kanzi-plugin-doc-mcp-*
     deny: []
       #- shell
       #- write_file
@@ -183,6 +195,14 @@ mcp_servers:
       X-Kanzi-User: ${KANZI_MCP_USERNAME}
     tools: ["*"]
     timeout_seconds: 300
+  kanzi-plugin-doc-mcp:
+    enabled: true
+    type: http
+    url: http://${KANZI_MCP_IP}/kanzi_plugin_doc_mcp
+    headers:
+      X-Kanzi-User: ${KANZI_MCP_USERNAME}
+    tools: ["*"]
+    timeout_seconds: 300
   kanzi-api-mcp:
     enabled: true
     type: http
@@ -195,15 +215,6 @@ mcp_servers:
     enabled: true
     type: http
     url: http://${KANZI_MCP_IP}/kanzi_doc_mcp
-    headers:
-      X-Kanzi-User: ${KANZI_MCP_USERNAME}
-    tools: ["*"]
-    timeout_seconds: 300
-  # 本地插件文档（kanzi_plugins 目录；kz_mcp_http 需 --plugins-dir 启用）
-  kanzi-plugin-doc-mcp:
-    enabled: true
-    type: http
-    url: http://${KANZI_MCP_IP}/kanzi_plugin_doc_mcp
     headers:
       X-Kanzi-User: ${KANZI_MCP_USERNAME}
     tools: ["*"]
@@ -284,12 +295,13 @@ task_dispatch:
   report: success_fail_only
   # 子会话默认模型 id：子会话类型没指定 model 时用它；
   # 这个也没配 → 用 copilot.default_model。
-  default_model: GLM-5.3-Flash
+  default_model: deepseek-v4.1-flash
   # 主会话注入的 skill（调度协议；不配则用代码默认：main-protocol + index + highfreq）
   main_skills:
     - kanzi-main-protocol
     - kanzi-skills-index
     - kanzi-studio-mcp
+    - kanzi-monitor-main
   # 所有子会话共用的 skill（执行协议；不配则用代码默认：task-execution-protocol + index + studio-mcp + project-switch + highfreq）
   common_skills:
     - kanzi-task-execution-protocol
@@ -309,12 +321,10 @@ task_dispatch:
       model: GLM-5.3
     create-property:
       skills: [kanzi-proptype, kanzi-prop-set]
-      model: GLM-5.3
     create-resource:
       skills: [kanzi-resource-create, kanzi-resource-set, kanzi-asset-create]
     localization:
       skills: [kanzi-localization]
-      model: GLM-5.3
     texture:
       skills: [kanzi-asset-create]
     animation:
@@ -331,6 +341,9 @@ task_dispatch:
     # 大文件数据源预处理（主会话阶段3判断数据源大时第一个子任务；只提取数据，不调 Kanzi）
     data-source-process:
       skills: [kanzi-data-source]
+      model: GLM-5.3
+    kanzi-monitor:
+      skills: [kanzi-monitor-task]
       model: GLM-5.3
 
 # ===== 网页控制台（会话管理 + 配置修改，随 nlp_worker 同进程启动）=====

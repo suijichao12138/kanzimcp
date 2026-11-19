@@ -26,6 +26,24 @@ skill MCP 提供 **3 个工具**（9001 网关 `/kanzi_skill_mcp`）：
 4. `search_property` 查不到 → 换更短关键词再试一次，还不行才考虑读全量属性文件对应段落。
 5. **完全按照skill执行**：获取到对应skill后必须通读全文，严格按照skill执行。
 
+## 📦 插件文档 MCP（kanzi_plugin_doc_mcp，查本地插件文档）
+
+插件文档 MCP 提供 **3 个工具**（9001 网关 `/kanzi_plugin_doc_mcp`）：
+
+| 工具 | 用途 | 用法 |
+|------|------|------|
+| `list_plugins()` | **看有哪些插件文档** | 无参数，返回插件名+页面数 |
+| `search_plugin_docs(query, limit?)` | **跨插件全文搜索** | 传关键词，中英文都行：`"mapbox"` / `"导航"` / `"serial"` / `"overwatch"` |
+| `get_plugin_page(plugin, page, max_chars?)` | **取某页全文** | 传插件名 + 页面 id（search 返回的 page），如 `maps` + `overview.html` |
+
+**查插件文档的标准流程**（涉及 Kanzi 插件如 maps/monitor/profilinghelper 的用法、配置、API 时）：
+
+1. **看有哪些插件** → `list_plugins()`
+2. **搜关键词** → `search_plugin_docs("关键词")` 拿命中页面 + 片段
+3. **取全文** → `get_plugin_page("插件名", "页面id")` 拿完整内容照着做
+
+> ⚠️ **分工**：插件用法/配置/API → `kanzi_plugin_doc_mcp`；主框架 API/概念/属性 → `kanzi_doc_mcp`；操作步骤 → skill MCP（`get_skill`）。三者别混。
+
 ## 📋 高频属性（常驻，不用查工具）
 
 `kanzi-properties-highfreq` 已常驻 system prompt：布局尺寸（Layout Width/Height、Actual Width/Height）、对齐（Horizontal/Vertical Alignment）、边距、文本（Text/Word Wrap/Font 族）、颜色（Foreground/Background Brush、Opacity）、九宫格 NinePatch、范围值（Min/Max Value）、变换（Render Transformation）等 39 个最常用属性。
