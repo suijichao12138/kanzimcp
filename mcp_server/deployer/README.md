@@ -126,6 +126,8 @@ relay 是 http 和 feishu 的依赖。单独重启 relay 时，会**先停 http 
 ├── src/                       # git clone 的源码
 ├── tmp_results/               # http 外置结果文件
 ├── data/                      # 运行时数据（state.json 等）
+│   ├── skills/                # skill 仓库（--skills-dir）
+│   └── plugins/               # 插件文档目录（--plugins-dir；<插件名>/doc 结构）
 └── _backup/                   # 升级前备份（回滚用）
 ```
 

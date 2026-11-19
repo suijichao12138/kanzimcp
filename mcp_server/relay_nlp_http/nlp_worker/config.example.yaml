@@ -199,6 +199,15 @@ mcp_servers:
       X-Kanzi-User: ${KANZI_MCP_USERNAME}
     tools: ["*"]
     timeout_seconds: 300
+  # 本地插件文档（kanzi_plugins 目录；kz_mcp_http 需 --plugins-dir 启用）
+  kanzi-plugin-doc-mcp:
+    enabled: true
+    type: http
+    url: http://${KANZI_MCP_IP}/kanzi_plugin_doc_mcp
+    headers:
+      X-Kanzi-User: ${KANZI_MCP_USERNAME}
+    tools: ["*"]
+    timeout_seconds: 300
   # local-example:
   #   enabled: false
   #   type: stdio

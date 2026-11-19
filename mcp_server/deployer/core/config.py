@@ -30,7 +30,8 @@ DEFAULT_COMPONENTS = {
                             "--hidden-import websockets",
         "args_template": ["--config", "{conf}/config.json",
                           "--log-path", "{logs}/http.log",
-                          "--skills-dir", "{skills}"],
+                          "--skills-dir", "{skills}",
+                          "--plugins-dir", "{plugins}"],
         # http 组件是裸 HTTP MCP 端点（asyncio.start_server），不是 WebSocket：
         # 用 http 探测（收到任意 HTTP 响应即健康），发 Upgrade 握手会失败
         "health": {"type": "http", "host": "127.0.0.1", "port": 9001},

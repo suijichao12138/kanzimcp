@@ -617,7 +617,7 @@ class HttpMcpServer:
     RESULT_SUMMARY_CHARS = 120     # 摘要单条截断字符数
 
     def __init__(self, user_manager: UserManager, host="127.0.0.1", port=9001, url_path="/mcp",
-                 skills_dir: str | None = None):
+                 skills_dir: str | None = None, plugins_dir: str | None = None):
         self.users = user_manager
         self.host = host
         self.port = port
@@ -643,6 +643,12 @@ class HttpMcpServer:
             import skills_mcp as _sm
             self.skills_mcp = _sm.SkillsMcpHandler(skills_dir)
             log.info(f"📚 Skill MCP 已启用: 端点 /kanzi_skill_mcp, 目录 {skills_dir}")
+        # ★ 插件文档 MCP 本地处理器：读本地 kanzi_plugins 目录（<插件名>/doc）
+        self.plugin_docs_mcp = None
+        if plugins_dir:
+            import plugin_docs_mcp as _pdm
+            self.plugin_docs_mcp = _pdm.PluginDocsHandler(plugins_dir)
+            log.info(f"📦 插件文档 MCP 已启用: 端点 /kanzi_plugin_doc_mcp, 目录 {plugins_dir}")
 
     # ═══════════ 大批量结果外置（2026-09-02 老隋定稿）═══════════
     def set_result_offload(self, tmp_dir=None, ttl=None, public_host=None):
@@ -817,12 +823,13 @@ class HttpMcpServer:
                 return
             is_official = path_norm in self.OFFICIAL_ENDPOINTS
             is_skills = path_norm == "/kanzi_skill_mcp"
-            is_studio = (not is_official) and (not is_skills) and (
+            is_plugin_docs = path_norm == "/kanzi_plugin_doc_mcp"
+            is_studio = (not is_official) and (not is_skills) and (not is_plugin_docs) and (
                 path_norm == self.url_path.rstrip("/")
                 or path_norm == "/"
                 or path_norm == "/kanzistudio_mcp"
             )
-            if not (is_official or is_studio or is_skills):
+            if not (is_official or is_studio or is_skills or is_plugin_docs):
                 await self._send_http(writer, 404, "text/plain", "Not Found")
                 return
 
@@ -879,6 +886,15 @@ class HttpMcpServer:
                                                       "id": None}))
                     return
                 resp = self.skills_mcp.handle(req)
+            elif is_plugin_docs:
+                if self.plugin_docs_mcp is None:
+                    await self._send_http(writer, 500, "application/json",
+                                          json.dumps({"jsonrpc": "2.0",
+                                                      "error": {"code": -32000,
+                                                                "message": "插件文档 MCP 未启用（缺少 --plugins-dir 参数）"},
+                                                      "id": None}))
+                    return
+                resp = self.plugin_docs_mcp.handle(req)
             else:
                 resp = await self._handle_jsonrpc(req, username)
             if resp is None:
@@ -1179,6 +1195,8 @@ async def main():
                        help="文本超过此字节才外置 (默认 4096)")
     parser.add_argument("--skills-dir", default=None,
                        help="Skill MCP 数据目录（deployer 维护的独立 skill 仓库，默认不启用）")
+    parser.add_argument("--plugins-dir", default=None,
+                       help="本地插件文档目录（含 <插件名>/doc 子目录，默认不启用 /kanzi_plugin_doc_mcp 端点）")
     parser.add_argument("--debug", const=True, nargs="?", default=None,
                        help="开启调试日志")
     args = parser.parse_args()
@@ -1218,7 +1236,8 @@ async def main():
                           config_path=users_file,
                           hb_interval=hb_interval, hb_max_fails=hb_max_fails,
                           req_check=req_check)
-    http_mcp = HttpMcpServer(manager, host, port, skills_dir=args.skills_dir)
+    http_mcp = HttpMcpServer(manager, host, port, skills_dir=args.skills_dir,
+                             plugins_dir=args.plugins_dir)
     # 大批量结果外置配置 (阈值/TTL/TMP 目录)
     _e = args.result_threshold_entries
     http_mcp.RESULT_THRESHOLD_ENTRIES = _e if _e is not None else _cfg_int(cfg, "result_threshold_entries", 50)

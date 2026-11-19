@@ -85,6 +85,13 @@ skill MCP 提供 **3 个工具**（9001 网关 `/kanzi_skill_mcp`）：
 | 截图 | `kanzi-screenshot` |
 | **刷新工程树 / 刷新 Preview**（创建后必刷/截图前必刷） | `kanzi-refresh` |
 
+### 插件文档（kanzi_plugins 本地文档，非 Studio 操作）
+| 任务 | 工具/说明 |
+|------|---------|
+| 查 Kanzi 插件（maps/monitor/profilinghelper 等）用法、配置、API | `kanzi_plugin_doc_mcp` 的 3 个工具：`list_plugins`（看有哪些插件）→ `search_plugin_docs`（跨插件全文搜索）→ `get_plugin_page`（取某页全文） |
+
+> ⚠️ 插件文档与官方主框架文档（`kanzi_doc_mcp`）分开：插件用法（地图/监控/剖析）用 `kanzi_plugin_doc_mcp`；主框架 API/概念用 `kanzi_doc_mcp`。
+
 ### 实机/设备测试（QNX 仪表，非 Studio 操作）
 | 任务 | skill 名 |
 |------|---------|

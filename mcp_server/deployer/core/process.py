@@ -28,6 +28,7 @@ def build_args(args_template: list, paths, comp_name: str, component: dict) -> l
         "bin": str(paths.bin),
         "data": str(paths.data),
         "skills": str(paths.skills),
+        "plugins": str(paths.plugins),
         "name": comp_name,
     }
     # 允许组件配置里直接写 args（覆盖模板）
