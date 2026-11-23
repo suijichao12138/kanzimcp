@@ -17,7 +17,7 @@ def local_ips():
     """惰性导入，避免与 web.server 循环依赖。"""
     from web.server import local_ips as _li
     return _li()
-from core import deploy, envcheck, gitops, health, logs, notify as notifymod, process, templates
+from core import builder, deploy, envcheck, gitops, health, logs, notify as notifymod, process, templates
 
 from . import auth, tasks
 
@@ -73,6 +73,7 @@ def _health_cached(name: str, hc: dict) -> tuple:
 def status(ctx) -> tuple:
     """总览：版本、三组件状态、健康检查、环境。"""
     cfg, paths = ctx.cfg, ctx.paths
+    repo = cfg.get("repo", {})
     components = cfg.get("components") or cfgmod.DEFAULT_COMPONENTS
     order = cfgmod.START_ORDER
 
@@ -96,13 +97,13 @@ def status(ctx) -> tuple:
 
     # 版本信息：以源码目录的真实 tag 为准（一键部署不再依赖 state 里有没有值）。
     # state.current_tag 作为兜底（源码目录被清掉时仍能显示上次部署的版本）。
-    local_tag = gitops.local_tag(paths.src) or str(ctx.state.get("current_tag", ""))
+    local_tag = gitops.local_tag(paths.src, vcs=repo.get("vcs", "git")) or str(ctx.state.get("current_tag", ""))
     if local_tag and local_tag != ctx.state.get("current_tag"):
         ctx.state["current_tag"] = local_tag
         ctx.save_state()
     latest_tag = ctx.state.get("latest_tag", "")
     # 是否已部署过：源码目录就绪 或 有本地版本号
-    deployed = gitops.source_ready(paths.src) or bool(local_tag)
+    deployed = gitops.source_ready(paths.src, vcs=repo.get("vcs", "git")) or bool(local_tag)
     return _ok({
         "local_ips": local_ips(),
         "components": comps,
@@ -126,7 +127,7 @@ def check_update(ctx) -> tuple:
     """只查远端最新版本，不改任何东西。"""
     cfg = ctx.cfg
     repo = cfg.get("repo", {})
-    latest = gitops.latest_tag(repo.get("url", ""))
+    latest = gitops.latest_tag(repo.get("url", ""), vcs=repo.get("vcs", "git"))
     local = ctx.state.get("current_tag", "")
     ctx.state["latest_tag"] = latest
     ctx.save_state()
@@ -142,17 +143,18 @@ def upgrade(ctx, body: dict) -> tuple:
     if tasks.any_running():
         return _err("已有任务在执行中，请等它结束", 409)
     repo = ctx.cfg.get("repo", {})
+    vcs = repo.get("vcs", "git")
     paths_ = ctx.paths
 
     # 首次使用（还没部署过任何东西）→ 不该走「升级」，应该先「一键部署」
-    local_now = gitops.local_tag(paths_.src) or str(ctx.state.get("current_tag", ""))
-    if not gitops.source_ready(paths_.src) and not local_now:
+    local_now = gitops.local_tag(paths_.src, vcs=vcs) or str(ctx.state.get("current_tag", ""))
+    if not gitops.source_ready(paths_.src, vcs=vcs) and not local_now:
         return _err("尚未部署过，请先点「一键部署」完成首次部署，之后才能用「升级」。",
                     409, extra={"need_deploy": True})
 
     tag = (body or {}).get("tag") or ctx.state.get("latest_tag") or ""
     if not tag:
-        tag = gitops.latest_tag(repo.get("url", ""))
+        tag = gitops.latest_tag(repo.get("url", ""), vcs=vcs)
     if not tag:
         return _err("未取到目标版本", 502)
 
@@ -613,6 +615,102 @@ def test_notify(ctx) -> tuple:
     ok, msg = notifymod.send(ctx.cfg.get("feishu_notify", {}),
                              "🔔 kanzi-deployer 通知测试：收到即链路正常。")
     return _ok({"detail": msg}) if ok else _err(msg, 500)
+
+
+# ══════════════════════ 按需产物下载（nlp_worker / KzMCPChatPlugin）═════════════════════
+
+def artifacts_config(ctx) -> dict:
+    """取 artifacts 配置（deployer 配置里的 artifacts 块）。"""
+    return ctx.cfg.get("artifacts") or {}
+
+
+def _artifact_dir(ctx, name: str) -> Path:
+    """产物落盘目录：data/artifacts/<name>/"""
+    d = ctx.paths.artifacts / name
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def artifacts_list(ctx) -> tuple:
+    """GET /api/artifacts — 列出产物 + 是否已编译可下载。"""
+    cfgs = artifacts_config(ctx)
+    items = []
+    for name, spec in cfgs.items():
+        d = _artifact_dir(ctx, name)
+        out_name = Path(spec.get("output", "")).name
+        compiled = (d / out_name).exists() if out_name else False
+        items.append({
+            "name": name,
+            "label": spec.get("label", name),
+            "build_type": spec.get("build_type", ""),
+            "compiled": compiled,
+            "output": out_name,
+        })
+    return _ok({"artifacts": items})
+
+
+def artifact_build(ctx, body: dict) -> tuple:
+    """POST /api/artifact/build — 拉最新源码并编译产物（长任务）。body: {"name": "nlp_worker"}。"""
+    if tasks.any_running():
+        return _err("已有任务在执行中，请等它结束", 409)
+    name = (body or {}).get("name", "")
+    specs = artifacts_config(ctx)
+    if name not in specs:
+        return _err(f"未知产物: {name}", 404)
+    spec = specs[name]
+    cfg, paths = ctx.cfg, ctx.paths
+    repo = cfg.get("repo", {})
+
+    def job(task):
+        task.update("git", f"拉取最新源码（{name}）…", 5)
+        ok, msg = gitops.prepare(
+            repo.get("url", ""), repo.get("branch", "main"), paths.src,
+            use_tag=repo.get("use_tag", True),
+            tag=ctx.state.get("latest_tag", ""),
+            vcs=repo.get("vcs", "git"),
+        )
+        if not ok:
+            task.done(False, f"拉取源码失败: {msg}")
+            return
+        task.update("build", f"开始编译（{spec.get('label', name)}）…", 20)
+        ok2, detail, produced = builder.build_artifact(
+            name, spec, paths.src,
+            on_progress=lambda n, m, p=None: task.update("build", m),
+        )
+        if not ok2 or produced is None:
+            task.done(False, detail)
+            return
+        task.update("copy", "复制产物…", 90)
+        d = _artifact_dir(ctx, name)
+        try:
+            dst = d / produced.name
+            import shutil as _sh
+            _sh.copy2(produced, dst)
+        except Exception as e:                              # noqa: BLE001
+            task.done(False, f"复制产物失败: {e}")
+            return
+        task.done(True, f"{spec.get('label', name)} 编译完成: {produced.name}")
+
+    t = tasks.start("artifact", f"编译 {spec.get('label', name)}", job)
+    return _ok(t.to_dict())
+
+
+def artifact_download(ctx, name: str) -> tuple:
+    """GET /api/artifact/download?name=xxx — 下载已编译产物。
+
+    返回 (code, {"path": 绝对路径, "filename": 文件名})，由 server.py 读文件流式返回。
+    """
+    specs = artifacts_config(ctx)
+    if name not in specs:
+        return _err(f"未知产物: {name}", 404)
+    spec = specs[name]
+    d = _artifact_dir(ctx, name)
+    out_name = Path(spec.get("output", "")).name
+    f = d / out_name
+    if not f.exists():
+        return _err(f"{name} 尚未编译，请先点「编译下载」", 404)
+    return _ok({"path": str(f), "filename": f.name,
+                "size": f.stat().st_size})
 
 
 def _now() -> str:

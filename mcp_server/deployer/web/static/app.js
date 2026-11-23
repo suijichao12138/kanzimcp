@@ -259,6 +259,56 @@ function watchTask(id) {
 
 // ══════════ 配置 ══════════
 
+/** 产物下载：编译（长任务）→ 完成后触发下载。 */
+const _ARTIFACT_LABELS = { nlp_worker: 'NLP Worker', kzmcp_plugin: 'KzMCPChatPlugin (DLL)' };
+
+async function buildArtifact(name) {
+  const label = _ARTIFACT_LABELS[name] || name;
+  const hint = $('artifact-hint');
+  if (!confirm(`确认编译下载 ${label}？\n\n将从最新源码编译（不影响运行中的服务），可能需要数分钟。`)) return;
+  if (hint) hint.textContent = '正在启动编译…';
+  const r = await call('POST', '/api/artifact/build', { name });
+  if (!r.ok) {
+    if (hint) hint.textContent = '';
+    return toast(r.error || '启动编译失败', 'err');
+  }
+  watchArtifactTask(r.data.id, name);
+}
+
+function watchArtifactTask(id, name) {
+  const label = _ARTIFACT_LABELS[name] || name;
+  const hint = $('artifact-hint');
+  $('task-card').style.display = '';
+  $('task-log').textContent = '';
+  clearInterval(_taskTimer);
+  _taskTimer = setInterval(async () => {
+    const r = await call('GET', '/api/task?id=' + id);
+    if (!r.ok) return;
+    const t = r.data;
+    $('task-title').textContent = t.title;
+    $('task-bar').style.width = t.percent + '%';
+    $('task-step').textContent = `[${t.status}] ${t.step} — ${t.detail || ''}`;
+    $('task-log').textContent = (t.log || []).join('\n');
+    $('task-log').scrollTop = $('task-log').scrollHeight;
+    if (!t.running) {
+      clearInterval(_taskTimer);
+      _taskTimer = null;
+      if (t.status === 'success') {
+        toast(label + ' 编译完成，开始下载', 'ok');
+        if (hint) hint.textContent = label + ' 已编译，可直接下载';
+        const a = document.createElement('a');
+        a.href = '/api/artifact/download?name=' + encodeURIComponent(name);
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+      } else {
+        toast('编译失败：' + t.detail, 'err');
+        if (hint) hint.textContent = '';
+      }
+    }
+  }, 1500);
+}
+
 async function loadConfig() {
   const name = $('cfg-sel').value;
   $('cfg-text').value = '加载中…';
@@ -512,9 +562,17 @@ function renderSettings() {
 
   box.innerHTML = `
   <div class="wiz-group">
-    <h3>更新源（Gitee 仓库）</h3>
-    ${field('仓库地址', 'repo-url', repo.url || '', '部署管理器从这里拉取源码并编译。填 Gitee 镜像地址。', true)}
-    ${field('分支', 'repo-branch', repo.branch || 'main', '主分支名，一般为 main。')}
+    <h3>更新源</h3>
+    <div class="field">
+      <label>版本库类型 <span class="req">*</span></label>
+      <div class="desc">git 用 tag 版本号，svn 用 revision 号。</div>
+      <select id="repo-vcs">
+        <option value="git"${(repo.vcs || 'git') === 'git' ? ' selected' : ''}>git（tag 版本）</option>
+        <option value="svn"${(repo.vcs || 'git') === 'svn' ? ' selected' : ''}>svn（revision 版本）</option>
+      </select>
+    </div>
+    ${field('仓库地址', 'repo-url', repo.url || '', '部署管理器从这里拉取源码并编译。git 填仓库地址，svn 填 svn 地址。', true)}
+    ${field('分支', 'repo-branch', repo.branch || 'main', 'git 主分支名，一般为 main。svn 忽略此项。')}
     ${field('检查间隔(秒)', 'repo-poll', repo.poll_interval_s || 60, '后台多久查一次远端版本。只做提示，不会自动升级。', false, 'number')}
   </div>
 
@@ -540,6 +598,7 @@ function renderSettings() {
 async function saveSettings() {
   const body = {
     repo: {
+      vcs: ($('repo-vcs').value || 'git').trim(),
       url: ($('repo-url').value || '').trim(),
       branch: ($('repo-branch').value || '').trim() || 'main',
       poll_interval_s: intVal('repo-poll', 60),

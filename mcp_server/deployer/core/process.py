@@ -165,9 +165,16 @@ def process_exists(exe_name: str) -> bool:
 
 
 def stop(name: str, exe_name: str = "", wait_ms: int = 2000) -> tuple[bool, str]:
-    """停止组件：先 terminate（进程有机会清理），超时再 kill。"""
+    """停止组件：先 terminate（进程有机会清理），超时再 kill。
+
+    终止主进程句柄后，若同名进程仍残留（如 feishu 的 multiprocessing spawn
+    子进程、句柄丢失的孤儿进程），按进程名兜底强杀——taskkill /F /T /IM
+    会覆盖整棵进程树，把 spawn 子进程一并带走。
+    """
+    stopped_handle = False
     proc = _PROCS.get(name)
     if proc is not None and proc.poll() is None:
+        stopped_handle = True
         try:
             proc.terminate()
             try:
@@ -178,18 +185,18 @@ def stop(name: str, exe_name: str = "", wait_ms: int = 2000) -> tuple[bool, str]
         except Exception as e:                               # noqa: BLE001
             return False, f"{name} 停止失败: {e}"
         _PROCS.pop(name, None)
-        return True, f"{name} 已停止"
 
-    # 句柄丢失（例如 deployer 自己重启过），按进程名杀
-    # 无论有没有句柄，都兜底按名清一遍：可能残留了上次没退干净的进程，
-    # 不清掉的话稍后覆盖 exe 会 [WinError 5] 拒绝访问。
+    # 兜底：无论有没有句柄，都按进程名清一遍。terminate 主进程不会传播到
+    # spawn 子进程（daemon=True 且独立解释器），句柄 wait 完也不代表同名进程全没了。
+    # 残留进程会让稍后覆盖 exe 报 [WinError 5] 拒绝访问，这里必须清干净。
     if exe_name:
-        left = process_exists(exe_name)
-        if left:
+        if process_exists(exe_name):
             ok = kill_by_name(exe_name)
-            return (True, f"{name} 已按进程名停止") if ok else \
-                   (False, f"{name} 停止失败：进程 {exe_name} 仍在运行")
-    return True, f"{name} 未在运行"
+            if not ok:
+                return False, f"{name} 停止失败：进程 {exe_name} 仍在运行"
+            return True, f"{name} 已停止（含残留同名进程）"
+        return True, f"{name} 已停止" if stopped_handle else f"{name} 未在运行"
+    return True, f"{name} 已停止" if stopped_handle else f"{name} 未在运行"
 
 
 def _taskkill(exe_name: str) -> bool:

@@ -85,6 +85,16 @@
     </div>
   </div>
 
+  <div class="card">
+    <div class="card-head"><h2>产物下载</h2></div>
+    <p class="muted">从最新源码编译并下载产物（不影响正在运行的服务）。</p>
+    <div class="row" id="artifact-btns">
+      <button class="btn" onclick="buildArtifact('nlp_worker')">📦 编译下载 NLP Worker</button>
+      <button class="btn" onclick="buildArtifact('kzmcp_plugin')">🧩 编译下载 KzMCPChatPlugin (DLL)</button>
+      <span id="artifact-hint" class="muted"></span>
+    </div>
+  </div>
+
   <div class="card" id="task-card" style="display:none">
     <div class="card-head"><h2 id="task-title">任务进度</h2></div>
     <div class="bar"><div id="task-bar" class="bar-fill"></div></div>

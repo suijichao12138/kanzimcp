@@ -56,6 +56,32 @@ class Handler(BaseHTTPRequestHandler):
     def _json(self, code: int, obj: dict):
         self._send(code, json.dumps(obj, ensure_ascii=False).encode("utf-8"))
 
+    def _send_file(self, path: str, filename: str):
+        """流式下发文件（大文件下载用，避免整体读入内存）。"""
+        p = Path(path)
+        if not p.exists() or not p.is_file():
+            return self._json(404, {"ok": False, "error": "文件不存在"})
+        import urllib.parse
+        disp = filename.replace('"', '').replace("\\", "_")
+        disp_ascii = urllib.parse.quote(disp)
+        ctype = mimetypes.guess_type(str(p))[0] or "application/octet-stream"
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(p.stat().st_size))
+        self.send_header("Content-Disposition",
+                         f"attachment; filename=\"{disp_ascii}\"; filename*=UTF-8''{disp_ascii}")
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        try:
+            with open(p, "rb") as f:
+                while True:
+                    chunk = f.read(1024 * 1024)      # 1MB 块
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
     def _read_body(self) -> dict:
         try:
             n = int(self.headers.get("Content-Length") or 0)
@@ -138,6 +164,14 @@ class Handler(BaseHTTPRequestHandler):
                 code, body = skills_api.skills_download_all(CTX)
             elif path == "/api/skills/get":
                 code, body = skills_api.skills_get(CTX, (qs.get("name") or [""])[0])
+            elif path == "/api/artifacts":
+                code, body = api.artifacts_list(CTX)
+            elif path == "/api/artifact/download":
+                # 文件流直下（不走 base64，避免大文件吃内存）
+                code, body = api.artifact_download(CTX, (qs.get("name") or [""])[0])
+                if code == 200 and body.get("ok") and body.get("data"):
+                    return self._send_file(body["data"]["path"], body["data"]["filename"])
+                return self._json(code, body)
             else:
                 code, body = 404, {"ok": False, "error": "not found"}
         except Exception as e:                       # noqa: BLE001
@@ -170,6 +204,8 @@ class Handler(BaseHTTPRequestHandler):
                 code, out = api.wizard_put(CTX, body)
             elif path == "/api/logs/clear":
                 code, out = api.logs_clear(CTX, body.get("name", ""))
+            elif path == "/api/artifact/build":
+                code, out = api.artifact_build(CTX, body)
             elif path == "/api/test_notify":
                 code, out = api.test_notify(CTX)
             elif path == "/api/restart_self":

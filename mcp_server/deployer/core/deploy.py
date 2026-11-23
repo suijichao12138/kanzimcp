@@ -138,12 +138,13 @@ def do_deploy(cfg: dict, paths, tag: str = "", progress=None, do_build: bool = T
     ok, msg = gitops.prepare(
         repo.get("url", ""), repo.get("branch", "main"), paths.src,
         use_tag=repo.get("use_tag", True), tag=target_tag,
+        vcs=repo.get("vcs", "git"),
     )
     if not ok:
         return False, f"拉取源码失败: {msg}"
     rep("git", msg, 20)
     # 一键部署（tag 为空）时，版本号以源码真实 tag 为准
-    actual_tag = gitops.local_tag(paths.src) or target_tag
+    actual_tag = gitops.local_tag(paths.src, vcs=repo.get("vcs", "git")) or target_tag
 
     # ── 3. 备份现有 exe ──
     rep("backup", "备份现有程序 …", 22)
@@ -183,8 +184,14 @@ def do_deploy(cfg: dict, paths, tag: str = "", progress=None, do_build: bool = T
 
     # ── 6. 停旧进程 ──
     rep("stop", "停止旧进程 …", 76)
-    process.stop_all(list(reversed(order)), components,
-                     wait_ms=int(cfg.get("kill_wait_ms", 2000)))
+    stop_results = process.stop_all(list(reversed(order)), components,
+                                    wait_ms=int(cfg.get("kill_wait_ms", 2000)))
+    # 停不干净就不许往下走：残留进程会占端口/锁 exe 文件，
+    # 覆盖会 [WinError 5]、新进程起来端口冲突，数据更乱。
+    stop_failed = [n for n, ok_, _ in stop_results if not ok_]
+    if stop_failed:
+        return False, ("停止旧进程失败: " + "、".join(stop_failed)
+                       + "。请手动结束残留进程后重试。")
 
     # ── 7. 部署 exe ──
     if do_build:

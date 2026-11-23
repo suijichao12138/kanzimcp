@@ -5,6 +5,7 @@
 沿用旧版 OTA 的经验：清掉代理环境变量，否则内网 git 会走不通。
 """
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -47,12 +48,11 @@ def run(cmd, cwd=None, timeout=600, env=None) -> tuple[bool, str]:
         return False, str(e)
 
 
-def latest_tag(repo_url: str, timeout: int = 60) -> str:
-    """查远端最新 tag（按版本号排序）。
-
-    用 ls-remote 而非 fetch，速度快、不动本地仓库。
-    排序规则：v1 < v2 < ... < v8.1，用 tuple 数字比较。
-    """
+def latest_tag(repo_url: str, timeout: int = 60, vcs: str = "git") -> str:
+    """查远端最新版本。git 返回最新 tag；svn 返回最新 revision 号（字符串）。"""
+    vcs = (vcs or "git").lower()
+    if vcs == "svn":
+        return _svn_latest_rev(repo_url, timeout)
     ok, out = run(["git", "ls-remote", "--tags", repo_url], timeout=timeout)
     if not ok:
         return ""
@@ -69,14 +69,80 @@ def latest_tag(repo_url: str, timeout: int = 60) -> str:
     return max(set(tags), key=_version_key)
 
 
+def _svn_exe() -> str:
+    """定位 svn.exe：环境变量 SVN/SVN_EXE → PATH → 常见安装路径（TortoiseSVN/SlikSVN）。
 
-def local_tag(src_dir: Path) -> str:
-    """取本地源码目录当前所在 tag（精确匹配 HEAD）。
-
-    `git describe --tags --exact-match` 只在 HEAD 正好落在某个 tag 上时返回，
-    否则返回空（比如停在分支上）。找不到时退化为「分支名」，再不行给短 commit。
+    Windows 上 svn 命令行客户端不随系统自带：TortoiseSVN 需在安装时勾选
+    "command line client tools"，装完在 <ProgramFiles>/TortoiseSVN/bin/svn.exe
+    且默认不进 PATH。这里做全量兜底定位，找不到时调用方给明确安装提示。
     """
+    global _SVN_EXE_CACHE
+    if _SVN_EXE_CACHE:
+        return _SVN_EXE_CACHE
+    for var in ("SVN", "SVN_EXE"):
+        v = os.environ.get(var, "")
+        if v and Path(v).exists():
+            _SVN_EXE_CACHE = v
+            return v
+    in_path = shutil.which("svn")
+    if in_path:
+        _SVN_EXE_CACHE = in_path
+        return in_path
+    pf = os.environ.get("ProgramFiles", r"C:\Program Files")
+    pfx = os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")
+    # Windows 才查常见安装路径（Linux 上这些路径无意义且 Path() 会抛 OSError）
+    if sys.platform == "win32":
+        for c in (rf"{pf}\TortoiseSVN\bin\svn.exe",
+                  rf"{pfx}\TortoiseSVN\bin\svn.exe",
+                  rf"{pf}\SlikSvn\bin\svn.exe",
+                  rf"{pfx}\SlikSvn\bin\svn.exe",
+                  rf"{pf}\VisualSVN\bin\svn.exe",
+                  rf"{pfx}\VisualSVN\bin\svn.exe"):
+            if Path(c).exists():
+                _SVN_EXE_CACHE = c
+                return c
+    return ""
+
+
+_SVN_EXE_CACHE = ""
+
+
+def _svn_run(args: list, timeout: int = 60) -> tuple[bool, str]:
+    """执行 svn 命令（自动定位 svn.exe）。找不到时给明确安装提示。"""
+    exe = _svn_exe()
+    if not exe:
+        return False, ("未找到 svn 命令行客户端（svn.exe）。请安装 TortoiseSVN 并在安装时勾选 "
+                       "\"command line client tools\"，或设置环境变量 SVN=<svn.exe 绝对路径>")
+    return run([exe] + args, timeout=timeout)
+
+
+def _svn_latest_rev(repo_url: str, timeout: int = 60) -> str:
+    """svn 远端最新 revision（svn info --show-item revision <url>）。"""
+    ok, out = _svn_run(["info", "--show-item", "revision",
+                        "--non-interactive", repo_url], timeout=timeout)
+    if not ok:
+        return ""
+    rev = (out or "").strip().splitlines()[-1].strip()
+    return rev if rev.isdigit() else ""
+
+
+def _svn_local_rev(src_dir: Path, timeout: int = 30) -> str:
+    """svn 本地 working copy 的 revision。"""
+    ok, out = _svn_run(["info", "--show-item", "revision",
+                        "--non-interactive", str(src_dir)], timeout=timeout)
+    if not ok:
+        return ""
+    rev = (out or "").strip().splitlines()[-1].strip()
+    return rev if rev.isdigit() else ""
+
+
+
+def local_tag(src_dir: Path, vcs: str = "git") -> str:
+    """取本地源码目录当前版本号。svn 返回 revision；git 取 tag/分支/短 commit。"""
     src_dir = Path(src_dir)
+    vcs = (vcs or "git").lower()
+    if vcs == "svn":
+        return _svn_local_rev(src_dir)
     if not (src_dir / ".git").exists():
         return ""
     ok, out = run(["git", "describe", "--tags", "--exact-match", "HEAD"],
@@ -92,9 +158,10 @@ def local_tag(src_dir: Path) -> str:
     return (out or "").strip().splitlines()[-1].strip() if ok else ""
 
 
-def source_ready(src_dir: Path) -> bool:
-    """源码目录是否已就绪（存在且是 git 仓库）。"""
-    return (Path(src_dir) / ".git").exists()
+def source_ready(src_dir: Path, vcs: str = "git") -> bool:
+    """源码目录是否已就绪（存在版本库目录：git → .git，svn → .svn）。"""
+    marker = ".svn" if (vcs or "git").lower() == "svn" else ".git"
+    return (Path(src_dir) / marker).exists()
 
 
 def _version_key(tag: str):
@@ -107,12 +174,17 @@ def _version_key(tag: str):
 
 
 def prepare(repo_url: str, branch: str, src_dir: Path,
-            use_tag: bool = True, tag: str = "", timeout: int = 600) -> tuple[bool, str]:
+            use_tag: bool = True, tag: str = "", timeout: int = 600,
+            vcs: str = "git") -> tuple[bool, str]:
     """把源码准备到 src_dir。
 
-    - 目录不存在 → clone
-    - 已存在 → fetch + checkout（强制覆盖本地改动，源码目录不做人工修改）
+    - git：目录不存在 → clone；已存在 → fetch + checkout
+    - svn：目录无 .svn → checkout；有 .svn → update（版本 = revision，忽略 branch/tag）
     """
+    vcs = (vcs or "git").lower()
+    if vcs == "svn":
+        return _svn_prepare(repo_url, src_dir, timeout)
+
     src_dir = Path(src_dir)
     src_dir.parent.mkdir(parents=True, exist_ok=True)
 
@@ -134,3 +206,21 @@ def prepare(repo_url: str, branch: str, src_dir: Path,
     ok, out = run(["git", "rev-parse", "--short", "HEAD"], cwd=src_dir)
     commit = out.strip() if ok else "?"
     return True, f"已检出 {target} ({commit})"
+
+
+def _svn_prepare(repo_url: str, src_dir: Path, timeout: int = 600) -> tuple[bool, str]:
+    """svn：无 .svn → checkout；有 → update。版本用 revision（trunk 直接拉最新）。"""
+    src_dir = Path(src_dir)
+    src_dir.parent.mkdir(parents=True, exist_ok=True)
+    if not (src_dir / ".svn").exists():
+        ok, out = _svn_run(["checkout", "--non-interactive",
+                            repo_url, str(src_dir)], timeout=timeout)
+        if not ok:
+            return False, f"svn checkout 失败: {out[-500:]}"
+    else:
+        ok, out = _svn_run(["update", "--non-interactive", str(src_dir)],
+                           timeout=timeout)
+        if not ok:
+            return False, f"svn update 失败: {out[-500:]}"
+    rev = _svn_local_rev(src_dir)
+    return True, (f"已检出 svn r{rev}" if rev else "已检出 svn（无法读 revision）")

@@ -72,6 +72,7 @@ DEFAULT_CONFIG = {
     },
     "repo": {
         "url": "https://gitee.com/suijichao/kanzimcp.git",
+        "vcs": "git",           # git | svn（svn 时 url 填 svn 地址，版本号用 revision）
         "branch": "main",
         "use_tag": True,
         "poll_interval_s": 60,
@@ -81,6 +82,26 @@ DEFAULT_CONFIG = {
         "python_exe": "python",
         "pyinstaller": "pyinstaller",
         "timeout_s": 1800,
+    },
+    # 按需下载的产物（不进组件启停/健康管理，只编译 + 下载）
+    # nlp_worker：跑现有 build_portable.cmd；kzmcp_plugin：msbuild 编 dll
+    "artifacts": {
+        "nlp_worker": {
+            "label": "NLP Worker",
+            "build_type": "script",
+            "cwd": "mcp_server/relay_nlp_http/nlp_worker",
+            "script": "build_portable.cmd",
+            "output": "dist/nlp-worker-portable-win-x64.zip",
+        },
+        "kzmcp_plugin": {
+            "label": "KzMCPChatPlugin (DLL)",
+            "build_type": "msbuild",
+            "cwd": ".",
+            "project": "KzMCPChatPlugin.sln",
+            "configuration": "Release",
+            "platform": "Any CPU",
+            "output": "bin/Release/KzMCPChatPlugin.dll",
+        },
     },
     "kill_wait_ms": 2000,
     # 健康检查等待：interval_s 探测间隔（放宽到 5s，2s 太密会刷探测日志）

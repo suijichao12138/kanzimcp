@@ -34,7 +34,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Reference Include="PluginInterface">
-      <HintPath>..\v1_mcp_server\PluginInterface.dll</HintPath>
+      <HintPath>PluginInterface.dll</HintPath>
     </Reference>
     <Reference Include="PresentationCore" />
     <Reference Include="PresentationFramework" />

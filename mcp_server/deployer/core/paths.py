@@ -50,6 +50,7 @@ class Paths:
         self.data = self._sub("data", ov.get("data"))
         self.skills = self._sub("data/skills", ov.get("skills"))
         self.plugins = self._sub("data/plugins", ov.get("plugins"))
+        self.artifacts = self._sub("data/artifacts", ov.get("artifacts"))
         self.backup = self._sub("_backup", ov.get("backup"))
 
     def _sub(self, default: str, override) -> Path:
@@ -61,7 +62,8 @@ class Paths:
     def ensure_all(self):
         """创建所有运行期需要的目录（bin/src 由部署流程创建，这里一并建好）。"""
         for p in (self.bin, self.conf, self.logs, self.src,
-                  self.tmp, self.data, self.skills, self.plugins, self.backup):
+                  self.tmp, self.data, self.skills, self.plugins,
+                  self.artifacts, self.backup):
             p.mkdir(parents=True, exist_ok=True)
 
     # ── 配置文件路径 ──

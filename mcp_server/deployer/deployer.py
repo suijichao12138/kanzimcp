@@ -152,7 +152,7 @@ def _poll_once(ctx: "Context") -> None:
         repo = ctx.cfg.get("repo", {})
         if not repo.get("url"):
             return
-        latest = gitops.latest_tag(repo["url"])
+        latest = gitops.latest_tag(repo["url"], vcs=repo.get("vcs", "git"))
         if not latest:
             log.debug("未取到远端版本，跳过本轮")
             return
@@ -217,7 +217,7 @@ def main():
 
     if args.check_update:
         repo = ctx.cfg.get("repo", {})
-        latest = gitops.latest_tag(repo.get("url", ""))
+        latest = gitops.latest_tag(repo.get("url", ""), vcs=repo.get("vcs", "git"))
         log.info(f"本地: {ctx.state.get('current_tag') or '(无)'}  远端: {latest or '(取不到)'}")
         return
 
