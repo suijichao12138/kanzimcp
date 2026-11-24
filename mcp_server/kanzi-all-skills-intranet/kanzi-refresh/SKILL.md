@@ -1,6 +1,6 @@
 ---
 name: kanzi-refresh
-description: Kanzi 刷新工程树 + 刷新 Preview。创建任何对象后必须 SelectProjectItems 刷工程树；截图前必须 RestartPreview 刷 Preview。用 kz_invoke 反射调 Commands（GeneratedCommandInvoker），不加专用工具。
+description: Kanzi 刷新工程树 + 刷新 Preview + 刷新各面板区域。创建任何对象后必须 SelectProjectItems 刷工程树；截图前必须 RestartPreview 刷 Preview；属性面板/节点树/资源缓存有对应的刷新命令（RefreshPropertyEditor/UpdateProjectExplorer/CleanCachedFiles）。用 kz_invoke 反射调，不加专用工具。
 ---
 
 # Kanzi 刷新工程树 / 刷新 Preview
@@ -51,17 +51,111 @@ kz_invoke target=@objN method=RestartPreview   # 重启 Preview 进程
 ```
 
 - 刷新后略等 Preview 重启完成再截图（sleep 1~2s 或调 kz_health 确认）。
+- 实测（2026-11-24）：`RestartPreview` 单次耗时较长（同步阻塞到重启完成），返回后 `kz_health` 立即正常。
+- 注意：Kanzi 3.9 的 Preview 是**嵌在 Studio 主窗内的停靠视图**，`kz_enum_all_windows` 里**不会**出现独立的 `KanziPreview` 窗口；此时 `kz_screenshot_preview(pid=<Studio pid>)` 会截 Studio 主窗（`target = studio`），属正常行为。
+- `RestartPreview` 有两种等价写法：`Commands.RestartPreview`，或 `get_RestartPreview` 取句柄后 `Execute args=["@null"]`。
 
-## 完整示例
+## ③ 刷新各面板区域（具体刷新命令，2026-11-24 实测可用）
+
+**适用**：属性面板、节点树、资源缓存、数据源等区域刷新。用下面的具体命令直接调用（每次连接编号会变，先取命令句柄再执行）。
+
+### 调用方式（两步）
 
 ```python
-# 1. 拿 Commands
+# 1. 取命令句柄（动态编号）
+kz_invoke target=@static:Rightware.Kanzi.Tool.Logic.Project.KanziCommands \
+          method=get_RefreshPropertyEditor args=[]   # → ref_id = @objN
+
+# 2. 执行命令（等价点击刷新）
+kz_invoke target=@objN method=Execute args=["@null"]      # → ✅ 调用成功（无返回值）
+
+# 3.（可选）先判可用性再执行
+kz_invoke target=@objN method=CanExecute args=["@null"]   # → ✅ 结果: True / False
+```
+
+> ⚠️ **`CanExecute` 必须带参数 `["@null"]`**（WPF `ICommand.CanExecute(object)` 签名）。
+> 写成 `method=CanExecute args=[]` 会报：`❌ 在 RoutedCommandCommandHandleAdapter 上找不到与参数 () 匹配的 'CanExecute'`（2026-11-24 实测）。
+> `Execute` 同理必须带 `["@null"]`。命令句柄类型为 `Rightware.Kanzi.Tool.Presentation.Application.Commands.RoutedCommandCommandHandleAdapter`。
+
+### 可用的刷新命令（2026-11-24 实测 CanExecute=True + Execute 成功）
+
+> 实测结论：下表 12 个命令在空载状态下 `CanExecute` 全部返回 True，`Execute` 全部返回「✅ 调用成功（无返回值）」（含 `get_RestartPreview`）。
+> 副作用提示：`Show*` 系列会真的打开/聚焦对应窗口（如 `ShowDataSources` 会弹出 Data Sources 窗口），测试时可用来确认调用生效。
+
+| 命令 | 对应区域 | 用途 |
+|---|---|---|
+| `get_RefreshPropertyEditor` | **属性面板** | 刷新属性编辑器显示 |
+| `get_UpdateProjectExplorer` | **节点树/资源库** | 刷新工程树（同时覆盖 Library 资源库视图） |
+| `get_CleanCachedFiles` | 资源缓存 | 清理资源文件缓存（磁盘改图后让 Studio 重载） |
+| `get_ShowDataSources` | 数据源窗口 | 打开/聚焦数据源面板 |
+| `get_ShowProjectExplorer` | 节点树窗口 | 打开/聚焦工程树 |
+| `get_ShowPropertyEditor` | 属性面板窗口 | 打开/聚焦属性面板 |
+| `get_ShowProjectProperties` | 工程属性 | 显示工程级属性 |
+| `get_ShowSelectedItemsInProjectExplorer` | 工程树定位 | 选中项在工程树中定位显示 |
+| `get_ShowLog` | 日志窗口 | 显示 Studio 日志 |
+| `get_FilterProjectExplorer` | 工程树过滤 | 过滤工程树显示 |
+| `get_OpenDictionariesWindow` | 资源字典窗口 | 打开资源字典查看器 |
+| `get_RestartPreview` | Preview | 重启预览 |
+
+### 条件命令（存在，条件满足时才可执行）
+
+| 命令 | 区域 | 说明 |
+|---|---|---|
+| `get_UpdateProjectDataSources` / `get_UpdateSolutionDataSources` / `get_UpdateDataSourceContents` | 数据源 | 有变更的数据源时可用 |
+| `get_UpdateProjectEnginePlugins` / `get_UpdateSolutionEnginePlugins` / `get_UpdateEnginePluginMetadata` | 引擎插件 | 有待更新插件时可用 |
+| `get_UpdateSelectionToPreview` | Preview 同步 | 有选择项时可用 |
+| `get_OpenResourceGridEditor` | 资源网格 | 选中资源字典时可用 |
+| `get_OpenLocalizationTable` | 多国语表 | 选中表时可用 |
+
+## ④ 各 skill 创建资源 → 对应刷新方法（2026-11-24 实测映射）
+
+**原则**：Project Explorer（节点树 + Library 资源库是同一个窗口的两个视图），`UpdateProjectExplorer` 同时覆盖两者；属性/自定义属性类用 `RefreshPropertyEditor`；磁盘资源用 `CleanCachedFiles`。
+
+**通用刷新三步**：`SelectProjectItems` 定位 → `UpdateProjectExplorer` 刷节点树/资源库 → `RefreshPropertyEditor` 刷属性面板。
+
+| Skill | 创建的资源 | 刷新方法 | 说明 |
+|---|---|---|---|
+| **kanzi-node-create** | EmptyNode2D / TextBlock2D / 插件节点 / 九宫格 | `UpdateProjectExplorer` + `SelectProjectItems` | 节点落在节点树；SelectProjectItems 定位到新建节点 |
+| **kanzi-layout** | StackLayout2D 布局节点 | `UpdateProjectExplorer` | 同节点树 |
+| **kanzi-textblock** | TextBlock2D 文本节点 | `UpdateProjectExplorer` | 同节点树 |
+| **kanzi-prefab** | Node2DPrefabPlaceholder 模板引用 | `UpdateProjectExplorer` | 模板占位符在节点树 |
+| **kanzi-proptype** | 自定义属性类型（DynamicProperty） | `RefreshPropertyEditor` | 属性类型变化→属性面板刷新（建议 + `UpdateProjectExplorer`） |
+| **kanzi-animation** | Animation / AnimationClip / AnimationChildClip | `UpdateProjectExplorer` + `RefreshPropertyEditor` | 动画资源在资源库；关键帧/播放器属性→属性面板 |
+| **kanzi-asset-create** | Color Brush / Texture / FontFamily | `UpdateProjectExplorer` + `CleanCachedFiles` | 素材在资源库；磁盘纹理改后需 CleanCachedFiles 重载 |
+| **kanzi-material-brush** | Material / MaterialType / MaterialBrush | `UpdateProjectExplorer` + `RefreshPropertyEditor` | 材质三层都在资源库 |
+| **kanzi-resource-create** | Resource 资源条目（ResourceDictionary） | `UpdateProjectExplorer` + `OpenDictionariesWindow` | 资源条目在资源字典；OpenDictionariesWindow 打开字典查看 |
+| **kanzi-resource-set** | 节点上设置资源引用 | `RefreshPropertyEditor` | 改的是节点属性 |
+| **kanzi-state-manager** | StateManager / StateGroup / State / StateObject | `UpdateProjectExplorer` + `RefreshPropertyEditor` | 状态机是节点组件；State 属性→属性面板 |
+| **kanzi-trigger** | TriggerNodeComponent / TriggerActionItem | `UpdateProjectExplorer` + `RefreshPropertyEditor` | 触发器是节点组件 |
+| **kanzi-binding** | 数据绑定（CreateBinding） | `RefreshPropertyEditor` | 绑定是属性级，属性面板刷新即可 |
+| **kanzi-localization** | 多国语表条目/语言 | `UpdateProjectExplorer` + `OpenLocalizationTable` | 多国语表在资源库；OpenLocalizationTable 需选中表 |
+| **kanzi-shader** | Shader / MaterialType 着色器 | `UpdateProjectExplorer` + `RefreshPropertyEditor` | 着色器是资源库条目；uniform 属性→属性面板 |
+| **kanzi-alias** | 节点别名（CreateNodeAliasEntry） | `UpdateProjectExplorer` | 别名关联节点树 |
+| **kanzi-transform** | 节点 RenderTransformation 变换 | `RefreshPropertyEditor` | 改的是节点属性 |
+| **kanzi-data-source** | 数据源（大文件预处理） | `UpdateProjectDataSources`（条件满足时） | 数据源窗口；CanExecute=False 时说明无变更 |
+
+## 完整示例（创建后完整刷新链）
+
+```python
+# 1. 拿 Commands（GeneratedCommandInvoker）
 kz_invoke target=@studio method=get_Commands    # → @objN
-# 2. 创建完 → 刷工程树
+
+# 2. 创建完 → 定位到新节点（工程树滚动定位 + 高亮）
 kz_invoke target=@objN method=SelectProjectItems args=["/Screens/Screen/RootPage/Info/warning"]
-# 3. 截图前 → 刷 Preview
+
+# 3. 刷节点树/资源库（专用刷新命令）
+kz_invoke target=@static:Rightware.Kanzi.Tool.Logic.Project.KanziCommands method=get_UpdateProjectExplorer args=[]  # → @objX
+kz_invoke target=@objX method=Execute args=["@null"]
+
+# 4. 刷属性面板（属性/自定义属性变化时）
+kz_invoke target=@static:Rightware.Kanzi.Tool.Logic.Project.KanziCommands method=get_RefreshPropertyEditor args=[]  # → @objY
+kz_invoke target=@objY method=Execute args=["@null"]
+
+# 5. 截图前 → 刷 Preview
 kz_invoke target=@objN method=RestartPreview
 ```
+
+> 💡 `SelectProjectItems`（定位）与 `UpdateProjectExplorer`（刷新）区别：前者选中并滚动到目标项（副作用会刷新显示）；后者是工程树的专用刷新命令。**创建后两者都建议执行**（先定位再刷新）。
 
 ## 相关
 
