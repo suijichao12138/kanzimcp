@@ -1124,9 +1124,31 @@ async function deployScanTool() {
       autoDownload: false,
       label: '静态检查工具',
       hint,
-      onDone: () => loadProjects(),
+      // 编译完成 ≠ 工具就位：scan_api 的复制线程是异步的，
+      // 这里重试几次 loadProjects()，直到 tool.ready 为 true 或超时，
+      // 避免部署成功了页面却还显示「检查工具未部署」。
+      onDone: () => _waitToolReady(),
     });
   } else if (hint) {
     hint.textContent = '已启动，请稍后到「代码检查」页查看工具状态';
   }
+}
+
+/** 等检查工具真正落盘后再刷新工程列表（最多约 60 秒）。 */
+async function _waitToolReady(retries) {
+  let n = (typeof retries === 'number') ? retries : 40;
+  const hint = $('scan-tool-hint');
+  if (hint) hint.textContent = '正在等工具就位…';
+  for (let i = 0; i < n; i++) {
+    const r = await call('GET', '/api/projects');
+    const tool = (r.ok && r.data && r.data.tool) || {};
+    if (tool.ready) {
+      if (hint) hint.textContent = '已部署完成，可到「代码检查」页使用';
+      loadProjects();
+      return;
+    }
+    await new Promise((res) => setTimeout(res, 1500));
+  }
+  if (hint) hint.textContent = '工具可能仍在复制，请稍后手动刷新';
+  loadProjects();
 }

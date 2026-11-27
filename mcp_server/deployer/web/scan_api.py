@@ -490,6 +490,24 @@ def _watch_build_and_copy(ctx, task_id: str) -> None:
             _log("工具已复制到 %s（%s）" % (dst, cand))
         except Exception as exc:                       # noqa: BLE001
             _log("复制工具失败：%s" % exc)
+            tt = tasks.get(task_id)
+            if tt is not None:
+                try:
+                    tt.update("copy", "复制工具失败：%s" % exc)
+                    tt.done(False, "复制工具失败：%s" % exc)
+                except Exception:                      # noqa: BLE001
+                    pass
+            return
+
+        # 回写编译任务日志：前端轮询到这条才知道「可以刷新工程列表了」。
+        # 原来复制在独立线程里静默完成，前端在「编译完成」瞬间就刷新列表，
+        # 那时文件还没落盘 → 一直显示「检查工具未部署」，看起来像卡住。
+        tt = tasks.get(task_id)
+        if tt is not None:
+            try:
+                tt.update("copy", "工具已就位：%s" % dst.name)
+            except Exception:                          # noqa: BLE001
+                pass
 
     import threading
     threading.Thread(target=_loop, daemon=True, name="scan-tool-copy").start()
