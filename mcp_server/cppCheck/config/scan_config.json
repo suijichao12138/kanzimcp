@@ -1,0 +1,33 @@
+{
+  "project_name": "代码检查",
+  "remote": {
+    "enabled": false,
+    "host": "",
+    "port": 22,
+    "user": "",
+    "password": "",
+    "source_dir": "",
+    "private_key": ""
+  },
+  "local": {
+    "source_dir": "",
+    "include_dirs": []
+  },
+  "rules": {
+    "spec_file": "data/spec_manual.md"
+  },
+  "scan": {
+    "engines": ["cppcheck", "flawfinder", "lizard", "clang-tidy", "custom"],
+    "clang_format_check": true,
+    "std": "c++14",
+    "cppcheck_build_dir": "",
+    "suppress": ["unusedStructMember", "normalCheckLevelMaxBranches"],
+    "extra_defines": []
+  },
+  "report": {
+    "title": "",
+    "open_browser": false,
+    "embed_sources": "auto",
+    "top_n_files": 20
+  }
+}

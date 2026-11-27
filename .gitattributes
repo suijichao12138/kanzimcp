@@ -1,0 +1,28 @@
+# 编码与换行锁定 —— 防止编辑器按 UTF-8 重存把 GBK 批处理写坏
+
+# Windows 批处理 / cmd 脚本：保持 CRLF，且禁止换行转换
+*.cmd   text eol=crlf
+*.bat   text eol=crlf
+
+# build.cmd 是 GBK 中文注释，任何编辑器按 UTF-8 打开再保存都会让它彻底跑不起来
+mcp_server/cppCheck/build.cmd  -text
+
+# 大体积第三方工具二进制：不做 diff / 不做文本转换
+mcp_server/cppCheck/tools/**   binary
+
+# 常见二进制（每行一个模式，不能把多个模式写在同一行）
+*.exe   binary
+*.dll   binary
+*.lib   binary
+*.so    binary
+*.dylib binary
+*.pdb   binary
+*.zip   binary
+*.7z    binary
+*.msi   binary
+*.cab   binary
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary

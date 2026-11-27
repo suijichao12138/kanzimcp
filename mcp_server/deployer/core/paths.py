@@ -52,6 +52,9 @@ class Paths:
         self.plugins = self._sub("data/plugins", ov.get("plugins"))
         self.artifacts = self._sub("data/artifacts", ov.get("artifacts"))
         self.backup = self._sub("_backup", ov.get("backup"))
+        # 静态检查：projects 存各工程的代码与报告，tools 存全局共享的 cppCheck.exe
+        self.projects = self._sub("data/projects", ov.get("projects"))
+        self.scan_tools = self._sub("data/tools", ov.get("scan_tools"))
 
     def _sub(self, default: str, override) -> Path:
         if not override:
@@ -63,7 +66,7 @@ class Paths:
         """创建所有运行期需要的目录（bin/src 由部署流程创建，这里一并建好）。"""
         for p in (self.bin, self.conf, self.logs, self.src,
                   self.tmp, self.data, self.skills, self.plugins,
-                  self.artifacts, self.backup):
+                  self.artifacts, self.backup, self.projects, self.scan_tools):
             p.mkdir(parents=True, exist_ok=True)
 
     # ── 配置文件路径 ──

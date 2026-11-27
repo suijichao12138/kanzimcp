@@ -70,6 +70,7 @@ function goTab(name) {
   if (name === 'config' || name === 'settings') loadWizard();
   if (name === 'config') loadConfig();
   if (name === 'skills') loadSkills();
+  if (name === 'scan') loadProjects();
   if (name === 'overview') refreshStatus();
   window.scrollTo(0, 0);
 }
@@ -275,9 +276,13 @@ async function buildArtifact(name) {
   watchArtifactTask(r.data.id, name);
 }
 
-function watchArtifactTask(id, name) {
-  const label = _ARTIFACT_LABELS[name] || name;
-  const hint = $('artifact-hint');
+function watchArtifactTask(id, name, opts) {
+  const o = opts || {};
+  // autoDownload 默认 true（「产物下载」卡片要保持原行为）；
+  // 静态检查工具部署时传 false —— 编译完只需提示，不要下载 exe。
+  const autoDownload = o.autoDownload !== false;
+  const label = o.label || _ARTIFACT_LABELS[name] || name;
+  const hint = o.hint || $('artifact-hint');
   $('task-card').style.display = '';
   $('task-log').textContent = '';
   clearInterval(_taskTimer);
@@ -294,13 +299,19 @@ function watchArtifactTask(id, name) {
       clearInterval(_taskTimer);
       _taskTimer = null;
       if (t.status === 'success') {
-        toast(label + ' 编译完成，开始下载', 'ok');
-        if (hint) hint.textContent = label + ' 已编译，可直接下载';
-        const a = document.createElement('a');
-        a.href = '/api/artifact/download?name=' + encodeURIComponent(name);
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
+        if (autoDownload) {
+          toast(label + ' 编译完成，开始下载', 'ok');
+          if (hint) hint.textContent = label + ' 已编译，可直接下载';
+          const a = document.createElement('a');
+          a.href = '/api/artifact/download?name=' + encodeURIComponent(name);
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+        } else {
+          toast(label + ' 部署完成', 'ok');
+          if (hint) hint.textContent = '已部署完成，可到「代码检查」页使用';
+          if (o.onDone) o.onDone(t);
+        }
       } else {
         toast('编译失败：' + t.detail, 'err');
         if (hint) hint.textContent = '';
@@ -902,4 +913,220 @@ async function deleteSkill(name) {
       toast('已删除', 'ok'); loadSkills();
     },
   });
+}
+
+// ══════════ 代码检查（静态检查）══════════
+
+let _scanTimer = null;
+
+/** 分块 base64 编码：直接 String.fromCharCode(...) 在几 MB 时会爆栈。 */
+function b64encode(buf) {
+  const bytes = new Uint8Array(buf);
+  let s = '';
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    s += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(s);
+}
+
+/** 工程列表。 */
+async function loadProjects() {
+  const r = await call('GET', '/api/projects');
+  if (!r.ok) return toast(r.error || '加载失败', 'err');
+  const body = $('projects-body');
+  const list = r.data.projects || [];
+  const tool = r.data.tool || {};
+
+  const st = $('scan-tool-state');
+  if (st) {
+    st.textContent = tool.ready
+      ? `检查工具已就绪（${fmtSize(tool.size)}）`
+      : '检查工具未部署，请先到「部署 / 升级」页部署';
+    st.className = tool.ready ? 'muted' : 'warn-text';
+  }
+
+  if (!list.length) {
+    body.innerHTML = '<tr><td colspan="6" class="muted">还没有工程，点右上「＋ 新建工程」开始</td></tr>';
+    return;
+  }
+
+  const STATUS = {
+    empty:    ['未上传', 'pill'],
+    uploaded: ['待检查', 'pill'],
+    scanning: ['检查中', 'pill'],
+    done:     ['已完成', 'pill pill-ok'],
+    failed:   ['失败', 'pill pill-bad'],
+  };
+
+  body.innerHTML = list.map((p) => {
+    const [txt, cls] = STATUS[p.status] || ['未知', 'pill'];
+    const ops = [];
+    ops.push(`<button class="btn btn-sm" onclick="uploadProjectModal('${p.id}','${escAttr(p.name)}')">上传代码</button>`);
+    if (p.has_code) {
+      if (p.has_report) {
+        ops.push(`<button class="btn btn-sm" onclick="openReport('${p.id}','report.html')">打开报告</button>`);
+        ops.push(`<button class="btn btn-sm" onclick="rescanProject('${p.id}')">重新检查</button>`);
+      } else {
+        ops.push(`<button class="btn btn-sm" onclick="runProjectScan('${p.id}')">检查</button>`);
+      }
+    }
+    if (p.has_report) {
+      ops.push(`<button class="btn btn-sm" onclick="openReport('${p.id}','coverage.html')">覆盖表</button>`);
+    }
+    ops.push(`<button class="btn btn-sm btn-warn" onclick="deleteProject('${p.id}','${escAttr(p.name)}')">删除</button>`);
+    return `<tr>
+      <td><code>${escHtml(p.name)}</code></td>
+      <td><span class="${cls}">${txt}</span></td>
+      <td>${p.total ? p.total : '—'}</td>
+      <td class="muted">${p.has_code ? fmtSize(p.code_size) : '—'}</td>
+      <td class="muted">${p.updated_at || p.created_at || ''}</td>
+      <td class="row">${ops.join(' ')}</td>
+    </tr>`;
+  }).join('');
+}
+
+function escHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+function escAttr(s) { return escHtml(s).replace(/'/g, '&#39;'); }
+
+/** 新建工程。 */
+function newProjectModal() {
+  openModal({
+    title: '新建工程',
+    html: `
+      <label>工程名</label>
+      <input id="proj-name" placeholder="如 hmi-info-app" style="width:100%">
+      <p class="muted">创建后可上传源码、执行检查。工程名可含中文。</p>`,
+    okText: '创建',
+    onOk: async () => {
+      const name = ($('proj-name').value || '').trim();
+      if (!name) return toast('请填工程名', 'err');
+      const r = await call('POST', '/api/project/create', { name });
+      if (!r.ok) return toast(r.error || '创建失败', 'err');
+      toast('工程已创建', 'ok');
+      loadProjects();
+    },
+  });
+}
+
+/** 上传代码（zip）。 */
+function uploadProjectModal(id, name) {
+  openModal({
+    title: '上传代码：' + name,
+    html: `
+      <p class="muted">上传源码 <code>.zip</code>（支持整个目录打包，只提取 .c/.cpp/.h 等源码文件）。
+        重复上传会覆盖原代码。</p>
+      <input type="file" id="proj-zip" accept=".zip" style="width:100%">`,
+    okText: '上传',
+    onOk: async () => {
+      const f = $('proj-zip').files[0];
+      if (!f) return toast('请选择 zip 文件', 'err');
+      if (f.size > 200 * 1024 * 1024) return toast('文件超过 200MB', 'err');
+      toast('正在上传…');
+      const buf = await f.arrayBuffer();
+      const r = await call('POST', '/api/project/upload',
+                           { id, data_b64: b64encode(buf) });
+      if (!r.ok) return toast(r.error || '上传失败', 'err');
+      toast(`上传成功（${r.data.files} 个源码文件）`, 'ok');
+      loadProjects();
+    },
+  });
+}
+
+/** 执行检查（含重新检查）。 */
+async function runProjectScan(id) {
+  const r = await call('POST', '/api/project/scan', { id });
+  if (!r.ok) return toast(r.error || '启动检查失败', 'err');
+  watchScanTask(r.data.task_id);
+}
+
+function rescanProject(id) {
+  openModal({
+    title: '重新检查',
+    html: '<p>用当前代码再检查一次？<br><span class="muted">会覆盖已有报告。</span></p>',
+    okText: '开始',
+    onOk: async () => {
+      const r = await call('POST', '/api/project/scan', { id });
+      if (!r.ok) return toast(r.error || '启动失败', 'err');
+      watchScanTask(r.data.task_id);
+    },
+  });
+}
+
+/** 轮询检查进度。 */
+function watchScanTask(taskId) {
+  const card = $('scan-task-card');
+  card.style.display = '';
+  $('scan-task-log').textContent = '';
+  clearInterval(_scanTimer);
+  _scanTimer = setInterval(async () => {
+    const r = await call('GET', '/api/task?id=' + taskId);
+    if (!r.ok) return;
+    const t = r.data;
+    $('scan-task-title').textContent = t.title;
+    $('scan-task-bar').style.width = t.percent + '%';
+    $('scan-task-step').textContent = `[${t.status}] ${t.step} — ${t.detail || ''}`;
+    $('scan-task-log').textContent = (t.log || []).join('\n');
+    $('scan-task-log').scrollTop = $('scan-task-log').scrollHeight;
+    if (!t.running) {
+      clearInterval(_scanTimer);
+      _scanTimer = null;
+      if (t.status === 'success') {
+        toast(t.detail || '检查完成', 'ok');
+        loadProjects();
+      } else {
+        toast('检查失败：' + (t.detail || ''), 'err');
+        loadProjects();
+      }
+    }
+  }, 1500);
+}
+
+/** 打开报告：新标签页直接渲染 HTML，不下载。 */
+function openReport(id, name) {
+  const url = `/api/project/report?id=${encodeURIComponent(id)}&name=${encodeURIComponent(name || 'report.html')}`;
+  window.open(url, '_blank');
+}
+
+/** 删除工程。 */
+function deleteProject(id, name) {
+  openModal({
+    title: '删除工程：' + name,
+    html: `<p>确定删除 <code>${escHtml(name)}</code>？<br>
+      <span class="muted">上传的代码和检查报告都会删除，会移到回收站
+      （_backup/projects_trash/），可手工找回。</span></p>`,
+    okText: '删除',
+    onOk: async () => {
+      const r = await call('POST', '/api/project/delete', { id });
+      if (!r.ok) return toast(r.error || '删除失败', 'err');
+      toast('已删除', 'ok');
+      loadProjects();
+    },
+  });
+}
+
+/** 部署静态检查工具（部署页按钮）。 */
+async function deployScanTool() {
+  const hint = $('scan-tool-hint');
+  if (!confirm('确认部署静态检查工具？\n\n会检查环境、自动下载检查器并打包成单个 exe，首次约 3-5 分钟。')) return;
+  if (hint) hint.textContent = '正在启动…';
+  const r = await call('POST', '/api/project/deploy', {});
+  if (!r.ok) {
+    if (hint) hint.textContent = '';
+    return toast(r.error || '启动部署失败', 'err');
+  }
+  // 复用现有的构建进度条，但不要下载 exe（部署完直接落盘到 data/tools/）
+  if (typeof watchArtifactTask === 'function' && r.data && r.data.id) {
+    watchArtifactTask(r.data.id, 'cppcheck_tool', {
+      autoDownload: false,
+      label: '静态检查工具',
+      hint,
+      onDone: () => loadProjects(),
+    });
+  } else if (hint) {
+    hint.textContent = '已启动，请稍后到「代码检查」页查看工具状态';
+  }
 }

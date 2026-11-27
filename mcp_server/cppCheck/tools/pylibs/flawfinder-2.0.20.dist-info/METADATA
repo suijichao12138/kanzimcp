@@ -1,0 +1,41 @@
+Metadata-Version: 2.4
+Name: flawfinder
+Version: 2.0.20
+Summary: a program that examines source code looking for security weaknesses
+Home-page: http://dwheeler.com/flawfinder/
+Download-URL: https://sourceforge.net/projects/flawfinder/files/flawfinder-2.0.8.tar.gz/download
+Author: David A. Wheeler
+Author-email: dwheeler@dwheeler.com
+License: GPL-2.0+
+Keywords: analysis,security,analyzer
+Classifier: Development Status :: 5 - Production/Stable
+Classifier: Environment :: Console
+Classifier: Intended Audience :: Developers
+Classifier: License :: OSI Approved :: GNU General Public License v2 or later (GPLv2+)
+Classifier: Natural Language :: English
+Classifier: Programming Language :: Python :: 2.7
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.6
+Classifier: Operating System :: OS Independent
+Classifier: Topic :: Security
+Classifier: Topic :: Software Development :: Build Tools
+Classifier: Topic :: Software Development :: Quality Assurance
+Classifier: Topic :: Software Development :: Testing
+Requires-Python: >=2.7
+License-File: COPYING
+Dynamic: author
+Dynamic: author-email
+Dynamic: classifier
+Dynamic: description
+Dynamic: download-url
+Dynamic: home-page
+Dynamic: keywords
+Dynamic: license
+Dynamic: license-file
+Dynamic: requires-python
+Dynamic: summary
+
+Flawfinder is a program that can scan
+C/C++ source code and identify out potential security flaws,
+ranking them by likely severity.
+It is released under the GNU GPL license.

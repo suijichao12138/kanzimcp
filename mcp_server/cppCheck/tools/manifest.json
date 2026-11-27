@@ -1,0 +1,37 @@
+{
+  "version": "1.0.0",
+  "checked_at": "2026-11-27 11:00:29",
+  "python": "3.14.6",
+  "tools": {
+    "cppcheck": {
+      "ok": true,
+      "kind": "exe",
+      "path": "D:\\suijichao\\workbuddy\\work\\Kanzi代码检查\\code-scan-tool\\tools\\cppcheck\\cppcheck.exe",
+      "version": "Cppcheck 2.22.0"
+    },
+    "flawfinder": {
+      "ok": true,
+      "kind": "script",
+      "path": "D:\\suijichao\\workbuddy\\work\\Kanzi代码检查\\code-scan-tool\\tools\\pylibs\\flawfinder.py",
+      "version": "2.0.20"
+    },
+    "lizard": {
+      "ok": true,
+      "kind": "script",
+      "path": "D:\\suijichao\\workbuddy\\work\\Kanzi代码检查\\code-scan-tool\\tools\\pylibs\\lizard.py",
+      "version": "1.26.1"
+    },
+    "clang-tidy": {
+      "ok": true,
+      "kind": "exe",
+      "path": "D:\\suijichao\\workbuddy\\work\\Kanzi代码检查\\code-scan-tool\\tools\\pylibs\\clang_tidy\\data\\bin\\clang-tidy.exe",
+      "version": "LLVM version 23.1.4"
+    },
+    "clang-format": {
+      "ok": true,
+      "kind": "exe",
+      "path": "D:\\suijichao\\workbuddy\\work\\Kanzi代码检查\\code-scan-tool\\tools\\pylibs\\bin\\clang-format.exe",
+      "version": "clang-format version 23.1.5"
+    }
+  }
+}

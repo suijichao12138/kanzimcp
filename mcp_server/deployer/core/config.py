@@ -102,6 +102,14 @@ DEFAULT_CONFIG = {
             "platform": "Any CPU",
             "output": "bin/Release/KzMCPChatPlugin.dll",
         },
+        "cppcheck_tool": {
+            "label": "静态检查工具",
+            "build_type": "script",
+            "cwd": "mcp_server/cppCheck",
+            "script": "build.cmd",
+            "output": "dist/cppCheck.exe",
+            "timeout_s": 1800,
+        },
     },
     "kill_wait_ms": 2000,
     # 健康检查等待：interval_s 探测间隔（放宽到 5s，2s 太密会刷探测日志）

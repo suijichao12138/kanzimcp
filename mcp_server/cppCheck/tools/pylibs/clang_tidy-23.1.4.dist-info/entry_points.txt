@@ -1,0 +1,6 @@
+[console_scripts]
+clang-tidy = clang_tidy:clang_tidy
+clang-apply-replacements = clang_tidy:clang_apply_replacements
+run-clang-tidy.py = clang_tidy:run_clang_tidy
+clang-tidy-diff.py = clang_tidy:clang_tidy_diff
+

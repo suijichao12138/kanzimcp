@@ -1,3 +1,10 @@
 __pycache__/
 *.pyc
 *.bak_*
+
+# 编译器/IDE 产物与 Python 缓存
+.vs/
+obj/
+bin/
+mcp_server/cppCheck/dist/
+mcp_server/cppCheck/build/

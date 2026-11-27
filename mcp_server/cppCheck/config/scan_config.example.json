@@ -1,0 +1,41 @@
+{
+  "project_name": "我的工程",
+  "remote": {
+    "enabled": false,
+    "host": "",
+    "port": 22,
+    "user": "",
+    "password": "",
+    "source_dir": "/path/to/source",
+    "private_key": ""
+  },
+  "local": {
+    "source_dir": "",
+    "include_dirs": []
+  },
+  "rules": {
+    "spec_file": "../编码规范检查手册.md"
+  },
+  "scan": {
+    "engines": [
+      "cppcheck",
+      "flawfinder",
+      "lizard",
+      "clang-tidy",
+      "custom"
+    ],
+    "clang_format_check": true,
+    "std": "c++14",
+    "cppcheck_build_dir": "",
+    "suppress": [
+      "unusedStructMember",
+      "normalCheckLevelMaxBranches"
+    ],
+    "extra_defines": []
+  },
+  "report": {
+    "title": "hmi-info-app 静态扫描报告",
+    "open_browser": true,
+    "top_n_files": 20
+  }
+}

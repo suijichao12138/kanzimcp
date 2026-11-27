@@ -15,6 +15,7 @@ from urllib.parse import urlparse, parse_qs
 
 from . import api, auth
 from . import skills_api
+from . import scan_api
 
 # 运行期上下文（配置 / 路径 / 状态），由 deployer.py 注入
 CTX = None
@@ -35,6 +36,14 @@ def _static_dir() -> Path:
 
 
 _STATIC = _static_dir()
+
+
+class _BodyTooLarge(Exception):
+    """请求体超过配置上限。"""
+
+    def __init__(self, max_mb: int):
+        self.max_mb = max_mb
+        super().__init__("请求体超过上限 %dMB" % max_mb)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -82,15 +91,64 @@ class Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass
 
-    def _read_body(self) -> dict:
+    def _send_file_inline(self, path: str, ctype: str = "text/html; charset=utf-8"):
+        """内联下发文件：浏览器直接渲染，而不是弹出下载框。
+
+        与 _send_file 的唯一区别是 Content-Disposition 用 inline。
+        用于静态检查报告——用户要求「直接打开 html 网页不需要下载」。
+
+        CSP sandbox 是必需的：报告由用户上传的代码生成，
+        不能让它拥有同源权限（否则报告里的脚本能读 /api/config 等接口）。
+        加 allow-scripts 是因为报告本身依赖 JS 渲染表格。
+        """
+        p = Path(path)
+        if not p.exists() or not p.is_file():
+            return self._json(404, {"ok": False, "error": "报告不存在"})
+        # 报告内嵌源码时可能几十 MB，不能整体 read_bytes 进内存
+        # （并发几个人打开就会把 deployer 内存吃满）。分块流式下发。
+        try:
+            size = p.stat().st_size
+        except OSError as e:
+            return self._json(500, {"ok": False, "error": "读取报告失败: %s" % e})
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(size))
+        self.send_header("Content-Disposition", "inline")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Content-Security-Policy",
+                         "sandbox allow-scripts allow-popups")
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        try:
+            with open(p, "rb") as f:
+                while True:
+                    chunk = f.read(256 * 1024)
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+    def _read_body(self, max_mb: int = 0) -> dict:
+        """读取 JSON 请求体。
+
+        max_mb=0 时用配置里的 web.max_body_mb（默认 8MB）。
+        静态检查的代码上传走大值（base64 会膨胀约 33%，需要更大空间）。
+        """
         try:
             n = int(self.headers.get("Content-Length") or 0)
         except ValueError:
             n = 0
         if n <= 0:
             return {}
-        if n > 8 * 1024 * 1024:                     # 8MB 上限，防滥用
-            return {}
+        if not max_mb:
+            w = (CTX.cfg.get("web") or {})
+            max_mb = int(w.get("max_body_mb") or 8)
+        if n > max_mb * 1024 * 1024:
+            # 超限不能静默返回 {}：前端会拿到「缺少文件内容」这类
+            # 完全对不上原因的报错。这里明确回 413 并说明上限。
+            self.rfile.read(n)                      # 读掉请求体，避免连接错乱
+            raise _BodyTooLarge(max_mb)
         try:
             return json.loads(self.rfile.read(n).decode("utf-8") or "{}")
         except Exception:                           # noqa: BLE001
@@ -172,6 +230,20 @@ class Handler(BaseHTTPRequestHandler):
                 if code == 200 and body.get("ok") and body.get("data"):
                     return self._send_file(body["data"]["path"], body["data"]["filename"])
                 return self._json(code, body)
+            # ── 静态检查（代码检查页）──
+            elif path == "/api/projects":
+                code, body = scan_api.list_all(CTX)
+            elif path == "/api/project/detail":
+                code, body = scan_api.detail(CTX, (qs.get("id") or [""])[0])
+            elif path == "/api/project/report":
+                # 内联下发，浏览器直接渲染 HTML，不触发下载
+                code, body = scan_api.report_path(
+                    CTX, (qs.get("id") or [""])[0],
+                    (qs.get("name") or ["report.html"])[0])
+                if code == 200 and body.get("ok") and body.get("data"):
+                    return self._send_file_inline(body["data"]["path"],
+                                                  body["data"]["ctype"])
+                return self._json(code, body)
             else:
                 code, body = 404, {"ok": False, "error": "not found"}
         except Exception as e:                       # noqa: BLE001
@@ -182,7 +254,13 @@ class Handler(BaseHTTPRequestHandler):
         if not self._authed():
             return self._deny()
         path = urlparse(self.path).path
-        body = self._read_body()
+        # 代码上传走大 body（base64 膨胀约 33%），其余接口保持默认 8MB
+        big = 200 if path == "/api/project/upload" else 0
+        try:
+            body = self._read_body(big)
+        except _BodyTooLarge as e:
+            return self._json(413, {"ok": False,
+                                    "error": "%s，请压缩后重试" % str(e)})
         try:
             if path == "/api/upgrade":
                 code, out = api.upgrade(CTX, body)
@@ -211,6 +289,17 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/api/restart_self":
                 code, out = 200, {"ok": True, "data": {"detail": "正在重启，3 秒后刷新页面"}}
                 threading.Timer(1.0, _restart_self).start()
+            # ── 静态检查（代码检查页）──
+            elif path == "/api/project/create":
+                code, out = scan_api.create(CTX, body)
+            elif path == "/api/project/upload":
+                code, out = scan_api.upload(CTX, body)
+            elif path == "/api/project/scan":
+                code, out = scan_api.start_scan(CTX, body)
+            elif path == "/api/project/deploy":
+                code, out = scan_api.start_deploy(CTX, body)
+            elif path == "/api/project/delete":
+                code, out = scan_api.delete(CTX, (body or {}).get("id", ""))
             else:
                 code, out = 404, {"ok": False, "error": "not found"}
         except Exception as e:                       # noqa: BLE001

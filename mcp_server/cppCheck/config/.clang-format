@@ -1,0 +1,30 @@
+# =============================================================================
+#  代码规范静态检查工具 —— 格式规则
+#  与《博泰 C++/C 编码规范》对齐的要点：
+#    YB-22  一行不超过 80 列            -> ColumnLimit: 80
+#    YB-40  缩进使用制表符而非空格       -> UseTab: Always
+#    YB-41  每个 Tab 为 4 个字符        -> TabWidth: 4
+#    YB-30  函数体大括号各自独占一行     -> BreakBeforeBraces: Allman
+#    YB-29  左括号紧跟函数名            -> SpaceBeforeParens: ControlStatements
+#    YB-141 每个 case 独占一行          -> AllowShortCaseLabelsOnASingleLine
+#    YB-33  双目运算符两侧加空格        -> SpaceAroundBinaryOperators
+#    YB-38  逗号之后加空格              -> SpaceAfterComma
+#
+#  说明：本文件仅用于「检查」，不应直接用于自动改写代码。
+#        自动格式化会大面积改动源码，需经评审后再执行。
+# =============================================================================
+BasedOnStyle: LLVM
+UseTab: Always
+TabWidth: 4
+IndentWidth: 4
+ColumnLimit: 80
+BreakBeforeBraces: Allman
+SpaceBeforeParens: ControlStatements
+SpaceAfterCStyleCast: false
+AllowShortCaseLabelsOnASingleLine: false
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortFunctionsOnASingleLine: None
+PointerAlignment: Left
+IndentCaseLabels: false
+MaxEmptyLinesToKeep: 2

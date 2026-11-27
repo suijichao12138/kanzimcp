@@ -20,6 +20,7 @@
 <nav id="tabs">
   <button class="tab active" data-tab="overview">状态总览</button>
   <button class="tab" data-tab="deploy">部署 / 升级</button>
+  <button class="tab" data-tab="scan">代码检查</button>
   <button class="tab" data-tab="config">配置</button>
   <button class="tab" data-tab="skills">Skills</button>
   <button class="tab" data-tab="logs">日志</button>
@@ -95,11 +96,52 @@
     </div>
   </div>
 
+  <div class="card">
+    <div class="card-head"><h2>静态检查工具</h2></div>
+    <p class="muted">编译代码检查工具 <code>cppCheck.exe</code>，供「代码检查」页使用。
+      会先检查运行环境并自动下载所需的第三方检查器（cppcheck / flawfinder / lizard / clang-tidy / clang-format），
+      全部打包进单个 exe。首次编译约 3-5 分钟。</p>
+    <div class="row">
+      <button class="btn btn-primary" onclick="deployScanTool()">🔧 部署静态检查工具</button>
+      <span id="scan-tool-hint" class="muted"></span>
+    </div>
+  </div>
+
   <div class="card" id="task-card" style="display:none">
     <div class="card-head"><h2 id="task-title">任务进度</h2></div>
     <div class="bar"><div id="task-bar" class="bar-fill"></div></div>
     <div class="row"><span id="task-step" class="muted"></span></div>
     <pre id="task-log" class="log"></pre>
+  </div>
+</section>
+
+<!-- ══════════ 代码检查 ══════════ -->
+<section id="tab-scan" class="panel">
+  <div class="card">
+    <div class="card-head">
+      <h2>代码检查</h2>
+      <div class="row">
+        <button class="btn btn-primary" onclick="newProjectModal()">＋ 新建工程</button>
+        <button class="btn" onclick="loadProjects()">刷新</button>
+        <span id="scan-tool-state" class="muted"></span>
+      </div>
+    </div>
+    <p class="muted">每个工程上传一份源码 zip，点「检查」生成 HTML 报告，可直接在网页中打开查看。</p>
+    <table class="tbl">
+      <thead><tr>
+        <th>工程名</th><th>状态</th><th>问题数</th><th>代码</th><th>更新时间</th><th>操作</th>
+      </tr></thead>
+      <tbody id="projects-body">
+        <tr><td colspan="6" class="muted">加载中…</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card" id="scan-task-card" style="display:none">
+    <div class="card-head"><h2 id="scan-task-title">检查进度</h2></div>
+    <div class="bar"><div id="scan-task-bar" class="bar-fill"></div></div>
+    <div class="row"><span id="scan-task-step" class="muted"></span></div>
+    <pre id="scan-task-log" class="log"></pre>
   </div>
 </section>
 
